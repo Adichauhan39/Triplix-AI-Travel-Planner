@@ -121,10 +121,10 @@ Before running Triplix, ensure you have:
 
 ```powershell
 # Clone the repository
-git clone https://github.com/Adichauhan39/Hack2skill-Phase-2-internal.git
+git clone https://github.com/Adichauhan39/Hack2skill-Phase-2-GenAI-Hackathon-Triplix.git
 
 # Navigate to project directory
-cd Hack2skill-Phase-2-internal
+cd Hack2skill-Phase-2-GenAI-Hackathon-Triplix
 ```
 
 ---
@@ -418,7 +418,7 @@ flutter build web --release
 ## 🗂️ Project Structure
 
 ```
-Hack2skill-Phase-2-internal/
+Hack2skill-Phase-2-GenAI-Hackathon-Triplix/
 ├── 7-multi-agent/                    # Python Backend
 │   ├── manager/                      # AI Agent System
 │   │   ├── agent.py                  # Manager agent
@@ -657,7 +657,7 @@ Comprehensive guides available:
 
 **Project Name:** Triplix - AI Travel Assistant  
 **Hackathon:** Google GenAI Exchange  
-**Repository:** [Hack2skill-Phase-2-internal](https://github.com/Adichauhan39/Hack2skill-Phase-2-internal)  
+**Repository:** [Hack2skill-Phase-2-GenAI-Hackathon-Triplix](https://github.com/Adichauhan39/Hack2skill-Phase-2-GenAI-Hackathon-Triplix)  
 **Tech Stack:** Flutter, Python, Google Gemini AI, Google Cloud
 
 ---
@@ -700,7 +700,7 @@ See [LICENSE](LICENSE) file for details.
 ## 📞 Support & Contact
 
 **Issues & Questions:**
-- GitHub Issues: [Create Issue](https://github.com/Adichauhan39/Hack2skill-Phase-2-internal/issues)
+- GitHub Issues: [Create Issue](https://github.com/Adichauhan39/Hack2skill-Phase-2-GenAI-Hackathon-Triplix/issues)
 - Documentation: Check markdown files in repo
 - Demo Videos: Coming soon
 
@@ -782,8 +782,8 @@ See [LICENSE](LICENSE) file for details.
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/Adichauhan39/Hack2skill-Phase-2-internal.git
-cd Hack2skill-Phase-2-internal
+git clone https://github.com/Adichauhan39/Hack2skill-Phase-2-GenAI-Hackathon-Triplix.git
+cd Hack2skill-Phase-2-GenAI-Hackathon-Triplix
 ```
 
 ### 2. Backend Setup (Python/FastAPI)
@@ -936,7 +936,7 @@ Content-Type: application/json
 ## 🏗️ Project Structure
 
 ```
-Hack2skill-Phase-2-internal/
+Hack2skill-Phase-2-GenAI-Hackathon-Triplix/
 ├── flutter_travel_app/          # Flutter frontend
 │   ├── lib/
 │   │   ├── screens/            # UI screens
@@ -987,7 +987,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you encounter any issues or have questions:
 
-1. Check the [Issues](https://github.com/Adichauhan39/Hack2skill-Phase-2-internal/issues) page
+1. Check the [Issues](https://github.com/Adichauhan39/Hack2skill-Phase-2-GenAI-Hackathon-Triplix/issues) page
 2. Create a new issue with detailed description
 3. Include error logs and steps to reproduce
 
