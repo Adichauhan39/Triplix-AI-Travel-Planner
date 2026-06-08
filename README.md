@@ -1,6 +1,8 @@
-# ✈️ Triplix — AI-Powered Travel Planner
+# ✈️ Triplix — Personalized Trip Planner with AI
 
 > **One app. One conversation. Your entire trip — planned.**
+
+> 🏆 Built for the [**Google Cloud Rapid Agent Hackathon**](https://rapid-agent.devpost.com/)
 
 [![Google Cloud Rapid Agent Hackathon](https://img.shields.io/badge/Google%20Cloud-Rapid%20Agent%20Hackathon-4285F4?style=for-the-badge&logo=google-cloud&logoColor=white)](https://rapid-agent.devpost.com/)
 
