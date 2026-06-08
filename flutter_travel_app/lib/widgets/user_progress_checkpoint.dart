@@ -95,8 +95,6 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
   Widget build(BuildContext context) {
     return Consumer<UserPreferencesProvider>(
       builder: (context, provider, child) {
-        final prefs = provider.preferences;
-
         return Align(
           alignment: Alignment.topRight,
           child: Padding(
@@ -117,7 +115,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                 borderRadius: BorderRadius.circular(_isSliderOpen ? 24 : 28),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
+                    color: Colors.black.withValues(alpha: 0.12),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -142,14 +140,14 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Row(
+                                      const Row(
                                         children: [
                                           Icon(Icons.smart_toy,
                                               color: AppConfig.primaryColor,
                                               size: 22),
-                                          const SizedBox(width: 8),
+                                          SizedBox(width: 8),
                                           Flexible(
-                                            child: const Text(
+                                            child: Text(
                                               'AI Travel Insights',
                                               style: TextStyle(
                                                   fontWeight: FontWeight.bold,
@@ -186,12 +184,12 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                                   // Normal horizontal layout
                                   return Row(
                                     children: [
-                                      Icon(Icons.smart_toy,
+                                      const Icon(Icons.smart_toy,
                                           color: AppConfig.primaryColor,
                                           size: 22),
                                       const SizedBox(width: 8),
-                                      Expanded(
-                                        child: const Text(
+                                      const Expanded(
+                                        child: Text(
                                           'AI Travel Insights',
                                           style: TextStyle(
                                               fontWeight: FontWeight.bold,
@@ -224,7 +222,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
                                   color:
-                                      AppConfig.primaryColor.withOpacity(0.08),
+                                      AppConfig.primaryColor.withValues(alpha: 0.08),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
@@ -258,7 +256,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: AppConfig.primaryColor.withOpacity(0.18),
+                              color: AppConfig.primaryColor.withValues(alpha: 0.18),
                               blurRadius: 8,
                               offset: const Offset(0, 2),
                             ),
@@ -307,7 +305,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
             const Spacer(),
             Text(
               '${completionPct.toStringAsFixed(0)}%',
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
                 color: AppConfig.primaryColor,
@@ -370,10 +368,10 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: importanceColor.withOpacity(0.1),
+                      color: importanceColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: importanceColor.withOpacity(0.3),
+                        color: importanceColor.withValues(alpha: 0.3),
                         width: 0.5,
                       ),
                     ),
@@ -488,15 +486,15 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3), width: 1),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
       ),
       child: Text(
         keyword,
         style: TextStyle(
           fontSize: 11,
-          color: color.withOpacity(0.8),
+          color: color.withValues(alpha: 0.8),
           fontWeight: FontWeight.w500,
         ),
       ),

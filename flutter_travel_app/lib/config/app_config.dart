@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 class AppConfig {
   // API Configuration
   static const String baseUrl =
-      'http://localhost:8001'; // AI server (test_ai_complete.py)
+      'https://triplix-server-1026563611026.us-central1.run.app'; // Cloud Run deployed server
   static const String apiVersion = 'v1';
+
+  // Gemini API Key
+  static const String geminiApiKey = 'AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo';
 
   // API Endpoints
   static const String chatEndpoint = '/chat';

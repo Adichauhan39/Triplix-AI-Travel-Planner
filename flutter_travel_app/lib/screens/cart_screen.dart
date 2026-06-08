@@ -119,8 +119,8 @@ class _CartScreenState extends State<CartScreen> {
                                     borderRadius: BorderRadius.circular(8),
                                     gradient: LinearGradient(
                                       colors: [
-                                        AppConfig.primaryColor.withOpacity(0.7),
-                                        AppConfig.accentColor.withOpacity(0.7),
+                                        AppConfig.primaryColor.withValues(alpha: 0.7),
+                                        AppConfig.accentColor.withValues(alpha: 0.7),
                                       ],
                                     ),
                                   ),
@@ -220,7 +220,7 @@ class _CartScreenState extends State<CartScreen> {
                     color: Colors.white,
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 10,
                         offset: const Offset(0, -2),
                       ),

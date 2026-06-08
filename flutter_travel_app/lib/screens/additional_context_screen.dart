@@ -16,6 +16,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
   String _selectedCompanion = '';
   String _selectedOccasion = '';
   String _selectedExperience = '';
+  final TextEditingController _aiContextController = TextEditingController();
 
   // Accessibility options
   final Set<String> _selectedAccessibility = {};
@@ -71,6 +72,12 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
   ];
 
   @override
+  void dispose() {
+    _aiContextController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
@@ -94,7 +101,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                         ),
                         const Expanded(
                           child: Text(
-                            '6/6',
+                            '4/4',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Colors.white,
@@ -133,6 +140,55 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // AI Context Input
+                        Icon(Icons.smart_toy_outlined,
+                            size: 40,
+                            color: AppConfig.primaryColor.withValues(alpha: 0.7)),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Anything else our AI should know?',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Share any special requirements, preferences, or context to help plan your perfect trip.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(16),
+                            border:
+                                Border.all(color: Colors.grey[300]!, width: 1),
+                          ),
+                          child: TextField(
+                            controller: _aiContextController,
+                            maxLines: 4,
+                            decoration: const InputDecoration(
+                              hintText:
+                                  'e.g., We have a 3-year-old kid, need kid-friendly places. '
+                                  'My mom uses a wheelchair. We are celebrating our anniversary. '
+                                  'We prefer vegetarian food...',
+                              hintStyle: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 13,
+                                height: 1.5,
+                              ),
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.all(16),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
                         // Travel Companion
                         const Text(
                           'Travel Companion',

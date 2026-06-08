@@ -8,11 +8,11 @@ class MockBookingScreen extends StatefulWidget {
   final List<Map<String, dynamic>> acceptedDestinations;
 
   const MockBookingScreen({
-    Key? key,
+    super.key,
     required this.acceptedHotels,
     required this.acceptedTransport,
     required this.acceptedDestinations,
-  }) : super(key: key);
+  });
 
   @override
   State<MockBookingScreen> createState() => _MockBookingScreenState();
@@ -28,7 +28,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
 
   String? _bookingId;
   String? _pnr;
-  List<String> _hotelConfirmations = [];
+  final List<String> _hotelConfirmations = [];
 
   @override
   void initState() {
@@ -148,7 +148,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
                     value: _progress,
                     strokeWidth: 8,
                     backgroundColor: Colors.grey.shade800,
-                    valueColor: AlwaysStoppedAnimation<Color>(
+                    valueColor: const AlwaysStoppedAnimation<Color>(
                       Color(0xFF00D9FF),
                     ),
                   ),
@@ -203,7 +203,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
                 height: 120,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.green.withOpacity(0.2),
+                  color: Colors.green.withValues(alpha: 0.2),
                 ),
                 child: const Icon(
                   Icons.check_circle,
@@ -247,7 +247,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
               ...widget.acceptedHotels.asMap().entries.map((entry) {
                 return _buildHotelCard(
                     entry.value, _hotelConfirmations[entry.key]);
-              }).toList(),
+              }),
               const SizedBox(height: 20),
             ],
 
@@ -256,7 +256,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
               _buildSectionTitle('✈️ Transport Bookings'),
               ...widget.acceptedTransport.map((transport) {
                 return _buildTransportCard(transport);
-              }).toList(),
+              }),
               const SizedBox(height: 20),
             ],
 
@@ -284,7 +284,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           colors: [Color(0xFF00D9FF), Color(0xFF0066FF)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -292,7 +292,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
         borderRadius: BorderRadius.circular(15),
         boxShadow: [
           BoxShadow(
-            color: Color(0xFF00D9FF).withOpacity(0.3),
+            color: const Color(0xFF00D9FF).withValues(alpha: 0.3),
             blurRadius: 15,
             offset: const Offset(0, 5),
           ),
@@ -411,7 +411,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF1D1E33),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.green.withOpacity(0.3)),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -421,7 +421,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.2),
+                  color: Colors.green.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: const Text(
@@ -489,7 +489,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF1D1E33),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.green.withOpacity(0.3)),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -499,7 +499,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.2),
+                  color: Colors.green.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: const Text(
@@ -604,7 +604,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF1D1E33),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Color(0xFF00D9FF).withOpacity(0.3)),
+        border: Border.all(color: const Color(0xFF00D9FF).withValues(alpha: 0.3)),
       ),
       child: Column(
         children: [
@@ -629,7 +629,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: Colors.green.withOpacity(0.2),
+              color: Colors.green.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(6),
             ),
             child: const Row(
@@ -670,7 +670,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
           Text(
             amount,
             style: TextStyle(
-              color: isTotal ? Color(0xFF00D9FF) : Colors.white,
+              color: isTotal ? const Color(0xFF00D9FF) : Colors.white,
               fontSize: isTotal ? 20 : 15,
               fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
             ),
@@ -734,10 +734,10 @@ class _MockBookingScreenState extends State<MockBookingScreen>
             onPressed: () {
               Navigator.of(context).pop();
             },
-            child: const Text('Back to Home'),
             style: TextButton.styleFrom(
               foregroundColor: Colors.grey.shade400,
             ),
+            child: const Text('Back to Home'),
           ),
         ),
       ],

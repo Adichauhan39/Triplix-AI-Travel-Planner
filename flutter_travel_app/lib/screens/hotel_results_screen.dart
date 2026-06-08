@@ -74,7 +74,7 @@ class _CriteriaBar extends StatelessWidget {
     if (criteria.isEmpty) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
-      color: AppConfig.primaryColor.withOpacity(0.06),
+      color: AppConfig.primaryColor.withValues(alpha: 0.06),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Wrap(
         spacing: 8,
@@ -94,7 +94,7 @@ class _CriteriaBar extends StatelessWidget {
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
               border:
-                  Border.all(color: AppConfig.primaryColor.withOpacity(0.3)),
+                  Border.all(color: AppConfig.primaryColor.withValues(alpha: 0.3)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -126,7 +126,7 @@ class _HotelResultCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
         side: hasAI
-            ? BorderSide(color: Colors.deepPurple.withOpacity(0.3), width: 1.5)
+            ? BorderSide(color: Colors.deepPurple.withValues(alpha: 0.3), width: 1.5)
             : BorderSide.none,
       ),
       child: InkWell(
@@ -140,11 +140,26 @@ class _HotelResultCard extends StatelessWidget {
                 width: 90,
                 height: 90,
                 decoration: BoxDecoration(
-                  color: AppConfig.primaryColor.withOpacity(0.1),
+                  color: AppConfig.primaryColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
                 ),
-                child: const Icon(Icons.hotel,
-                    size: 36, color: AppConfig.primaryColor),
+                child: hotel.imageUrl.isNotEmpty
+                    ? ClipRRect(
+                        borderRadius:
+                            BorderRadius.circular(AppConfig.radiusSmall),
+                        child: Image.network(
+                          hotel.imageUrl,
+                          width: 90,
+                          height: 90,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Icon(Icons.hotel,
+                                size: 36, color: AppConfig.primaryColor);
+                          },
+                        ),
+                      )
+                    : const Icon(Icons.hotel,
+                        size: 36, color: AppConfig.primaryColor),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -186,10 +201,10 @@ class _HotelResultCard extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: Colors.purple.withOpacity(0.06),
+                          color: Colors.purple.withValues(alpha: 0.06),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                              color: Colors.deepPurple.withOpacity(0.2)),
+                              color: Colors.deepPurple.withValues(alpha: 0.2)),
                         ),
                         child: Text(
                           hotel.whyRecommended!,
@@ -214,7 +229,7 @@ class _HotelResultCard extends StatelessWidget {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: Colors.deepPurple.withOpacity(0.1),
+                                    color: Colors.deepPurple.withValues(alpha: 0.1),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Text(h,

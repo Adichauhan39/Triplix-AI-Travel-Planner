@@ -643,11 +643,11 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                       child: Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: AppConfig.primaryColor.withOpacity(0.1),
+                          color: AppConfig.primaryColor.withValues(alpha: 0.1),
                           borderRadius:
                               BorderRadius.circular(AppConfig.radiusMedium),
                           border: Border.all(
-                            color: AppConfig.primaryColor.withOpacity(0.3),
+                            color: AppConfig.primaryColor.withValues(alpha: 0.3),
                             width: 1,
                           ),
                         ),
@@ -729,7 +729,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           side: BorderSide(
-                            color: Colors.deepPurple.withOpacity(0.5),
+                            color: Colors.deepPurple.withValues(alpha: 0.5),
                             width: 2,
                           ),
                         ),
@@ -831,7 +831,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
           },
           calendarStyle: CalendarStyle(
             todayDecoration: BoxDecoration(
-              color: AppConfig.primaryColor.withOpacity(0.3),
+              color: AppConfig.primaryColor.withValues(alpha: 0.3),
               shape: BoxShape.circle,
             ),
             selectedDecoration: const BoxDecoration(
@@ -902,7 +902,7 @@ class _HotelCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
         side: hasAIData
-            ? BorderSide(color: Colors.deepPurple.withOpacity(0.3), width: 2)
+            ? BorderSide(color: Colors.deepPurple.withValues(alpha: 0.3), width: 2)
             : BorderSide.none,
       ),
       child: InkWell(
@@ -920,8 +920,8 @@ class _HotelCard extends StatelessWidget {
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      Colors.deepPurple.withOpacity(0.1),
-                      Colors.purple.withOpacity(0.1),
+                      Colors.deepPurple.withValues(alpha: 0.1),
+                      Colors.purple.withValues(alpha: 0.1),
                     ],
                   ),
                   borderRadius: const BorderRadius.only(
@@ -973,7 +973,7 @@ class _HotelCard extends StatelessWidget {
                     width: 100,
                     height: 100,
                     decoration: BoxDecoration(
-                      color: AppConfig.primaryColor.withOpacity(0.1),
+                      color: AppConfig.primaryColor.withValues(alpha: 0.1),
                       borderRadius:
                           BorderRadius.circular(AppConfig.radiusSmall),
                     ),
@@ -1031,10 +1031,10 @@ class _HotelCard extends StatelessWidget {
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Colors.purple.withOpacity(0.05),
+                              color: Colors.purple.withValues(alpha: 0.05),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: Colors.deepPurple.withOpacity(0.2),
+                                color: Colors.deepPurple.withValues(alpha: 0.2),
                               ),
                             ),
                             child: Text(
@@ -1063,10 +1063,10 @@ class _HotelCard extends StatelessWidget {
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: Colors.deepPurple.withOpacity(0.1),
+                                  color: Colors.deepPurple.withValues(alpha: 0.1),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
-                                    color: Colors.deepPurple.withOpacity(0.3),
+                                    color: Colors.deepPurple.withValues(alpha: 0.3),
                                   ),
                                 ),
                                 child: Text(

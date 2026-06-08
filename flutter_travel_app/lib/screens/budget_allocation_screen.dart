@@ -85,7 +85,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                         ),
                         const Expanded(
                           child: Text(
-                            '5/6',
+                            '4/5',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Colors.white,
@@ -142,7 +142,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                '\₹${_totalBudget.toStringAsFixed(0)} INR',
+                                '₹${_totalBudget.toStringAsFixed(0)} INR',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 32,
@@ -319,7 +319,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
               activeTrackColor: AppConfig.primaryColor,
               inactiveTrackColor: Colors.grey[300],
               thumbColor: AppConfig.primaryColor,
-              overlayColor: AppConfig.primaryColor.withOpacity(0.2),
+              overlayColor: AppConfig.primaryColor.withValues(alpha: 0.2),
               trackHeight: 4,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
             ),

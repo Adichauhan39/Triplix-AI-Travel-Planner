@@ -175,12 +175,12 @@ class VoiceInputButton extends StatefulWidget {
   final double size;
   
   const VoiceInputButton({
-    Key? key,
+    super.key,
     required this.onTranscript,
     this.tooltip = 'Tap to speak',
     this.color,
     this.size = 24,
-  }) : super(key: key);
+  });
 
   @override
   State<VoiceInputButton> createState() => _VoiceInputButtonState();
@@ -344,9 +344,9 @@ class _VoiceInputButtonState extends State<VoiceInputButton>
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             margin: const EdgeInsets.only(top: 4),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
+              color: Colors.blue.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
             ),
             child: Text(
               _partialText,
@@ -368,10 +368,10 @@ class FloatingVoiceButton extends StatelessWidget {
   final String tooltip;
 
   const FloatingVoiceButton({
-    Key? key,
+    super.key,
     required this.onTranscript,
     this.tooltip = 'Voice Assistant',
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -380,8 +380,8 @@ class FloatingVoiceButton extends StatelessWidget {
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
-            title: Row(
-              children: const [
+            title: const Row(
+              children: [
                 Icon(Icons.mic, color: Colors.blue),
                 SizedBox(width: 8),
                 Text('Voice Assistant'),

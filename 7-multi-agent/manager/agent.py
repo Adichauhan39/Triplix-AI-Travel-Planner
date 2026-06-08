@@ -14,7 +14,7 @@ from .tools.tools import get_current_time, get_hotel_location_and_images, get_ho
 root_agent = Agent(
 
     name="manager",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     description="Comprehensive travel booking manager for Indian destinations",
     instruction=""" 
 

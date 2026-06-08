@@ -252,7 +252,7 @@ def book_travel(mode: str, service_number: str, origin: str, destination: str, d
 
 # Create the travel booking agent
 travel_booking = Agent(
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     name="travel_booking",
     description="A specialized agent for searching and booking Flights, Trains, and Taxis with swipe-to-discover feature.",
     instruction="""You are a professional travel booking assistant specializing in Flights, Trains, and Taxis within India.
@@ -316,3 +316,4 @@ travel_booking = Agent(
     Always be helpful, professional, and provide accurate information from the CSV dataset.""",
     tools=[generate_travel_recommendations, handle_swipe_action, search_travel, book_travel]
 )
+

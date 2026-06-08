@@ -1,5 +1,6 @@
 # Flutter
 build/
+flutter_travel_app/build/
 android/app/build/
 ios/Flutter/Flutter.framework/
 ios/Flutter/Flutter.podspec

@@ -351,7 +351,7 @@ def get_expense_list(expense_type: Optional[str] = None, tool_context: Optional[
 
 # Create the budget tracker agent
 budget_tracker = Agent(
-    model="gemini-2.0-flash-exp",
+    model="gemini-2.5-flash",
     name="budget_tracker",
     description="Specialized agent for tracking travel expenses, managing budget, and calculating group expense splits",
     instruction="""You are a professional budget tracking and expense management assistant for travelers.
@@ -432,3 +432,4 @@ After completing budget tasks (setting budget, tracking expenses, calculating sp
 Always be helpful in managing finances and provide clear, accurate calculations!""",
     tools=[set_budget, track_booking_expense, add_expense, get_budget_summary, calculate_split, get_expense_list]
 )
+

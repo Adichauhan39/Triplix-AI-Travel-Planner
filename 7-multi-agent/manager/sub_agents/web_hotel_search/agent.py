@@ -103,7 +103,7 @@ Provide realistic, well-researched hotel recommendations in valid JSON format on
         client = genai.Client()
         
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',  # Using latest Gemini model
+            model='gemini-2.5-flash',  # Using latest Gemini model
             contents=search_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,
@@ -228,7 +228,7 @@ Provide realistic, comprehensive hotel information in valid JSON format only.
         client = genai.Client()
         
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',  # Using latest Gemini model
+            model='gemini-2.5-flash',  # Using latest Gemini model
             contents=detail_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.5,
@@ -346,7 +346,7 @@ Provide intelligent price comparison in valid JSON format only.
         client = genai.Client()
         
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',  # Using latest Gemini model
+            model='gemini-2.5-flash',  # Using latest Gemini model
             contents=comparison_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.4,
@@ -378,7 +378,7 @@ Provide intelligent price comparison in valid JSON format only.
 
 
 web_hotel_search = Agent(
-    model="gemini-2.0-flash-exp",  # Using latest Gemini 2.0
+    model="gemini-2.5-flash",  # Using latest Gemini 2.0
     name="web_hotel_search",
     description="AI-powered hotel search agent using Gemini 2.0 for intelligent hotel recommendations and analysis",
     instruction="""You are an advanced AI hotel search assistant powered by Gemini 2.0 that provides intelligent hotel recommendations.

@@ -97,7 +97,7 @@ class ApiService {
   }) async {
     try {
       // Use port 8001 for the lightweight AI test server
-      const aiBaseUrl = 'http://127.0.0.1:8001';
+      final aiBaseUrl = AppConfig.baseUrl;
 
       final response = await http
           .post(

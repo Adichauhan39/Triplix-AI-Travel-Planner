@@ -30,7 +30,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
   bool _isDragging = false;
 
   late AnimationController _animationController;
-  late Animation<Offset> _slideAnimation;
+  late Animation<Offset> slideAnimation;
 
   @override
   void initState() {
@@ -40,7 +40,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
-    _slideAnimation = Tween<Offset>(
+    slideAnimation = Tween<Offset>(
       begin: Offset.zero,
       end: const Offset(2, 0),
     ).animate(CurvedAnimation(
@@ -108,7 +108,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
     await _learningService.recordDislike(hotel);
 
     // Animate card out
-    _slideAnimation = Tween<Offset>(
+    slideAnimation = Tween<Offset>(
       begin: Offset.zero,
       end: const Offset(-2, 0),
     ).animate(CurvedAnimation(
@@ -472,7 +472,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 20,
             spreadRadius: 5,
           ),
@@ -482,26 +482,54 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
         borderRadius: BorderRadius.circular(20),
         child: Stack(
           children: [
-            // Background image placeholder
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppConfig.primaryColor.withOpacity(0.7),
-                    AppConfig.accentColor.withOpacity(0.7),
-                  ],
-                ),
-              ),
-              child: Center(
-                child: Icon(
-                  Icons.hotel,
-                  size: 120,
-                  color: Colors.white.withOpacity(0.3),
-                ),
-              ),
-            ),
+            // Background image
+            hotel.imageUrl.isNotEmpty
+                ? Image.network(
+                    hotel.imageUrl,
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              AppConfig.primaryColor.withValues(alpha: 0.7),
+                              AppConfig.accentColor.withValues(alpha: 0.7),
+                            ],
+                          ),
+                        ),
+                        child: Center(
+                          child: Icon(
+                            Icons.hotel,
+                            size: 120,
+                            color: Colors.white.withValues(alpha: 0.3),
+                          ),
+                        ),
+                      );
+                    },
+                  )
+                : Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          AppConfig.primaryColor.withValues(alpha: 0.7),
+                          AppConfig.accentColor.withValues(alpha: 0.7),
+                        ],
+                      ),
+                    ),
+                    child: Center(
+                      child: Icon(
+                        Icons.hotel,
+                        size: 120,
+                        color: Colors.white.withValues(alpha: 0.3),
+                      ),
+                    ),
+                  ),
 
             // Gradient overlay
             Container(
@@ -511,7 +539,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.black.withOpacity(0.8),
+                    Colors.black.withValues(alpha: 0.8),
                   ],
                   stops: const [0.5, 1.0],
                 ),
@@ -587,7 +615,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
                             vertical: 6,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: Colors.white.withValues(alpha: 0.2),
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
@@ -628,7 +656,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
+                              color: Colors.white.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -728,7 +756,8 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
                 children: hotel.amenities.map((amenity) {
                   return Chip(
                     label: Text(amenity),
-                    backgroundColor: AppConfig.primaryColor.withOpacity(0.1),
+                    backgroundColor:
+                        AppConfig.primaryColor.withValues(alpha: 0.1),
                   );
                 }).toList(),
               ),

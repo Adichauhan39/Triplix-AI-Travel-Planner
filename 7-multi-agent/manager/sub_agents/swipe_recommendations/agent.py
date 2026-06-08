@@ -14,7 +14,7 @@ from ...tools.swipe_recommendations import (
 )
 
 swipe_recommendation_agent = Agent(
-    model="gemini-2.0-flash-exp",
+    model="gemini-2.5-flash",
     name="swipe_recommendations",
     description="Interactive swipe-based recommendation system for discovering travel, accommodations, and destinations",
     instruction="""You are an interactive recommendation assistant that provides a Tinder-like swipe interface for travel planning.
@@ -110,3 +110,4 @@ Make the experience fun, interactive, and efficient! 🎉""",
         get_liked_items
     ]
 )
+

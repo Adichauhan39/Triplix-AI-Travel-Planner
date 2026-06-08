@@ -15,9 +15,7 @@ import 'screens/hotel_results_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/destination_preferences_screen.dart';
 import 'screens/budget_preferences_screen.dart';
-import 'screens/activities_preferences_screen.dart';
 import 'screens/transport_preferences_screen.dart';
-import 'screens/budget_allocation_screen.dart';
 import 'screens/additional_context_screen.dart';
 import 'screens/ai_assistant_screen.dart';
 import 'models/hotel.dart';
@@ -61,12 +59,10 @@ class MyApp extends StatelessWidget {
             secondary: AppConfig.secondaryColor,
             tertiary: AppConfig.accentColor,
             surface: AppConfig.surfaceColor,
-            background: AppConfig.backgroundColor,
             error: AppConfig.errorColor,
             onPrimary: Colors.white,
             onSecondary: Colors.white,
             onSurface: AppConfig.textPrimary,
-            onBackground: AppConfig.textPrimary,
             onError: Colors.white,
           ),
           fontFamily: 'Poppins',
@@ -183,7 +179,7 @@ class MyApp extends StatelessWidget {
           outlinedButtonTheme: OutlinedButtonThemeData(
             style: OutlinedButton.styleFrom(
               foregroundColor: AppConfig.primaryColor,
-              side: BorderSide(color: AppConfig.primaryColor, width: 1.5),
+              side: const BorderSide(color: AppConfig.primaryColor, width: 1.5),
               padding: const EdgeInsets.symmetric(
                 horizontal: 24,
                 vertical: 12,
@@ -205,7 +201,7 @@ class MyApp extends StatelessWidget {
             surfaceTintColor: Colors.transparent,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: AppConfig.borderColor, width: 1),
+              side: const BorderSide(color: AppConfig.borderColor, width: 1),
             ),
             margin: EdgeInsets.zero,
           ),
@@ -218,23 +214,28 @@ class MyApp extends StatelessWidget {
             ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AppConfig.borderColor, width: 1),
+              borderSide:
+                  const BorderSide(color: AppConfig.borderColor, width: 1),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AppConfig.borderColor, width: 1),
+              borderSide:
+                  const BorderSide(color: AppConfig.borderColor, width: 1),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AppConfig.primaryColor, width: 2),
+              borderSide:
+                  const BorderSide(color: AppConfig.primaryColor, width: 2),
             ),
             errorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AppConfig.errorColor, width: 1),
+              borderSide:
+                  const BorderSide(color: AppConfig.errorColor, width: 1),
             ),
             focusedErrorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AppConfig.errorColor, width: 2),
+              borderSide:
+                  const BorderSide(color: AppConfig.errorColor, width: 2),
             ),
             hintStyle: GoogleFonts.poppins(
               color: AppConfig.textTertiary,
@@ -283,14 +284,8 @@ class MyApp extends StatelessWidget {
               name: '/budget-preferences',
               page: () => const BudgetPreferencesScreen()),
           GetPage(
-              name: '/activities-preferences',
-              page: () => const ActivitiesPreferencesScreen()),
-          GetPage(
               name: '/transport-preferences',
               page: () => const TransportPreferencesScreen()),
-          GetPage(
-              name: '/budget-allocation',
-              page: () => const BudgetAllocationScreen()),
           GetPage(
               name: '/additional-context',
               page: () => const AdditionalContextScreen()),

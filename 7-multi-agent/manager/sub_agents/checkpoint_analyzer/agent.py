@@ -2,7 +2,7 @@ from google.adk.agents import Agent
 
 checkpoint_analyzer = Agent(
     name="checkpoint_analyzer",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     description="AI-powered travel preference analyzer that provides intelligent insights and recommendations",
     instruction="""
 

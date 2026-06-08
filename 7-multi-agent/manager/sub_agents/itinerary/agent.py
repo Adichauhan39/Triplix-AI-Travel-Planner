@@ -627,7 +627,7 @@ def clear_saved_attractions(tool_context: dict) -> dict:
 
 # Create the itinerary agent
 itinerary_agent = Agent(
-    model="gemini-2.0-flash-exp",
+    model="gemini-2.5-flash",
     name="itinerary_agent",
     description="Expert itinerary planning assistant that creates detailed day-by-day schedules with SPECIFIC hotel names, flight details, and restaurant recommendations",
     instruction="""You are an expert Itinerary Planning Assistant that helps users create organized travel plans with SPECIFIC details.
@@ -696,3 +696,4 @@ Remember: You're creating memorable travel experiences with SPECIFIC, actionable
 """,
     tools=[add_to_itinerary, view_saved_attractions, generate_final_itinerary, clear_saved_attractions]
 )
+

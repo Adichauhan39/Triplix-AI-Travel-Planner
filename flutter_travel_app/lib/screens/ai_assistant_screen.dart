@@ -271,7 +271,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -368,12 +368,12 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   }
 
   Widget _buildLoadingState() {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           CircularProgressIndicator(color: AppConfig.primaryColor),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           Text(
             'Analyzing your preferences...',
             style: TextStyle(
@@ -382,7 +382,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
               color: AppConfig.textPrimary,
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           Text(
             'Our AI agents are working together',
             style: TextStyle(
@@ -396,7 +396,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   }
 
   Widget _buildEmptyState() {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -405,7 +405,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
             size: 80,
             color: AppConfig.textTertiary,
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           Text(
             'No preferences to analyze',
             style: TextStyle(
@@ -414,7 +414,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
               color: AppConfig.textPrimary,
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           Text(
             'Complete the preference screens first',
             style: TextStyle(
@@ -514,7 +514,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         const SizedBox(width: 12),
         Text(
           title,
-          style: TextStyle(
+          style: const TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
             color: AppConfig.textPrimary,
@@ -530,19 +530,19 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            AppConfig.primaryColor.withOpacity(0.1),
-            AppConfig.secondaryColor.withOpacity(0.1),
+            AppConfig.primaryColor.withValues(alpha: 0.1),
+            AppConfig.secondaryColor.withValues(alpha: 0.1),
           ],
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppConfig.primaryColor.withOpacity(0.3)),
+        border: Border.all(color: AppConfig.primaryColor.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             summary['title'] ?? 'Summary',
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
               color: AppConfig.primaryColor,
@@ -551,7 +551,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
           const SizedBox(height: 12),
           Text(
             summary['content'] ?? '',
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 14,
               color: AppConfig.textPrimary,
               height: 1.5,
@@ -574,7 +574,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (insight['recommendations'] != null) ...[
-            Text(
+            const Text(
               'Recommendations:',
               style: TextStyle(
                 fontSize: 16,
@@ -588,13 +588,13 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.check_circle,
+                      const Icon(Icons.check_circle,
                           size: 16, color: AppConfig.successColor),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           rec.toString(),
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontSize: 14,
                             color: AppConfig.textSecondary,
                           ),
@@ -606,7 +606,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
           ],
           if (insight['warnings'] != null) ...[
             const SizedBox(height: 12),
-            Text(
+            const Text(
               'Considerations:',
               style: TextStyle(
                 fontSize: 16,
@@ -620,13 +620,13 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.warning_amber,
+                      const Icon(Icons.warning_amber,
                           size: 16, color: AppConfig.warningColor),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           warn.toString(),
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontSize: 14,
                             color: AppConfig.textSecondary,
                           ),
@@ -648,16 +648,16 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: AppConfig.primaryColor.withOpacity(0.05),
+            color: AppConfig.primaryColor.withValues(alpha: 0.05),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppConfig.primaryColor.withOpacity(0.2)),
+            border: Border.all(color: AppConfig.primaryColor.withValues(alpha: 0.2)),
           ),
           child: Row(
             children: [
               Container(
                 width: 32,
                 height: 32,
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   color: AppConfig.primaryColor,
                   shape: BoxShape.circle,
                 ),
@@ -670,7 +670,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
               Expanded(
                 child: Text(
                   item.toString(),
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
                     color: AppConfig.textPrimary,

@@ -1,12 +1,13 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/app_config.dart';
 import '../models/user_preferences.dart';
 
 /// Dynamic Checkpoint Service - Uses AI to analyze user preferences
 /// and provide intelligent insights and recommendations with structured checkpoints
 class DynamicCheckpointService {
   // Python FastAPI backend URL
-  static const String _baseUrl = 'http://localhost:8001';
+  static final String _baseUrl = AppConfig.baseUrl;
 
   /// Get AI-powered insights for user preferences with checkpoint tracking
   Future<Map<String, dynamic>> getCheckpointInsights(

@@ -20,8 +20,9 @@ class UserPreferencesProvider with ChangeNotifier {
     if (climates != null) _preferences.selectedClimates = climates;
     if (terrains != null) _preferences.selectedTerrains = terrains;
     if (cultures != null) _preferences.selectedCultures = cultures;
-    if (sunActivities != null)
+    if (sunActivities != null) {
       _preferences.selectedSunActivities = sunActivities;
+    }
     notifyListeners();
   }
 
@@ -57,8 +58,9 @@ class UserPreferencesProvider with ChangeNotifier {
     if (companion != null) _preferences.companion = companion;
     if (occasion != null) _preferences.occasion = occasion;
     if (experience != null) _preferences.experience = experience;
-    if (accessibility != null)
+    if (accessibility != null) {
       _preferences.selectedAccessibility = accessibility;
+    }
     if (dietary != null) _preferences.selectedDietary = dietary;
     if (medical != null) _preferences.selectedMedical = medical;
     if (languages != null) _preferences.selectedLanguages = languages;

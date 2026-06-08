@@ -1,15 +1,17 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/app_config.dart';
 
 /// Service to communicate with Python ADK Backend
 /// Integrates Flutter frontend with Python Google ADK multi-agent system
 class PythonADKService {
   // Python FastAPI backend URL
-  static const String _baseUrl = 'http://localhost:8001';
+  static final String _baseUrl = AppConfig.baseUrl;
 
   // API endpoints
   static const String _agentEndpoint = '/api/agent';
   static const String _managerEndpoint = '/api/manager';
+  static const String _replanEndpoint = '/api/itinerary/replan';
   static const String _hotelEndpoint = '/api/hotel/search';
   static const String _flightEndpoint = '/api/flight/search';
   static const String _travelEndpoint = '/api/travel/search';
@@ -220,6 +222,9 @@ class PythonADKService {
           'response': data['response'],
           'agent': data['agent'],
           'data': data['data'],
+          'itinerary': data['itinerary'],
+          'replan': data['replan'],
+          'is_dynamic_replan': data['is_dynamic_replan'],
           'page': data['page'],
           'source': 'python_adk',
         };
@@ -246,6 +251,55 @@ class PythonADKService {
         'error': 'Failed to connect to Python backend: ${e.toString()}',
         'response':
             'I\'m having trouble connecting to my AI brain. Error: ${e.toString()}',
+        'source': 'python_adk',
+      };
+    }
+  }
+
+  /// Explicitly trigger dynamic itinerary replanning based on weather/disruptions.
+  Future<Map<String, dynamic>> replanItinerary({
+    required String message,
+    Map<String, dynamic>? context,
+  }) async {
+    try {
+      final requestBody = {
+        'message': message,
+        'context': context ?? {},
+        'page': 'home',
+      };
+
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl$_replanEndpoint'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode(requestBody),
+          )
+          .timeout(const Duration(seconds: 120));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return {
+          'success': data['success'] ?? true,
+          'response': data['response'],
+          'agent': data['agent'],
+          'data': data['data'],
+          'itinerary': data['itinerary'],
+          'replan': data['replan'],
+          'source': 'python_adk',
+        };
+      }
+
+      return {
+        'success': false,
+        'error': 'Backend error: ${response.statusCode}',
+        'response': 'Sorry, I could not re-plan the itinerary right now.',
+        'source': 'python_adk',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': e.toString(),
+        'response': 'I\'m having trouble re-planning your itinerary. Error: $e',
         'source': 'python_adk',
       };
     }
@@ -317,7 +371,6 @@ class PythonADKService {
         final data = json.decode(response.body);
         final hotelCount = (data['hotels'] as List?)?.length ?? 0;
         final aiUsed = data['ai_used'] ?? false;
-        final costInfo = data['cost'] ?? 'Unknown';
 
         if (aiUsed) {
           print('✅ SEARCH COMPLETE: $hotelCount hotels via Manager Agent (AI)');
@@ -457,109 +510,100 @@ class PythonADKService {
     }
   }
 
-  /// Check if query requires AI (complex) or can use CSV (simple)
-  bool _isComplexQuery({
-    String? specialRequest,
-    String? roomType,
-    String? ambiance,
-    List<String>? amenities,
-  }) {
-    // If user provided special request, use AI
-    if (specialRequest != null && specialRequest.trim().isNotEmpty) {
-      print('   → Complex: Special request detected - "$specialRequest"');
-      return true;
-    }
-
-    // If user selected specific room type (not just "All"), use AI
-    if (roomType != null &&
-        roomType.trim().isNotEmpty &&
-        roomType.toLowerCase() != 'all') {
-      print('   → Complex: Specific room type - "$roomType"');
-      return true;
-    }
-
-    // If user selected specific ambiance (not just "All"), use AI
-    if (ambiance != null &&
-        ambiance.trim().isNotEmpty &&
-        ambiance.toLowerCase() != 'all') {
-      print('   → Complex: Specific ambiance - "$ambiance"');
-      return true;
-    }
-
-    // If user selected multiple specific amenities, use AI
-    if (amenities != null && amenities.isNotEmpty) {
-      print('   → Complex: Specific amenities - ${amenities.join(", ")}');
-      return true;
-    }
-
-    print('   → Simple: Basic city + price search, using CSV');
-    return false;
-  }
-
-  /// Search hotels using CSV filtering (fast, basic search)
-  Future<Map<String, dynamic>> _searchHotelsCSV({
+  /// Get AI-generated destination-specific interests and activities
+  Future<Map<String, dynamic>> getDestinationInterests({
     required String city,
-    double? minPrice,
-    double? maxPrice,
-    String? roomType,
   }) async {
     try {
-      // Build query parameters
-      final queryParams = {
-        'city': city,
-        'min_price': (minPrice ?? 0).toString(),
-        'max_price': (maxPrice ?? 100000).toString(),
-      };
-
-      if (roomType != null &&
-          roomType.isNotEmpty &&
-          roomType.toLowerCase() != 'all') {
-        queryParams['type'] = roomType;
-      }
-
-      final uri =
-          Uri.parse('$_baseUrl/hotels').replace(queryParameters: queryParams);
-
-      print('   📡 GET request to: $uri');
-
-      final response = await http.get(
-        uri,
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-        },
-      );
-
-      print('   📥 Response status: ${response.statusCode}');
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/destination/interests'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'city': city}),
+          )
+          .timeout(const Duration(seconds: 45));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final hotelCount = (data['hotels'] as List?)?.length ?? 0;
-
-        print('✅ SEARCH COMPLETE: $hotelCount hotels found via CSV');
-
         return {
-          'success': true,
-          'response':
-              'Found $hotelCount hotels in $city matching your criteria',
-          'agent': 'csv_filter',
-          'data': {
-            'hotels': data['hotels'] ?? [],
-          },
-          'source': 'csv_database',
+          'success': data['status'] == 'success',
+          'city': data['city'] ?? city,
+          'categories': data['categories'] ?? [],
         };
       } else {
-        print('❌ CSV search failed with status ${response.statusCode}');
-        return {
-          'success': false,
-          'error': 'Hotel search failed: ${response.statusCode}',
-        };
+        return {'success': false, 'categories': []};
       }
     } catch (e) {
-      print('❌ Error in CSV search: ${e.toString()}');
-      return {
-        'success': false,
-        'error': 'Error: ${e.toString()}',
-      };
+      print('Destination interests error: $e');
+      return {'success': false, 'categories': []};
+    }
+  }
+
+  /// Check if a city name is ambiguous and return disambiguation options
+  Future<Map<String, dynamic>> disambiguateCity({
+    required String city,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/destination/disambiguate'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'city': city}),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return {
+          'success': data['status'] == 'success',
+          'ambiguous': data['ambiguous'] ?? false,
+          'options': data['options'] ?? [],
+        };
+      } else {
+        return {'success': false, 'ambiguous': false, 'options': []};
+      }
+    } catch (e) {
+      print('Disambiguate city error: $e');
+      return {'success': false, 'ambiguous': false, 'options': []};
+    }
+  }
+
+  /// Get seasonal activities and attractions for a destination
+  Future<Map<String, dynamic>> getSeasonalActivities({
+
+    required String city,
+    String? travelDate,
+    int days = 3,
+    int count = 10,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/activities/seasonal'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'city': city,
+              'travel_date': travelDate ?? '',
+              'days': days,
+              'count': count,
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return {
+          'success': data['status'] == 'success',
+          'activities': data['activities'] ?? [],
+          'month': data['month'] ?? '',
+          'season_info': data['season_info'] ?? '',
+        };
+      } else {
+        return {'success': false, 'activities': []};
+      }
+    } catch (e) {
+      print('Seasonal activities error: $e');
+      return {'success': false, 'activities': []};
     }
   }
 
