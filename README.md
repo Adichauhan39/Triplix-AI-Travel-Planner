@@ -262,12 +262,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ---
 
-## 🙏 Acknowledgments
-
-- [Google Cloud Rapid Agent Hackathon](https://rapid-agent.devpost.com/)
-- Google Gemini & Vertex AI team
-- Google ADK (Agent Development Kit)
-- Flutter & Dart community
 
 ---
 
