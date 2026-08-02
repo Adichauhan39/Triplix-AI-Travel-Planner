@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import '../config/app_config.dart';
 import '../models/user_preferences.dart';
 
@@ -7,7 +8,18 @@ import '../models/user_preferences.dart';
 /// and provide intelligent insights and recommendations with structured checkpoints
 class DynamicCheckpointService {
   // Python FastAPI backend URL
-  static final String _baseUrl = AppConfig.baseUrl;
+  static const String _baseUrl = AppConfig.baseUrl;
+
+  String _formatBudget(UserPreferences preferences) {
+    if (preferences.budget == null) return 'Not specified';
+    final code = preferences.budgetCurrencyCode.toUpperCase();
+    try {
+      final symbol = NumberFormat.simpleCurrency(name: code).currencySymbol;
+      return '$symbol${preferences.budget!.toStringAsFixed(0)} $code';
+    } catch (_) {
+      return '${preferences.budget!.toStringAsFixed(0)} $code';
+    }
+  }
 
   /// Get AI-powered insights for user preferences with checkpoint tracking
   Future<Map<String, dynamic>> getCheckpointInsights(
@@ -15,7 +27,7 @@ class DynamicCheckpointService {
     try {
       // First, generate checkpoint plan
       final checkpointPlan = _generateCheckpointPlan(preferences);
-      
+
       // Check if Python backend is available
       final backendAvailable = await _isBackendAvailable();
 
@@ -25,17 +37,19 @@ class DynamicCheckpointService {
       } else {
         insights = _getFallbackInsights(preferences);
       }
-      
+
       // Add checkpoint plan to insights
       insights['checkpointPlan'] = checkpointPlan;
-      insights['completionPercentage'] = _calculateCompletionPercentage(checkpointPlan);
-      
+      insights['completionPercentage'] =
+          _calculateCompletionPercentage(checkpointPlan);
+
       return insights;
     } catch (e) {
       print('Error getting checkpoint insights: $e');
       final fallback = _getFallbackInsights(preferences);
       fallback['checkpointPlan'] = _generateCheckpointPlan(preferences);
-      fallback['completionPercentage'] = _calculateCompletionPercentage(fallback['checkpointPlan']);
+      fallback['completionPercentage'] =
+          _calculateCompletionPercentage(fallback['checkpointPlan']);
       return fallback;
     }
   }
@@ -57,7 +71,7 @@ class DynamicCheckpointService {
         'description': 'How much you want to spend',
         'completed': preferences.hasBudget,
         'importance': 'critical',
-        'data': preferences.budget != null ? '₹${preferences.budget!.toStringAsFixed(0)}' : null,
+        'data': preferences.hasBudget ? _formatBudget(preferences) : null,
       },
       {
         'id': 'activities',
@@ -126,11 +140,13 @@ class DynamicCheckpointService {
     return {
       'checkpoints': checkpoints,
       'totalCheckpoints': checkpoints.length,
-      'completedCheckpoints': checkpoints.where((c) => c['completed'] == true).length,
+      'completedCheckpoints':
+          checkpoints.where((c) => c['completed'] == true).length,
       'criticalCompleted': checkpoints
           .where((c) => c['importance'] == 'critical' && c['completed'] == true)
           .length,
-      'criticalTotal': checkpoints.where((c) => c['importance'] == 'critical').length,
+      'criticalTotal':
+          checkpoints.where((c) => c['importance'] == 'critical').length,
     };
   }
 
@@ -197,12 +213,17 @@ class DynamicCheckpointService {
   }
 
   /// Build analysis prompt for user preferences with checkpoint context
-  String _buildPreferenceAnalysisPrompt(UserPreferences preferences, Map<String, dynamic> checkpointPlan) {
-    final completionPct = checkpointPlan['completedCheckpoints'] / checkpointPlan['totalCheckpoints'] * 100;
+  String _buildPreferenceAnalysisPrompt(
+      UserPreferences preferences, Map<String, dynamic> checkpointPlan) {
+    final completionPct = checkpointPlan['completedCheckpoints'] /
+        checkpointPlan['totalCheckpoints'] *
+        100;
     final checkpoints = checkpointPlan['checkpoints'] as List;
-    final completedCheckpoints = checkpoints.where((c) => c['completed'] == true).toList();
-    final pendingCheckpoints = checkpoints.where((c) => c['completed'] == false).toList();
-    
+    final completedCheckpoints =
+        checkpoints.where((c) => c['completed'] == true).toList();
+    final pendingCheckpoints =
+        checkpoints.where((c) => c['completed'] == false).toList();
+
     return '''
 You are an AI travel planning assistant. Analyze the user's travel preferences using a structured checkpoint approach.
 
@@ -216,7 +237,7 @@ ${pendingCheckpoints.map((c) => '○ ${c['title']} [${c['importance']}]: ${c['de
 
 CURRENT TRAVEL PREFERENCES:
 DESTINATION: ${preferences.destination ?? 'Not specified'}
-BUDGET: ${preferences.budget != null ? '₹${preferences.budget!.toStringAsFixed(0)}' : 'Not specified'}
+BUDGET: ${_formatBudget(preferences)}
 
 ACTIVITIES: ${preferences.selectedActivities.isNotEmpty ? preferences.selectedActivities.join(', ') : 'None selected'}
 TRANSPORT: ${preferences.selectedTransport.isNotEmpty ? preferences.selectedTransport.join(', ') : 'None selected'}
@@ -256,7 +277,8 @@ Keep responses actionable and checkpoint-focused. Prioritize critical checkpoint
     if (data is String) return data;
     if (data is List) return data.isNotEmpty ? data.join(', ') : 'None';
     if (data is Map) {
-      final entries = (data as Map<String, dynamic>).entries
+      final entries = (data as Map<String, dynamic>)
+          .entries
           .where((e) => e.value != null && e.value.toString().isNotEmpty)
           .map((e) => '${e.key}: ${e.value}');
       return entries.isNotEmpty ? entries.join(', ') : 'None';
@@ -269,19 +291,19 @@ Keep responses actionable and checkpoint-focused. Prioritize critical checkpoint
     // Generate checkpoint-aware summary
     List<String> completedAreas = [];
     List<String> pendingAreas = [];
-    
+
     if (preferences.hasDestination) {
       completedAreas.add('destination (${preferences.destination})');
     } else {
       pendingAreas.add('destination selection');
     }
-    
+
     if (preferences.hasBudget) {
-      completedAreas.add('budget (₹${preferences.budget!.toStringAsFixed(0)})');
+      completedAreas.add('budget (${_formatBudget(preferences)})');
     } else {
       pendingAreas.add('budget planning');
     }
-    
+
     if (preferences.hasActivities) {
       completedAreas.add('activities');
     } else {
@@ -290,39 +312,52 @@ Keep responses actionable and checkpoint-focused. Prioritize critical checkpoint
 
     String summary;
     if (completedAreas.isEmpty) {
-      summary = '📋 Let\'s start planning your trip! Complete the checkpoints to get personalized recommendations.';
+      summary =
+          '📋 Let\'s start planning your trip! Complete the checkpoints to get personalized recommendations.';
     } else if (pendingAreas.isEmpty) {
-      summary = '✨ Your travel profile is complete! Ready to find the perfect ${preferences.destination} experience.';
+      summary =
+          '✨ Your travel profile is complete! Ready to find the perfect ${preferences.destination} experience.';
     } else {
-      summary = '📊 Progress: ${completedAreas.join(', ')} set. Still need: ${pendingAreas.join(', ')}.';
+      summary =
+          '📊 Progress: ${completedAreas.join(', ')} set. Still need: ${pendingAreas.join(', ')}.';
     }
 
     // Checkpoint-based recommendations
     List<String> recommendations = [];
-    
+
     if (!preferences.hasBudget) {
-      recommendations.add('💰 Set your budget first - it\'s critical for tailored recommendations');
+      recommendations.add(
+          '💰 Set your budget first - it\'s critical for tailored recommendations');
     }
     if (!preferences.hasDestination) {
-      recommendations.add('📍 Choose your destination - this unlocks location-specific suggestions');
+      recommendations.add(
+          '📍 Choose your destination - this unlocks location-specific suggestions');
     }
     if (preferences.hasBudget && preferences.hasDestination) {
-      final budgetLevel = preferences.budget! < 10000 ? 'budget' : preferences.budget! < 50000 ? 'moderate' : 'luxury';
-      recommendations.add('🎯 Your $budgetLevel budget works great for ${preferences.destination}');
+      final budgetLevel = preferences.budget! < 10000
+          ? 'budget'
+          : preferences.budget! < 50000
+              ? 'moderate'
+              : 'luxury';
+      recommendations.add(
+          '🎯 Your $budgetLevel budget works great for ${preferences.destination}');
     }
     if (preferences.selectedActivities.isNotEmpty) {
-      recommendations.add('🎨 ${preferences.selectedActivities.first} activities will enhance your experience');
+      recommendations.add(
+          '🎨 ${preferences.selectedActivities.first} activities will enhance your experience');
     } else {
       recommendations.add('🎭 Add activities to discover unique experiences');
     }
     if (preferences.selectedTransport.isEmpty) {
-      recommendations.add('🚗 Select transport preferences for better route planning');
+      recommendations
+          .add('🚗 Select transport preferences for better route planning');
     }
-    
+
     // Checkpoint-based challenges
     List<String> challenges = [];
     if (pendingAreas.isNotEmpty) {
-      challenges.add('⚠️ ${pendingAreas.length} critical checkpoint${pendingAreas.length > 1 ? 's' : ''} pending');
+      challenges.add(
+          '⚠️ ${pendingAreas.length} critical checkpoint${pendingAreas.length > 1 ? 's' : ''} pending');
     }
     if (preferences.hasBudget && preferences.budget! < 5000) {
       challenges.add('💡 Low budget may limit accommodation options');
@@ -332,11 +367,18 @@ Keep responses actionable and checkpoint-focused. Prioritize critical checkpoint
       'summary': summary,
       'recommendations': recommendations.take(5).toList(),
       'challenges': challenges,
-      'budgetTips': preferences.hasBudget 
-          ? ['Track expenses daily', 'Book in advance for better rates', 'Consider off-peak travel']
+      'budgetTips': preferences.hasBudget
+          ? [
+              'Track expenses daily',
+              'Book in advance for better rates',
+              'Consider off-peak travel'
+            ]
           : ['Set a budget to unlock financial insights'],
       'alternatives': preferences.hasDestination
-          ? ['Explore nearby ${preferences.destination}', 'Consider different seasons']
+          ? [
+              'Explore nearby ${preferences.destination}',
+              'Consider different seasons'
+            ]
           : ['Browse popular destinations first'],
       'confidence': 0.3,
       'lastUpdated': DateTime.now(),

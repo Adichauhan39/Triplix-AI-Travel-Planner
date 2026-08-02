@@ -11,6 +11,11 @@ class UserPreferencesProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void updateOrigin(String origin) {
+    _preferences.origin = origin;
+    notifyListeners();
+  }
+
   void updateDestinationPreferences({
     List<String>? climates,
     List<String>? terrains,
@@ -26,8 +31,17 @@ class UserPreferencesProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void updateBudget(double budget) {
+  void updateBudget(double budget, {String? currencyCode}) {
     _preferences.budget = budget;
+    if (currencyCode != null && currencyCode.trim().isNotEmpty) {
+      _preferences.budgetCurrencyCode = currencyCode.toUpperCase();
+    }
+    notifyListeners();
+  }
+
+  void updateBudgetCurrency(String currencyCode) {
+    if (currencyCode.trim().isEmpty) return;
+    _preferences.budgetCurrencyCode = currencyCode.toUpperCase();
     notifyListeners();
   }
 
@@ -80,7 +94,9 @@ class UserPreferencesProvider with ChangeNotifier {
 
   void clearAll() {
     _preferences.destination = null;
+    _preferences.origin = null;
     _preferences.budget = null;
+    _preferences.budgetCurrencyCode = 'USD';
     _preferences.selectedActivities = [];
     _preferences.selectedTransport = [];
     _preferences.selectedAccommodation = [];

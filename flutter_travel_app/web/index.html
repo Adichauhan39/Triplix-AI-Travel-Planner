@@ -31,7 +31,10 @@
 
   <title>Triplix - Travel Assistant</title>
   <link rel="manifest" href="manifest.json">
-  
+
+  <!-- Google reCAPTCHA v2 (checkbox) API -->
+  <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+
   <style>
     body {
       margin: 0;
@@ -122,6 +125,24 @@
   </div>
   
   <script>
+    // Force clear all service workers and caches to fix white screen
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var r of registrations) {
+          r.unregister();
+        }
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(function(names) {
+        for (var name of names) {
+          caches.delete(name);
+        }
+      });
+    }
+  </script>
+
+  <script>
     // Remove splash screen once Flutter is loaded
     window.addEventListener('load', function() {
       // Hide splash immediately if taking too long
@@ -146,8 +167,13 @@
     });
   </script>
   
-  <!-- Google Maps JavaScript API -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo"></script>
+  <!-- Google Maps JavaScript API (with Places library for city autocomplete) -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo&libraries=places"></script>
+
+  <!-- Firebase JS SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

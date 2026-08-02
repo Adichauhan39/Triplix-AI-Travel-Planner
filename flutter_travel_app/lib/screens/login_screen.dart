@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:get/get.dart';
+import '../services/auth_service.dart';
+import '../widgets/triplix_logo.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -19,35 +21,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _rememberMe = false;
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
-
-  // Fake login credentials for demo
-  final Map<String, Map<String, String>> _demoCredentials = {
-    'demo@triplix.com': {
-      'password': 'demo123',
-      'name': 'Demo User',
-      'avatar': 'D',
-    },
-    'john@example.com': {
-      'password': 'john123',
-      'name': 'John Smith',
-      'avatar': 'J',
-    },
-    'sarah@example.com': {
-      'password': 'sarah123',
-      'name': 'Sarah Johnson',
-      'avatar': 'S',
-    },
-    'alex@example.com': {
-      'password': 'alex123',
-      'name': 'Alex Chen',
-      'avatar': 'A',
-    },
-    'admin@triplix.com': {
-      'password': 'admin123',
-      'name': 'Admin User',
-      'avatar': 'AD',
-    },
-  };
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
@@ -74,13 +48,11 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _checkSavedLogin() async {
     final prefs = await SharedPreferences.getInstance();
     final savedEmail = prefs.getString('saved_email');
-    final savedPassword = prefs.getString('saved_password');
     final rememberMe = prefs.getBool('remember_me') ?? false;
 
-    if (rememberMe && savedEmail != null && savedPassword != null) {
+    if (rememberMe && savedEmail != null) {
       setState(() {
         _emailController.text = savedEmail;
-        _passwordController.text = savedPassword;
         _rememberMe = rememberMe;
       });
     }
@@ -91,131 +63,115 @@ class _LoginScreenState extends State<LoginScreen>
 
     setState(() => _isLoading = true);
 
-    // Simulate API call delay
-    await Future.delayed(const Duration(seconds: 1));
-
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
 
-    // Check credentials
-    if (_demoCredentials.containsKey(email) &&
-        _demoCredentials[email]!['password'] == password) {
-      // Save credentials if remember me is checked
-      final prefs = await SharedPreferences.getInstance();
-      if (_rememberMe) {
-        await prefs.setString('saved_email', email);
-        await prefs.setString('saved_password', password);
-        await prefs.setBool('remember_me', true);
-      } else {
-        await prefs.remove('saved_email');
-        await prefs.remove('saved_password');
-        await prefs.setBool('remember_me', false);
+    try {
+      final user = await _authService.signInWithEmail(email, password);
+      if (user != null) {
+        // Save remember me preference
+        final prefs = await SharedPreferences.getInstance();
+        if (_rememberMe) {
+          await prefs.setString('saved_email', email);
+          await prefs.setBool('remember_me', true);
+        } else {
+          await prefs.remove('saved_email');
+          await prefs.setBool('remember_me', false);
+        }
+
+        setState(() => _isLoading = false);
+
+        if (mounted) {
+          Get.toNamed(
+            '/onboarding-loading',
+            arguments: {'provider': 'email'},
+          );
+        }
       }
-
-      // Save user info
-      await prefs.setString('user_email', email);
-      await prefs.setString('user_name', _demoCredentials[email]!['name']!);
-      await prefs.setString('user_avatar', _demoCredentials[email]!['avatar']!);
-      await prefs.setBool('is_logged_in', true);
-
+    } catch (e) {
       setState(() => _isLoading = false);
 
-      // Navigate to destination preferences screen
       if (mounted) {
-        Get.offAllNamed('/destination-preferences');
-      }
-    } else {
-      setState(() => _isLoading = false);
+        String message = 'Login failed';
+        if (e.toString().contains('user-not-found')) {
+          message = 'No account found with this email';
+        } else if (e.toString().contains('wrong-password') ||
+            e.toString().contains('invalid-credential')) {
+          message = 'Invalid email or password';
+        } else if (e.toString().contains('too-many-requests')) {
+          message = 'Too many attempts. Please try again later';
+        }
 
-      // Show error message
-      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Invalid email or password'),
+            content: Text(message),
             backgroundColor: Colors.red.shade400,
             behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: 'Show Credentials',
-              textColor: Colors.white,
-              onPressed: _showCredentialsDialog,
-            ),
           ),
         );
       }
     }
   }
 
-  void _showCredentialsDialog() {
+  void _showForgotPasswordDialog() {
+    final resetEmailController = TextEditingController();
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Demo Credentials'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Use any of these credentials to login:',
-                style: TextStyle(fontWeight: FontWeight.w500),
+        title: const Text('Reset Password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+                'Enter your email and we\'ll send you a password reset link.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: resetEmailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: InputDecoration(
+                labelText: 'Email',
+                hintText: 'you@example.com',
+                prefixIcon: const Icon(Icons.email_outlined),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              const SizedBox(height: 16),
-              ..._demoCredentials.entries
-                  .map((entry) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.blue.shade200),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  CircleAvatar(
-                                    backgroundColor: Colors.blue.shade600,
-                                    radius: 16,
-                                    child: Text(
-                                      entry.value['avatar']!,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      entry.value['name']!,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Text('📧 ${entry.key}',
-                                  style: const TextStyle(fontSize: 12)),
-                              Text('🔑 ${entry.value['password']}',
-                                  style: const TextStyle(fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                      ))
-                  ,
-            ],
-          ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final email = resetEmailController.text.trim();
+              if (email.isEmpty || !email.contains('@')) {
+                Get.snackbar('Error', 'Please enter a valid email',
+                    backgroundColor: Colors.red, colorText: Colors.white);
+                return;
+              }
+              try {
+                await _authService.sendPasswordReset(email);
+                Navigator.pop(context);
+                Get.snackbar(
+                  'Email Sent',
+                  'Check your inbox for the password reset link.',
+                  backgroundColor: Colors.green,
+                  colorText: Colors.white,
+                  duration: const Duration(seconds: 4),
+                );
+              } catch (e) {
+                Get.snackbar('Error',
+                    'Could not send reset email. Check the email address.',
+                    backgroundColor: Colors.red, colorText: Colors.white);
+              }
+            },
+            style:
+                ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade600),
+            child: const Text('Send Reset Link',
+                style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -246,24 +202,18 @@ class _LoginScreenState extends State<LoginScreen>
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     // Logo
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        Icons.flight_takeoff,
-                        size: 60,
-                        color: Colors.blue.shade600,
-                      ),
+                    const TriplixLogo(
+                      size: 60,
+                      padding: EdgeInsets.all(20),
+                      backgroundColor: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x33000000),
+                          blurRadius: 20,
+                          offset: Offset(0, 10),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 24),
 
@@ -376,7 +326,7 @@ class _LoginScreenState extends State<LoginScreen>
                                 return null;
                               },
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 16),
 
                             // Remember Me & Forgot Password
                             Row(
@@ -392,8 +342,8 @@ class _LoginScreenState extends State<LoginScreen>
                                 const Text('Remember me'),
                                 const Spacer(),
                                 TextButton(
-                                  onPressed: _showCredentialsDialog,
-                                  child: const Text('Show Credentials'),
+                                  onPressed: _showForgotPasswordDialog,
+                                  child: const Text('Forgot Password?'),
                                 ),
                               ],
                             ),
@@ -430,91 +380,36 @@ class _LoginScreenState extends State<LoginScreen>
                                     ),
                             ),
                             const SizedBox(height: 16),
-
-                            // Demo Info
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.shade50,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.blue.shade200),
-                              ),
-                              child: Column(
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(Icons.info_outline,
-                                          size: 16,
-                                          color: Colors.blue.shade700),
-                                      const SizedBox(width: 8),
-                                      const Expanded(
-                                        child: Text(
-                                          'Demo Mode',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'Tap "Show Credentials" to see demo accounts',
-                                    style: TextStyle(fontSize: 11),
-                                  ),
-                                ],
-                              ),
-                            ),
                           ],
                         ),
                       ),
                     ),
                     const SizedBox(height: 24),
 
-                    // Quick Login Buttons
-                    const Text(
-                      'Quick Login',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.center,
+                    // Sign Up Link
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _QuickLoginButton(
-                          label: 'Demo User',
-                          email: 'demo@triplix.com',
-                          password: 'demo123',
-                          onPressed: (email, password) {
-                            _emailController.text = email;
-                            _passwordController.text = password;
-                            _handleLogin();
-                          },
+                        const Text(
+                          "Don't have an account? ",
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
                         ),
-                        _QuickLoginButton(
-                          label: 'John',
-                          email: 'john@example.com',
-                          password: 'john123',
-                          onPressed: (email, password) {
-                            _emailController.text = email;
-                            _passwordController.text = password;
-                            _handleLogin();
+                        TextButton(
+                          onPressed: () {
+                            Get.toNamed('/signup');
                           },
-                        ),
-                        _QuickLoginButton(
-                          label: 'Sarah',
-                          email: 'sarah@example.com',
-                          password: 'sarah123',
-                          onPressed: (email, password) {
-                            _emailController.text = email;
-                            _passwordController.text = password;
-                            _handleLogin();
-                          },
+                          child: const Text(
+                            'Sign Up',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -524,44 +419,6 @@ class _LoginScreenState extends State<LoginScreen>
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _QuickLoginButton extends StatelessWidget {
-  final String label;
-  final String email;
-  final String password;
-  final Function(String email, String password) onPressed;
-
-  const _QuickLoginButton({
-    required this.label,
-    required this.email,
-    required this.password,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ElevatedButton(
-      onPressed: () => onPressed(email, password),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.white.withValues(alpha: 0.2),
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: const BorderSide(color: Colors.white54),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.person_outline, size: 16),
-          const SizedBox(width: 4),
-          Text(label, style: const TextStyle(fontSize: 12)),
-        ],
       ),
     );
   }

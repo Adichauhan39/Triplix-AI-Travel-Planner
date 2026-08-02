@@ -45,10 +45,12 @@ Thumbs.db
 # API Keys and Environment Variables
 .env
 *.env
+.env1
 .env.local
 .env.production
 .env.development
 7-multi-agent/.env
+legal_ca_agent/.env1
 
 # Temporary and test files
 test_*.py

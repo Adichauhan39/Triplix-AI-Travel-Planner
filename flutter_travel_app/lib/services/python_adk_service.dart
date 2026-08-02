@@ -6,7 +6,7 @@ import '../config/app_config.dart';
 /// Integrates Flutter frontend with Python Google ADK multi-agent system
 class PythonADKService {
   // Python FastAPI backend URL
-  static final String _baseUrl = AppConfig.baseUrl;
+  static const String _baseUrl = AppConfig.baseUrl;
 
   // API endpoints
   static const String _agentEndpoint = '/api/agent';
@@ -510,6 +510,49 @@ class PythonADKService {
     }
   }
 
+  Future<List<Map<String, String>>> getDestinationSuggestions({
+    required String query,
+    int limit = 8,
+    bool preferPlaces = false,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/destination/suggestions').replace(
+        queryParameters: {
+          'query': query,
+          'limit': '$limit',
+          'prefer_places': preferPlaces.toString(),
+        },
+      );
+
+      final response = await http.get(uri, headers: {
+        'Content-Type': 'application/json'
+      }).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        return [];
+      }
+
+      final data = json.decode(response.body);
+      final suggestions = List<Map<String, dynamic>>.from(
+        data['suggestions'] ?? const [],
+      );
+
+      return suggestions
+          .map(
+            (suggestion) => {
+              'city': (suggestion['city'] ?? '').toString(),
+              'country': (suggestion['country'] ?? '').toString(),
+              'description': (suggestion['description'] ?? '').toString(),
+              'famous_for': (suggestion['famous_for'] ?? '').toString(),
+            },
+          )
+          .toList();
+    } catch (e) {
+      print('Destination suggestions error: $e');
+      return [];
+    }
+  }
+
   /// Get AI-generated destination-specific interests and activities
   Future<Map<String, dynamic>> getDestinationInterests({
     required String city,
@@ -570,7 +613,6 @@ class PythonADKService {
 
   /// Get seasonal activities and attractions for a destination
   Future<Map<String, dynamic>> getSeasonalActivities({
-
     required String city,
     String? travelDate,
     int days = 3,

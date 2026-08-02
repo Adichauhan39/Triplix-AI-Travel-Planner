@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
+import '../utils/currency_input_formatter.dart';
 import '../widgets/user_progress_checkpoint.dart';
 import '../providers/user_preferences_provider.dart';
 
@@ -16,6 +18,19 @@ class BudgetPreferencesScreen extends StatefulWidget {
 class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
   bool _isTotalBudget = true;
   final TextEditingController _budgetController = TextEditingController();
+  late String _selectedCurrencyCode;
+  static const List<String> _supportedCurrencyCodes = [
+    'USD',
+    'EUR',
+    'GBP',
+    'INR',
+    'JPY',
+    'CNY',
+    'AUD',
+    'CAD',
+    'SGD',
+    'AED',
+  ];
 
   final Map<String, double> _allocations = {
     'accommodation': 0.0,
@@ -28,21 +43,112 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
 
   final List<Map<String, dynamic>> _budgetCategories = [
     {'id': 'accommodation', 'title': 'Accommodation', 'icon': Icons.hotel},
-    {'id': 'transportation', 'title': 'Transportation', 'icon': Icons.directions_car},
+    {
+      'id': 'transportation',
+      'title': 'Transportation',
+      'icon': Icons.directions_car
+    },
     {'id': 'food', 'title': 'Food & Dining', 'icon': Icons.restaurant},
     {'id': 'activities', 'title': 'Activities', 'icon': Icons.local_activity},
     {'id': 'shopping', 'title': 'Shopping', 'icon': Icons.shopping_bag},
     {'id': 'miscellaneous', 'title': 'Emergency & Misc', 'icon': Icons.warning},
   ];
+  final Map<String, TextEditingController> _allocationAmountControllers = {};
 
-  double get _enteredBudget {
+  double? get _enteredBudget {
     final val = double.tryParse(_budgetController.text.replaceAll(',', ''));
-    return (val != null && val > 0) ? val : 5000;
+    return (val != null && val > 0) ? val : null;
+  }
+
+  /// Re-applies the grouping separators after the currency dropdown changes
+  /// so switching from USD (100,000) to INR (1,00,000) reformats live.
+  void _reformatBudgetForCurrency() {
+    final current = _enteredBudget;
+    if (current == null) return;
+    final formatted =
+        groupedNumberFormat(_selectedCurrencyCode).format(current.round());
+    _budgetController.value = TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+
+  String _defaultCurrencyForLocale(Locale locale) {
+    const countryToCurrency = {
+      'US': 'USD',
+      'CA': 'CAD',
+      'GB': 'GBP',
+      'IE': 'EUR',
+      'FR': 'EUR',
+      'DE': 'EUR',
+      'ES': 'EUR',
+      'IT': 'EUR',
+      'NL': 'EUR',
+      'PT': 'EUR',
+      'IN': 'INR',
+      'JP': 'JPY',
+      'CN': 'CNY',
+      'AU': 'AUD',
+      'NZ': 'NZD',
+      'SG': 'SGD',
+      'AE': 'AED',
+    };
+
+    final countryCode = locale.countryCode?.toUpperCase();
+    if (countryCode != null && countryToCurrency.containsKey(countryCode)) {
+      return countryToCurrency[countryCode]!;
+    }
+
+    try {
+      final format =
+          NumberFormat.simpleCurrency(locale: locale.toLanguageTag());
+      final code = format.currencyName;
+      if (code != null && code.isNotEmpty) {
+        return code.toUpperCase();
+      }
+    } catch (_) {
+      // Fall through to USD.
+    }
+    return 'USD';
+  }
+
+  String _currencySymbol(String code) {
+    try {
+      final format = NumberFormat.simpleCurrency(name: code);
+      if (format.currencySymbol.isNotEmpty) {
+        return format.currencySymbol;
+      }
+    } catch (_) {
+      // Fall through to code.
+    }
+    return code;
+  }
+
+  String _formatBudgetAmount(double amount, {bool includeCode = false}) {
+    final symbol = _currencySymbol(_selectedCurrencyCode);
+    final codeSuffix = includeCode ? ' $_selectedCurrencyCode' : '';
+    final grouped = groupedNumberFormat(_selectedCurrencyCode).format(amount.round());
+    return '$symbol$grouped$codeSuffix';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final locale = WidgetsBinding.instance.platformDispatcher.locale;
+    _selectedCurrencyCode = _defaultCurrencyForLocale(locale);
+    for (final category in _budgetCategories) {
+      final categoryId = category['id'] as String;
+      _allocationAmountControllers[categoryId] =
+          TextEditingController(text: '0');
+    }
   }
 
   @override
   void dispose() {
     _budgetController.dispose();
+    for (final controller in _allocationAmountControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -70,17 +176,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               icon: const Icon(Icons.arrow_back,
                                   color: Colors.white),
                             ),
-                            const Expanded(
-                              child: Text(
-                                '2/4',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
+                            const Spacer(),
                             const SizedBox(width: 48),
                           ],
                         ),
@@ -201,17 +297,33 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               children: [
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 16),
+                                      horizontal: 12),
                                   decoration: BoxDecoration(
                                     color: Colors.grey[100],
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  child: const Text(
-                                    'INR',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.black87,
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<String>(
+                                      value: _selectedCurrencyCode,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                      icon: const Icon(Icons.arrow_drop_down),
+                                      items:
+                                          _supportedCurrencyCodes.map((code) {
+                                        return DropdownMenuItem<String>(
+                                          value: code,
+                                          child: Text(code),
+                                        );
+                                      }).toList(),
+                                      onChanged: (value) {
+                                        if (value == null) return;
+                                        setState(() =>
+                                            _selectedCurrencyCode = value);
+                                        _reformatBudgetForCurrency();
+                                      },
                                     ),
                                   ),
                                 ),
@@ -225,9 +337,17 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                     child: TextField(
                                       controller: _budgetController,
                                       keyboardType: TextInputType.number,
-                                      onChanged: (_) => setState(() {}),
+                                      inputFormatters: [
+                                        CurrencyInputFormatter(
+                                          currencyCode: _selectedCurrencyCode,
+                                        ),
+                                      ],
+                                      onChanged: (_) {
+                                        setState(() {});
+                                        _syncAllocationAmountControllers();
+                                      },
                                       decoration: const InputDecoration(
-                                        hintText: '5,000',
+                                        hintText: 'Enter your budget',
                                         border: InputBorder.none,
                                         contentPadding: EdgeInsets.symmetric(
                                           horizontal: 16,
@@ -255,11 +375,15 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                 children: [
                                   const Text(
                                     'Total Trip Budget',
-                                    style: TextStyle(color: Colors.white, fontSize: 16),
+                                    style: TextStyle(
+                                        color: Colors.white, fontSize: 16),
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    '₹${_enteredBudget.toStringAsFixed(0)} INR',
+                                    _enteredBudget != null
+                                        ? _formatBudgetAmount(_enteredBudget!,
+                                            includeCode: true)
+                                        : 'Not set',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 32,
@@ -284,30 +408,44 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                             // Real-time remaining budget tracker
                             Builder(
                               builder: (context) {
-                                final totalAllocated = _allocations.values.fold<double>(0, (sum, v) => sum + v);
-                                final allocatedAmount = _enteredBudget * totalAllocated;
-                                final remaining = _enteredBudget - allocatedAmount;
+                                final enteredBudget = _enteredBudget ?? 0;
+                                final totalAllocated = _allocations.values
+                                    .fold<double>(0, (sum, v) => sum + v);
+                                final allocatedAmount =
+                                    enteredBudget * totalAllocated;
+                                final remaining =
+                                    enteredBudget - allocatedAmount;
                                 final isNegative = remaining < 0;
                                 return Container(
                                   width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 14, horizontal: 16),
                                   margin: const EdgeInsets.only(bottom: 16),
                                   decoration: BoxDecoration(
-                                    color: isNegative ? Colors.red.shade50 : Colors.green.shade50,
+                                    color: isNegative
+                                        ? Colors.red.shade50
+                                        : Colors.green.shade50,
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
-                                      color: isNegative ? Colors.red.shade300 : Colors.green.shade300,
+                                      color: isNegative
+                                          ? Colors.red.shade300
+                                          : Colors.green.shade300,
                                       width: 1.5,
                                     ),
                                   ),
                                   child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Row(
                                         children: [
                                           Icon(
-                                            isNegative ? Icons.warning_amber_rounded : Icons.account_balance_wallet,
-                                            color: isNegative ? Colors.red : Colors.green.shade700,
+                                            isNegative
+                                                ? Icons.warning_amber_rounded
+                                                : Icons.account_balance_wallet,
+                                            color: isNegative
+                                                ? Colors.red
+                                                : Colors.green.shade700,
                                             size: 20,
                                           ),
                                           const SizedBox(width: 8),
@@ -316,17 +454,21 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                             style: TextStyle(
                                               fontSize: 15,
                                               fontWeight: FontWeight.w600,
-                                              color: isNegative ? Colors.red.shade700 : Colors.green.shade700,
+                                              color: isNegative
+                                                  ? Colors.red.shade700
+                                                  : Colors.green.shade700,
                                             ),
                                           ),
                                         ],
                                       ),
                                       Text(
-                                        '${isNegative ? "-" : ""}₹${remaining.abs().toStringAsFixed(0)}',
+                                        '${isNegative ? "-" : ""}${_formatBudgetAmount(remaining.abs())}',
                                         style: TextStyle(
                                           fontSize: 18,
                                           fontWeight: FontWeight.bold,
-                                          color: isNegative ? Colors.red : Colors.green.shade700,
+                                          color: isNegative
+                                              ? Colors.red
+                                              : Colors.green.shade700,
                                         ),
                                       ),
                                     ],
@@ -335,8 +477,8 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               },
                             ),
 
-                            ..._budgetCategories
-                                .map((category) => _buildBudgetSlider(category)),
+                            ..._budgetCategories.map(
+                                (category) => _buildBudgetSlider(category)),
                             const SizedBox(height: 24),
 
                             // Allocation Summary
@@ -357,10 +499,13 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               ),
                               child: Column(
                                 children: _budgetCategories.map((category) {
-                                  final percentage = _allocations[category['id']]! * 100;
-                                  final amount = _enteredBudget * _allocations[category['id']]!;
+                                  final percentage =
+                                      _allocations[category['id']]! * 100;
+                                  final amount = (_enteredBudget ?? 0) *
+                                      _allocations[category['id']]!;
                                   return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 4),
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 4),
                                     child: Row(
                                       children: [
                                         Icon(category['icon'] as IconData,
@@ -369,11 +514,12 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                         Expanded(
                                           child: Text(
                                             category['title'] as String,
-                                            style: const TextStyle(fontSize: 14),
+                                            style:
+                                                const TextStyle(fontSize: 14),
                                           ),
                                         ),
                                         Text(
-                                          '${percentage.toStringAsFixed(0)}% / ₹${amount.toStringAsFixed(0)}',
+                                          '${percentage.toStringAsFixed(0)}% / ${_formatBudgetAmount(amount)}',
                                           style: const TextStyle(
                                             fontSize: 14,
                                             fontWeight: FontWeight.w600,
@@ -404,8 +550,22 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                       ),
                       child: ElevatedButton(
                         onPressed: () {
-                          final provider = Provider.of<UserPreferencesProvider>(context, listen: false);
-                          provider.updateBudget(_enteredBudget);
+                          final enteredBudget = _enteredBudget;
+                          if (enteredBudget == null) {
+                            Get.snackbar(
+                              'Budget required',
+                              'Please enter a valid budget amount.',
+                              snackPosition: SnackPosition.BOTTOM,
+                            );
+                            return;
+                          }
+                          final provider = Provider.of<UserPreferencesProvider>(
+                              context,
+                              listen: false);
+                          provider.updateBudget(
+                            enteredBudget,
+                            currencyCode: _selectedCurrencyCode,
+                          );
                           Get.toNamed('/transport-preferences');
                         },
                         style: ElevatedButton.styleFrom(
@@ -441,7 +601,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
   Widget _buildBudgetSlider(Map<String, dynamic> category) {
     final categoryId = category['id'] as String;
     final currentValue = _allocations[categoryId]!;
-    final amount = _enteredBudget * currentValue;
+    final amount = (_enteredBudget ?? 0) * currentValue;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -455,7 +615,8 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
         children: [
           Row(
             children: [
-              Icon(category['icon'] as IconData, size: 20, color: AppConfig.primaryColor),
+              Icon(category['icon'] as IconData,
+                  size: 20, color: AppConfig.primaryColor),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -468,7 +629,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                 ),
               ),
               Text(
-                '${(currentValue * 100).toStringAsFixed(0)}% • ₹${amount.toStringAsFixed(0)}',
+                '${(currentValue * 100).toStringAsFixed(0)}% • ${_formatBudgetAmount(amount)}',
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -495,6 +656,49 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
               onChanged: (value) => _updateAllocation(categoryId, value),
             ),
           ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _allocationAmountControllers[categoryId],
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    CurrencyInputFormatter(currencyCode: _selectedCurrencyCode),
+                  ],
+                  onChanged: (value) =>
+                      _updateAllocationFromAmount(categoryId, value),
+                  decoration: InputDecoration(
+                    hintText: 'Enter value directly',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey[300]!),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey[300]!),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _selectedCurrencyCode,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[700],
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -504,5 +708,41 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
     setState(() {
       _allocations[categoryId] = newValue;
     });
+    _syncAllocationAmountControllers();
+  }
+
+  void _syncAllocationAmountControllers({String? skipCategoryId}) {
+    final enteredBudget = _enteredBudget ?? 0;
+    final formatter = groupedNumberFormat(_selectedCurrencyCode);
+    for (final category in _budgetCategories) {
+      final categoryId = category['id'] as String;
+      if (categoryId == skipCategoryId) continue;
+
+      final controller = _allocationAmountControllers[categoryId];
+      if (controller == null) continue;
+
+      final amount = enteredBudget * (_allocations[categoryId] ?? 0);
+      final text = formatter.format(amount.round());
+      if (controller.text != text) {
+        controller.value = controller.value.copyWith(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+      }
+    }
+  }
+
+  void _updateAllocationFromAmount(String categoryId, String rawValue) {
+    final enteredBudget = _enteredBudget ?? 0;
+    final parsed = double.tryParse(rawValue.replaceAll(',', '').trim());
+    if (parsed == null || enteredBudget <= 0) return;
+
+    final clampedAmount = parsed.clamp(0, enteredBudget);
+    final ratio = enteredBudget == 0 ? 0.0 : clampedAmount / enteredBudget;
+
+    setState(() {
+      _allocations[categoryId] = ratio;
+    });
+    _syncAllocationAmountControllers();
   }
 }

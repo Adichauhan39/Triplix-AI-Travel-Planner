@@ -47,17 +47,7 @@ class _TransportPreferencesScreenState
                               icon: const Icon(Icons.arrow_back,
                                   color: Colors.white),
                             ),
-                            const Expanded(
-                              child: Text(
-                                '3/4',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
+                            const Spacer(),
                             const SizedBox(width: 48),
                           ],
                         ),
@@ -91,7 +81,8 @@ class _TransportPreferencesScreenState
                             const SizedBox(height: 8),
                             Icon(Icons.smart_toy_outlined,
                                 size: 48,
-                                color: AppConfig.primaryColor.withValues(alpha: 0.7)),
+                                color: AppConfig.primaryColor
+                                    .withValues(alpha: 0.7)),
                             const SizedBox(height: 16),
                             const Text(
                               'Tell our AI your transport preferences',
@@ -204,8 +195,11 @@ class _TransportPreferencesScreenState
                           // Save the text as transport preferences
                           final text = _transportController.text.trim();
                           if (text.isNotEmpty) {
-                            provider.updateTransport(
-                                text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList());
+                            provider.updateTransport(text
+                                .split(',')
+                                .map((e) => e.trim())
+                                .where((e) => e.isNotEmpty)
+                                .toList());
                           }
                           Get.toNamed('/additional-context');
                         },

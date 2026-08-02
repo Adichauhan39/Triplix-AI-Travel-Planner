@@ -46,7 +46,7 @@ gcloud run deploy $ServiceName `
     --source . `
     --region $Region `
     --allow-unauthenticated `
-    --set-env-vars "GOOGLE_API_KEY=$env:GOOGLE_API_KEY,GOOGLE_PLACES_API_KEY=$env:GOOGLE_PLACES_API_KEY,OPENWEATHER_API_KEY=$env:OPENWEATHER_API_KEY" `
+    --update-env-vars "GOOGLE_API_KEY=$env:GOOGLE_API_KEY,GOOGLE_PLACES_API_KEY=$env:GOOGLE_PLACES_API_KEY,OPENWEATHER_API_KEY=$env:OPENWEATHER_API_KEY" `
     --memory 1Gi `
     --cpu 1 `
     --timeout 300 `

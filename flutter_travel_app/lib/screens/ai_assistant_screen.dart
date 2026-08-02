@@ -428,10 +428,9 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   }
 
   Widget _buildAnalysisResults() {
-    return Scrollbar(
-      controller: _scrollController,
-      child: SingleChildScrollView(
+    return SingleChildScrollView(
         controller: _scrollController,
+        scrollDirection: Axis.vertical,
         padding: const EdgeInsets.all(AppConfig.paddingMedium),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -503,7 +502,6 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
             const SizedBox(height: 24),
           ],
         ),
-      ),
     );
   }
 

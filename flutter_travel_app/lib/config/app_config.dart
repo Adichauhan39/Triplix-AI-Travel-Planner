@@ -2,9 +2,20 @@ import 'package:flutter/material.dart';
 
 class AppConfig {
   // API Configuration
-  static const String baseUrl =
-      'https://triplix-server-1026563611026.us-central1.run.app'; // Cloud Run deployed server
+  // Default points to local backend on port 8001 for development.
+  // Override for production builds with:
+  //   --dart-define=API_BASE_URL=https://triplix-server-lzmvxvmz5q-uc.a.run.app
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:8001',
+  );
   static const String apiVersion = 'v1';
+
+  // Captcha Configuration
+  static const String recaptchaSiteKey = String.fromEnvironment(
+    'RECAPTCHA_SITE_KEY',
+    defaultValue: '',
+  );
 
   // Gemini API Key
   static const String geminiApiKey = 'AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo';
@@ -22,13 +33,13 @@ class AppConfig {
   static const String appVersion = '1.0.0';
 
   // Colors - Exact EaseMyTrip color scheme
-  static const Color primaryColor = Color(0xFF1e3a8a); // Deep Blue
+  static const Color primaryColor = Color.fromARGB(255, 181, 181, 183); // Deep Blue
   static const Color secondaryColor = Color(0xFFdc2626); // Red
   static const Color accentColor = Color(0xFFea580c); // Orange
   static const Color backgroundColor =
       Color(0xFFF8FAFC); // Light gray background
   static const Color cardColor = Colors.white;
-  static const Color surfaceColor = Color(0xFFFFFFFF);
+  static const Color surfaceColor = Color.fromARGB(255, 176, 142, 142);
   static const Color textPrimary = Color(0xFF1e293b); // Dark slate
   static const Color textSecondary = Color(0xFF64748b); // Medium gray
   static const Color textTertiary = Color(0xFF94a3b8); // Light gray

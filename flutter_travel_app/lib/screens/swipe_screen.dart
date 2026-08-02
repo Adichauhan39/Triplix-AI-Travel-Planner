@@ -110,11 +110,11 @@ class _SwipeScreenState extends State<SwipeScreen> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
+        title: const Row(
           children: [
             Icon(Icons.favorite, color: AppConfig.primaryColor),
-            const SizedBox(width: 8),
-            const Expanded(
+            SizedBox(width: 8),
+            Expanded(
               child: Text('You liked 2 options!',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             ),

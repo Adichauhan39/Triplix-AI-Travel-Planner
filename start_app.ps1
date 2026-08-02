@@ -1,11 +1,11 @@
 # Travel App Startup Script
 # This script starts both the Python backend and Flutter frontend
 
-Write-Host "🚀 Starting Travel App..." -ForegroundColor Green
+Write-Host " Starting Travel App..." -ForegroundColor Green
 Write-Host ""
 
 # Start Python Backend in a new window
-Write-Host "📦 Starting Python ADK Backend on port 8000..." -ForegroundColor Cyan
+Write-Host " Starting Python ADK Backend on port 8000..." -ForegroundColor Cyan
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd 'c:\Hack2skill\Hack2skill finale\7-multi-agent'; python -m uvicorn api_server:app --reload --host 127.0.0.1 --port 8000"
 
 # Wait a bit for backend to start

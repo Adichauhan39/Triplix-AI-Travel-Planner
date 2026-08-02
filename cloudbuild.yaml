@@ -38,7 +38,7 @@ steps:
       - '1'
       - '--timeout'
       - '300'
-      - '--set-env-vars'
+      - '--update-env-vars'
       - 'MONGODB_DB=triplix'
 
 images:

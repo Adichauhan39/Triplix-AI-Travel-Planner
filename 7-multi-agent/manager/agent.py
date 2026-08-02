@@ -1,3 +1,43 @@
+"""
+Triplix Multi-Agent Architecture (High-Level)
+
+      User (Flutter App)
+                |
+                | HTTPS JSON (message + context)
+                v
+      FastAPI Server (ultra_simple_server.py)
+          |                         |
+          | /api/agent              | /api/manager
+          | (chat + routing)        | (itinerary orchestration)
+          v                         v
+      Gemini 2.5 Flash <----- Manager Agent (this file)
+                                                    |
+                                                    | Delegates to sub-agents
+                                                    v
+            +----------------+----------------+------------------+
+            |                |                |                  |
+    hotel_booking   travel_booking   destination_info   budget_tracker
+            |                |                |                  |
+            +----------------+----------------+------------------+
+                                                    |
+                                     swipe_recommendation_agent
+                                                    |
+                                           itinerary_agent
+                                                    |
+                                     web_hotel_search / checkpoint_analyzer
+
+      Tools available to manager:
+         - get_current_time
+         - get_hotel_location_and_images
+         - get_hotel_images_by_search
+
+      Data / External Services:
+         - CSV datasets
+         - MongoDB (optional)
+         - Google Places / Maps APIs
+         - Weather APIs
+"""
+
 from google.adk.agents import Agent
 from google.adk.tools.agent_tool import AgentTool
 
@@ -15,7 +55,7 @@ root_agent = Agent(
 
     name="manager",
     model="gemini-2.5-flash",
-    description="Comprehensive travel booking manager for Indian destinations",
+    description="Comprehensive travel booking manager for end-to-end trip planning, including transport, accommodation, attractions, budget tracking, and itinerary management",
     instruction=""" 
 
     You are an expert travel booking manager that handles complete end-to-end travel planning for users across different app pages.
