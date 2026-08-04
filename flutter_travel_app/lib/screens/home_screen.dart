@@ -22,6 +22,10 @@ import 'route_map_screen.dart';
 import 'trip_reel_screen.dart';
 import 'trip_itinerary_screen.dart';
 import 'account_screen.dart';
+import 'search_hotels_screen.dart';
+import 'search_flights_screen.dart';
+import 'destination_preferences_screen.dart';
+import 'transport_preferences_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -1623,6 +1627,66 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                 ),
               ),
 
+              // Quick Access Sections: Hotels / Destination / Travel Mode
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: Column(
+                  children: [
+                    _buildQuickAccessRow(
+                      icon: Icons.hotel,
+                      title: 'Hotels',
+                      subtitle: 'Find and book stays',
+                      color: AppConfig.successColor,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SearchHotelsScreen(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildQuickAccessRow(
+                      icon: Icons.flight,
+                      title: 'Flights',
+                      subtitle: 'Search and book flights',
+                      color: Colors.blue,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SearchFlightsScreen(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildQuickAccessRow(
+                      icon: Icons.place,
+                      title: 'Destination',
+                      subtitle: 'Choose where to go',
+                      color: AppConfig.primaryColor,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const DestinationPreferencesScreen(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildQuickAccessRow(
+                      icon: Icons.directions_transit,
+                      title: 'Travel Mode',
+                      subtitle: 'Flight, train, bus or cab',
+                      color: AppConfig.warningColor,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const TransportPreferencesScreen(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
               // Chat Messages
               Expanded(
                 child: Container(
@@ -1714,6 +1778,74 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                   ],
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickAccessRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: AppConfig.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppConfig.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: Colors.grey[400]),
             ],
           ),
         ),

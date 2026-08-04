@@ -1,7 +1,6 @@
 param(
     [int]$Port = 8004,
-    [switch]$Detached,
-    [switch]$NoBrowser
+    [switch]$Detached
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,18 +57,12 @@ if ($selectedPort -ne $Port) {
     Write-Host "Port $Port is busy. Switching to $selectedPort."
 }
 
- $localUrl = "http://localhost:$selectedPort"
-
 Write-Host "Starting ADK web on port $selectedPort..."
-Write-Host "Open: $localUrl"
-Write-Host "If ADK logs 0.0.0.0, still use: $localUrl"
+Write-Host "Open: http://localhost:$selectedPort"
 
 if ($Detached) {
     $proc = Start-Process -FilePath $venvAdk -ArgumentList @('web', $projectRoot, '--port', $selectedPort) -PassThru
     Write-Host "ADK started in background (PID: $($proc.Id))."
-    if (-not $NoBrowser) {
-        Start-Process $localUrl
-    }
 } else {
     & $venvAdk web $projectRoot --port $selectedPort
 }

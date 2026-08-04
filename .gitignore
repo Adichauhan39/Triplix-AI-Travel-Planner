@@ -52,6 +52,11 @@ Thumbs.db
 7-multi-agent/.env
 legal_ca_agent/.env1
 
+# Native platform secrets (Google Maps API key injected at build time)
+flutter_travel_app/android/secrets.properties
+flutter_travel_app/ios/Flutter/Secrets.xcconfig
+flutter_travel_app/web/env.js
+
 # Temporary and test files
 test_*.py
 test_*.html

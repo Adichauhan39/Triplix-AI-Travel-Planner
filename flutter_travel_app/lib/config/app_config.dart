@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppConfig {
   // API Configuration
@@ -17,8 +18,39 @@ class AppConfig {
     defaultValue: '',
   );
 
-  // Gemini API Key
-  static const String geminiApiKey = 'AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo';
+  // Google Maps / Places API key. Read from .env at runtime (see
+  // GOOGLE_MAPS_API_KEY in .env.example); falls back to a --dart-define of
+  // the same name for CI/build environments without a bundled .env file.
+  static String get googleMapsApiKey {
+    if (dotenv.isInitialized) {
+      final fromEnv = dotenv.env['GOOGLE_MAPS_API_KEY'];
+      if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    }
+    return const String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+  }
+
+  // Booking.com affiliate "aid" param for redirect links (see
+  // services/affiliate_links.dart). Empty until you sign up for the
+  // Booking.com Affiliate Partner Program — redirects work with no aid,
+  // they just won't be credited to an account until this is set.
+  static String get bookingComAffiliateId {
+    if (dotenv.isInitialized) {
+      final fromEnv = dotenv.env['BOOKING_AFFILIATE_ID'];
+      if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    }
+    return const String.fromEnvironment('BOOKING_AFFILIATE_ID');
+  }
+
+  // TravelPayouts publisher "marker" ID for redirect links (see
+  // services/affiliate_links.dart). This is your TravelPayouts account ID —
+  // shown as "ID" in the account sidebar.
+  static String get travelpayoutsMarkerId {
+    if (dotenv.isInitialized) {
+      final fromEnv = dotenv.env['TRAVELPAYOUTS_MARKER_ID'];
+      if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    }
+    return const String.fromEnvironment('TRAVELPAYOUTS_MARKER_ID');
+  }
 
   // API Endpoints
   static const String chatEndpoint = '/chat';
@@ -29,7 +61,7 @@ class AppConfig {
   static const String budgetEndpoint = '/budget';
 
   // App Configuration
-  static const String appName = 'AI Travel Booking';
+  static const String appName = 'Triplix - India\'s AI Travel Assistant';
   static const String appVersion = '1.0.0';
 
   // Colors - Exact EaseMyTrip color scheme

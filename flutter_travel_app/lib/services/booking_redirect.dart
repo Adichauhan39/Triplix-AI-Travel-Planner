@@ -22,10 +22,14 @@ import 'package:url_launcher/url_launcher.dart';
 class AffiliateConfig {
   AffiliateConfig._();
 
-  /// Booking.com affiliate id ("aid"). Apply at:
-  /// https://www.booking.com/affiliate-program/v2/index.html
-  /// Leave empty until approved.
-  static const String bookingAid = '';
+  /// TravelPayouts publisher "marker" id — the single account behind both
+  /// flights and hotels on Aviasales. Apply at https://www.travelpayouts.com/
+  ///
+  /// Currently UNUSED: hotel links go through a TravelPayouts short link that
+  /// already carries attribution. Only needed if you swap the short link for a
+  /// full aviasales.com URL with query params. Keep in sync with
+  /// TRAVELPAYOUTS_MARKER_ID in .env, which services/affiliate_links.dart reads.
+  static const String travelpayoutsMarker = '';
 
   /// A tracking sub-id / label sent where a partner supports it, so your
   /// affiliate dashboard shows that a click came from the Triplix app.
@@ -88,11 +92,11 @@ class BookingRedirect {
   }
 
   /// Human label for the partner an item will open on — use it for button text
-  /// like "Book on Booking.com →".
+  /// like "Book on Aviasales →".
   static String partnerLabelFor(Map<String, dynamic> item) {
     switch (categoryOf(item)) {
       case BookingCategory.hotel:
-        return 'Booking.com';
+        return 'Aviasales';
       case BookingCategory.flight:
       case BookingCategory.train:
       case BookingCategory.bus:
@@ -112,7 +116,7 @@ class BookingRedirect {
     late Uri raw;
     switch (category) {
       case BookingCategory.hotel:
-        raw = _bookingHotelUrl(name: name, city: city);
+        raw = _aviasalesHotelUrl(name: name, city: city);
         break;
       case BookingCategory.flight:
         raw = _easeMyTripUrl(section: 'flights', query: '$name $city'.trim());
@@ -157,13 +161,16 @@ class BookingRedirect {
   // exact affiliate param names against your approved dashboard and tweak here
   // if a partner requires a specific format — this is the only place to change.
 
-  static Uri _bookingHotelUrl({required String name, required String city}) {
-    final ss = [name, city].where((s) => s.isNotEmpty).join(' ');
-    return Uri.https('www.booking.com', '/searchresults.html', {
-      'ss': ss.isEmpty ? 'India' : ss,
-      if (AffiliateConfig.bookingAid.isNotEmpty) 'aid': AffiliateConfig.bookingAid,
-      'label': AffiliateConfig.subId,
-    });
+  /// Aviasales hotels, via the TravelPayouts short link from the dashboard —
+  /// attribution is already baked into the link, so nothing is appended.
+  /// Aviasales forwards on to Booking.com itself with its own aid; that hop
+  /// is Aviasales' business, not ours.
+  ///
+  /// The short link is a fixed destination, so [name]/[city] can't be carried
+  /// through — the user searches again on Aviasales. Kept in the signature so
+  /// this can go back to a query-bearing URL without touching callers.
+  static Uri _aviasalesHotelUrl({required String name, required String city}) {
+    return Uri.parse('https://aviasales.tpo.li/ntQoEoPm');
   }
 
   /// EaseMyTrip covers flights / hotels / railways / bus under one affiliate

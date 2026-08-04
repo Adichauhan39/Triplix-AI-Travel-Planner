@@ -15,6 +15,7 @@ import '../widgets/user_progress_checkpoint.dart';
 /// Single-page onboarding wizard that merges the four preference screens
 /// (destination, budget, transport, additional context) into a stepper
 /// flow with shared Back/Next navigation.
+
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -44,6 +45,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _showOriginSuggestions = false;
   Timer? _originDebounce;
   String _lastOriginQuery = '';
+  final LayerLink _originLayerLink = LayerLink();
+  final GlobalKey _originFieldKey = GlobalKey();
+  OverlayEntry? _originOverlayEntry;
 
   final TextEditingController _destTopController = TextEditingController();
   final FocusNode _destTopFocusNode = FocusNode();
@@ -51,6 +55,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _showDestTopSuggestions = false;
   Timer? _destTopDebounce;
   String _lastDestTopQuery = '';
+  final LayerLink _destTopLayerLink = LayerLink();
+  final GlobalKey _destTopFieldKey = GlobalKey();
+  OverlayEntry? _destTopOverlayEntry;
 
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -59,6 +66,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final Map<String, List<Map<String, String>>> _citySuggestionCache = {};
 
   List<Map<String, dynamic>> _aiCategories = [];
+  // Activity keyword -> real photo URL, fetched separately/lazily after
+  // _aiCategories loads (see _loadActivityImages). Chips render as text
+  // immediately and swap in an image once its fetch completes.
+  Map<String, String> _activityImages = {};
   List<Map<String, String>> _filteredSuggestions = [];
   final Set<String> _selectedActivities = {};
   Timer? _suggestionDebounce;
@@ -96,29 +107,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     'AED',
   ];
 
-  final Map<String, double> _allocations = {
-    'accommodation': 0.0,
-    'transportation': 0.0,
-    'food': 0.0,
-    'activities': 0.0,
-    'shopping': 0.0,
-    'miscellaneous': 0.0,
-  };
-
-  final List<Map<String, dynamic>> _budgetCategories = [
-    {'id': 'accommodation', 'title': 'Accommodation', 'icon': Icons.hotel},
-    {
-      'id': 'transportation',
-      'title': 'Transportation',
-      'icon': Icons.directions_car
-    },
-    {'id': 'food', 'title': 'Food & Dining', 'icon': Icons.restaurant},
-    {'id': 'activities', 'title': 'Activities', 'icon': Icons.local_activity},
-    {'id': 'shopping', 'title': 'Shopping', 'icon': Icons.shopping_bag},
-    {'id': 'miscellaneous', 'title': 'Emergency & Misc', 'icon': Icons.warning},
-  ];
-  final Map<String, TextEditingController> _allocationAmountControllers = {};
-
   double? get _enteredBudget {
     final val = double.tryParse(_budgetController.text.replaceAll(',', ''));
     return (val != null && val > 0) ? val : null;
@@ -137,6 +125,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  // Maps the device locale to a currency code: checks a hardcoded
+  // country->currency table first, then falls back to intl's own
+  // locale-to-currency resolution, then USD if both fail.
   String _defaultCurrencyForLocale(Locale locale) {
     const countryToCurrency = {
       'US': 'USD',
@@ -177,6 +168,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return 'USD';
   }
 
+  // Resolves a currency code (e.g. "INR") to its display symbol (e.g. "₹"),
+  // falling back to the raw code if intl doesn't recognize it.
   String _currencySymbol(String code) {
     try {
       final format = NumberFormat.simpleCurrency(name: code);
@@ -189,6 +182,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return code;
   }
 
+  // Formats an amount with the selected currency's symbol and locale-correct
+  // thousand grouping (e.g. INR groups as 1,00,000 rather than 100,000).
   String _formatBudgetAmount(double amount, {bool includeCode = false}) {
     final symbol = _currencySymbol(_selectedCurrencyCode);
     final codeSuffix = includeCode ? ' $_selectedCurrencyCode' : '';
@@ -215,6 +210,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     'Nagpur, India',
   ];
 
+  // Combines two suggestion lists (e.g. Places API + ADK service results),
+  // de-duplicating by formatted label so the same city from different
+  // sources doesn't appear twice, and caps the result at 8 entries.
   List<Map<String, String>> _mergeUniqueSuggestions(
     List<Map<String, String>> first,
     List<Map<String, String>> second,
@@ -241,6 +239,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return merged.take(8).toList();
   }
 
+  // Looks for the longest previously-cached query that is a prefix of the
+  // current one (e.g. cached "lon" can serve "lond"), so typing further
+  // characters gets an instant filtered result while the network call for
+  // the exact query is still in flight.
   List<Map<String, String>> _getPrefixCachedSuggestions(String qLower) {
     String? bestKey;
     for (final key in _citySuggestionCache.keys) {
@@ -265,6 +267,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return filtered.take(8).toList();
   }
 
+  // Synchronous match against the small hardcoded city list, used as an
+  // instant preview while the network autocomplete round-trip is in flight.
+  List<Map<String, String>> _quickLocalMatches(String qLower) {
+    return _localCityFallback
+        .where((city) => city.toLowerCase().contains(qLower))
+        .take(8)
+        .map((city) {
+      final parts = city.split(',').map((p) => p.trim()).toList();
+      final cityName = parts.isNotEmpty ? parts.first : city;
+      final country = parts.length > 1 ? parts.sublist(1).join(', ') : '';
+      return {
+        'city': cityName,
+        'country': country,
+        'description': city,
+      };
+    }).toList();
+  }
+
+  // Cascading city-lookup strategy, cheapest/fastest source first:
+  // 1) exact-query cache, 2) Google Places autocomplete (700ms timeout),
+  // 3) ADK destination service (700ms timeout) merged with any Places
+  // results, 4) hardcoded local city list as a last resort. Each step's
+  // result is cached so repeat keystrokes skip straight to step 1.
   Future<List<Map<String, String>>> _getFastCitySuggestions(
       String query) async {
     final q = query.trim();
@@ -293,19 +318,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       return merged;
     }
 
-    final local = _localCityFallback
-        .where((city) => city.toLowerCase().contains(qLower))
-        .take(8)
-        .map((city) {
-      final parts = city.split(',').map((p) => p.trim()).toList();
-      final cityName = parts.isNotEmpty ? parts.first : city;
-      final country = parts.length > 1 ? parts.sublist(1).join(', ') : '';
-      return {
-        'city': cityName,
-        'country': country,
-        'description': city,
-      };
-    }).toList();
+    final local = _quickLocalMatches(qLower);
 
     _citySuggestionCache[qLower] = local;
     return local;
@@ -382,11 +395,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     _selectedCurrencyCode = 'INR';
-    for (final category in _budgetCategories) {
-      final categoryId = category['id'] as String;
-      _allocationAmountControllers[categoryId] =
-          TextEditingController(text: '0');
-    }
   }
 
   @override
@@ -413,6 +421,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _suggestionDebounce?.cancel();
     _originDebounce?.cancel();
     _destTopDebounce?.cancel();
+    _originOverlayEntry?.remove();
+    _destTopOverlayEntry?.remove();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _originController.dispose();
@@ -420,9 +430,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _destTopController.dispose();
     _destTopFocusNode.dispose();
     _budgetController.dispose();
-    for (final controller in _allocationAmountControllers.values) {
-      controller.dispose();
-    }
     _transportController.dispose();
     _aiContextController.dispose();
     super.dispose();
@@ -467,6 +474,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool get _allComplete =>
       _isSectionComplete(0) && _isSectionComplete(1) && _isSectionComplete(2);
 
+  // Persists every field collected across all four steps into
+  // UserPreferencesProvider in one shot, then navigates to /home.
   void _completeOnboarding() {
     final provider =
         Provider.of<UserPreferencesProvider>(context, listen: false);
@@ -522,6 +531,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // ---------------------------------------------------------------------------
   // Step 1 logic – destination autocomplete & interests
   // ---------------------------------------------------------------------------
+  // Debounced entry point for the Step-1 city search bar: skips the network
+  // round-trip for very short or repeated queries, otherwise waits 450ms of
+  // idle typing before calling _loadSuggestions.
   void _updateSuggestions(String query) {
     final normalized = query.trim().toLowerCase();
     if (normalized.length < 2) {
@@ -569,6 +581,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     });
   }
 
+  // User tapped a Step-1 search suggestion: fills the field, closes the
+  // dropdown, and immediately kicks off interest-category loading for it.
   Future<void> _selectSuggestion(Map<String, String> suggestion) async {
     final city = suggestion['city'] ?? '';
     final country = suggestion['country'] ?? '';
@@ -593,6 +607,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await _fetchCityInterests();
   }
 
+  // Resolves the typed city into a concrete place and loads its AI-suggested
+  // interest categories. Flow: if the query has no explicit region ("Paris"
+  // vs "Paris, TX"), first check for same-name matches across regions and
+  // ask the user to confirm via dialog if there are several; then run a
+  // second ADK disambiguation pass (catches cases the region-matching
+  // step misses) and ask again if that also comes back ambiguous. Falls
+  // back to a hardcoded category list if the ADK interest call fails.
   Future<void> _fetchCityInterests() async {
     final city = _searchController.text.trim();
     if (city.isEmpty) return;
@@ -603,6 +624,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _filteredSuggestions = [];
       _isLoadingDest = true;
       _aiCategories = [];
+      _activityImages = {};
       _selectedActivities.clear();
     });
 
@@ -666,6 +688,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           _loadedCity = resolvedCity;
           _isLoadingDest = false;
         });
+        _loadActivityImages(resolvedCity);
       } else {
         if (mounted) {
           setState(() {
@@ -673,6 +696,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             _loadedCity = resolvedCity;
             _isLoadingDest = false;
           });
+          _loadActivityImages(resolvedCity);
         }
       }
     } catch (_) {
@@ -682,10 +706,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           _loadedCity = city;
           _isLoadingDest = false;
         });
+        _loadActivityImages(city);
       }
     }
   }
 
+  /// Fetches a real photo for every activity keyword across all currently
+  /// loaded categories, in one batched backend call. Fire-and-forget: chips
+  /// already render as text immediately, images fade in as they arrive.
+  Future<void> _loadActivityImages(String city) async {
+    final activities = _aiCategories
+        .expand((category) => List<String>.from(category['activities'] ?? []))
+        .toSet()
+        .toList();
+    if (activities.isEmpty) return;
+
+    final images =
+        await _adkService.getActivityImages(city: city, activities: activities);
+    if (!mounted || images.isEmpty) return;
+    setState(() => _activityImages = {..._activityImages, ...images});
+  }
+
+  // Generic interest categories shown when the ADK service can't return
+  // city-specific ones (offline, error, or empty response).
   List<Map<String, dynamic>> _fallbackInterestCategories(String city) {
     final cleanedCity = city.split(',').first.trim();
     return [
@@ -738,6 +781,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ];
   }
 
+  // Builds the human-readable "City, Region/Country" label shown in
+  // suggestion lists, preferring the API-provided description when it
+  // already contains the city name to avoid duplicating it (e.g. avoids
+  // "Paris, Paris, France").
   String _formatLocationLabel({
     required String city,
     required String country,
@@ -767,6 +814,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return trimmedCity;
   }
 
+  // Pulls the state/region segment out of a "City, State, Country"
+  // description for the small badge shown in the confirmation dialog.
   String _extractStateOrRegion(String description) {
     final trimmed = description.trim();
     if (trimmed.isEmpty) return '';
@@ -782,6 +831,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return trimmed;
   }
 
+  // First-pass disambiguation: shown when the typed city name matches
+  // several same-named places (from the region-matching lookup in
+  // _fetchCityInterests). Returns the picked location label, or null if
+  // cancelled.
   Future<String?> _showCityConfirmationDialog(
     String query,
     List<Map<String, String>> options,
@@ -934,6 +987,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  // Second-pass disambiguation: shown when the ADK service's own
+  // disambiguateCity call reports ambiguity that the first pass didn't
+  // catch. Returns the picked place name, or null if cancelled.
   Future<String?> _showDisambiguationDialog(
       String query, List<Map<String, dynamic>> options) {
     return showDialog<String>(
@@ -1079,48 +1135,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // ---------------------------------------------------------------------------
   // Step 2 logic – budget allocation
   // ---------------------------------------------------------------------------
-  void _updateAllocation(String categoryId, double newValue) {
-    setState(() {
-      _allocations[categoryId] = newValue;
-    });
-    _syncAllocationAmountControllers();
-  }
-
-  void _syncAllocationAmountControllers({String? skipCategoryId}) {
-    final enteredBudget = _enteredBudget ?? 0;
-    final formatter = groupedNumberFormat(_selectedCurrencyCode);
-    for (final category in _budgetCategories) {
-      final categoryId = category['id'] as String;
-      if (categoryId == skipCategoryId) continue;
-
-      final controller = _allocationAmountControllers[categoryId];
-      if (controller == null) continue;
-
-      final amount = enteredBudget * (_allocations[categoryId] ?? 0);
-      final text = formatter.format(amount.round());
-      if (controller.text != text) {
-        controller.value = controller.value.copyWith(
-          text: text,
-          selection: TextSelection.collapsed(offset: text.length),
-        );
-      }
-    }
-  }
-
-  void _updateAllocationFromAmount(String categoryId, String rawValue) {
-    final enteredBudget = _enteredBudget ?? 0;
-    final parsed = double.tryParse(rawValue.replaceAll(',', '').trim());
-    if (parsed == null || enteredBudget <= 0) return;
-
-    final clampedAmount = parsed.clamp(0, enteredBudget);
-    final ratio = enteredBudget == 0 ? 0.0 : clampedAmount / enteredBudget;
-
-    setState(() {
-      _allocations[categoryId] = ratio;
-    });
-    _syncAllocationAmountControllers();
-  }
-
   DateTime get _tripFirstAllowedDate {
     final now = DateTime.now();
     return DateTime(now.year, now.month, now.day);
@@ -1128,6 +1142,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   DateTime get _tripLastAllowedDate => DateTime(DateTime.now().year + 3);
 
+  // Opens the range picker, clamping any previously-saved dates back into
+  // the allowed [today, +3 years] window in case they've since gone stale
+  // (e.g. a saved start date that's now in the past).
   Future<void> _pickTripDates() async {
     final firstDate = _tripFirstAllowedDate;
     final lastDate = _tripLastAllowedDate;
@@ -1150,7 +1167,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme.light(
-              primary: AppConfig.primaryColor,
+              primary: Color.fromARGB(255, 13, 13, 130),
             ),
           ),
           child: child!,
@@ -1172,6 +1189,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // -----------------------------------------------------------------
   // Origin (FROM) autocomplete
   // -----------------------------------------------------------------
+  // Shorter 120ms debounce than the Step-1 search bar since this field
+  // shows instant cached/local matches immediately (see
+  // _loadOriginSuggestions) while the network call is still pending.
   void _updateOriginSuggestions(String query) {
     final normalized = query.trim().toLowerCase();
     if (normalized.length < 2) {
@@ -1181,6 +1201,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _originSuggestions = [];
         _showOriginSuggestions = false;
       });
+      _syncOriginOverlay();
       return;
     }
     if (normalized == _lastOriginQuery &&
@@ -1202,17 +1223,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _originSuggestions = [];
         _showOriginSuggestions = false;
       });
+      _syncOriginOverlay();
       return;
     }
 
     _lastOriginQuery = q;
 
-    final prefixCached = _getPrefixCachedSuggestions(q);
-    if (prefixCached.isNotEmpty) {
+    // Show a best-effort instant result (cache/local) first, then replace
+    // it once the slower network-backed lookup resolves.
+    final instant = _getPrefixCachedSuggestions(q);
+    final immediate = instant.isNotEmpty ? instant : _quickLocalMatches(q);
+    if (immediate.isNotEmpty) {
       setState(() {
-        _originSuggestions = prefixCached;
+        _originSuggestions = immediate;
         _showOriginSuggestions = true;
       });
+      _syncOriginOverlay();
     }
 
     final suggestions = await _getFastCitySuggestions(query);
@@ -1223,6 +1249,50 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _originSuggestions = suggestions;
       _showOriginSuggestions = suggestions.isNotEmpty;
     });
+    _syncOriginOverlay();
+  }
+
+  // Positions/refreshes the floating suggestion list for the FROM field in
+  // the root Overlay so it always paints above sibling cards below it —
+  // a Positioned overlay scoped to the card's own Stack got painted over by
+  // the next accordion section as soon as it overflowed the card's bounds.
+  void _syncOriginOverlay() {
+    final shouldShow = _showOriginSuggestions && _originSuggestions.isNotEmpty;
+    if (!shouldShow) {
+      _originOverlayEntry?.remove();
+      _originOverlayEntry = null;
+      return;
+    }
+
+    if (_originOverlayEntry != null) {
+      _originOverlayEntry!.markNeedsBuild();
+      return;
+    }
+
+    final renderBox =
+        _originFieldKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return;
+    final fieldSize = renderBox.size;
+
+    _originOverlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        width: fieldSize.width,
+        child: CompositedTransformFollower(
+          link: _originLayerLink,
+          showWhenUnlinked: false,
+          offset: Offset(0, fieldSize.height + 4),
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(10),
+            child: _buildTopSuggestionList(
+              _originSuggestions,
+              _selectOriginSuggestion,
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_originOverlayEntry!);
   }
 
   void _selectOriginSuggestion(Map<String, String> suggestion) {
@@ -1244,6 +1314,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _originSuggestions = [];
       _lastOriginQuery = '';
     });
+    _syncOriginOverlay();
 
     Provider.of<UserPreferencesProvider>(context, listen: false)
         .updateOrigin(formatted);
@@ -1263,6 +1334,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _destTopSuggestions = [];
         _showDestTopSuggestions = false;
       });
+      _syncDestTopOverlay();
       return;
     }
     if (normalized == _lastDestTopQuery &&
@@ -1284,17 +1356,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _destTopSuggestions = [];
         _showDestTopSuggestions = false;
       });
+      _syncDestTopOverlay();
       return;
     }
 
     _lastDestTopQuery = q;
 
-    final prefixCached = _getPrefixCachedSuggestions(q);
-    if (prefixCached.isNotEmpty) {
+    final instant = _getPrefixCachedSuggestions(q);
+    final immediate = instant.isNotEmpty ? instant : _quickLocalMatches(q);
+    if (immediate.isNotEmpty) {
       setState(() {
-        _destTopSuggestions = prefixCached;
+        _destTopSuggestions = immediate;
         _showDestTopSuggestions = true;
       });
+      _syncDestTopOverlay();
     }
 
     final suggestions = await _getFastCitySuggestions(query);
@@ -1305,6 +1380,48 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _destTopSuggestions = suggestions;
       _showDestTopSuggestions = suggestions.isNotEmpty;
     });
+    _syncDestTopOverlay();
+  }
+
+  // Mirrors _syncOriginOverlay for the TO field.
+  void _syncDestTopOverlay() {
+    final shouldShow =
+        _showDestTopSuggestions && _destTopSuggestions.isNotEmpty;
+    if (!shouldShow) {
+      _destTopOverlayEntry?.remove();
+      _destTopOverlayEntry = null;
+      return;
+    }
+
+    if (_destTopOverlayEntry != null) {
+      _destTopOverlayEntry!.markNeedsBuild();
+      return;
+    }
+
+    final renderBox =
+        _destTopFieldKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return;
+    final fieldSize = renderBox.size;
+
+    _destTopOverlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        width: fieldSize.width,
+        child: CompositedTransformFollower(
+          link: _destTopLayerLink,
+          showWhenUnlinked: false,
+          offset: Offset(0, fieldSize.height + 4),
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(10),
+            child: _buildTopSuggestionList(
+              _destTopSuggestions,
+              _selectDestTopSuggestion,
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_destTopOverlayEntry!);
   }
 
   Future<void> _selectDestTopSuggestion(Map<String, String> suggestion) async {
@@ -1326,19 +1443,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _destTopSuggestions = [];
       _lastDestTopQuery = '';
     });
+    _syncDestTopOverlay();
 
     Provider.of<UserPreferencesProvider>(context, listen: false)
         .updateDestination(formatted);
     FocusScope.of(context).unfocus();
-  }
-
-  void _updatePeopleCount(int nextCount) {
-    final clamped = nextCount.clamp(1, 20);
-    setState(() {
-      _numberOfPeople = clamped;
-    });
-    Provider.of<UserPreferencesProvider>(context, listen: false)
-        .updateNumberOfPeople(_numberOfPeople);
   }
 
   String _formatTripDate(DateTime? date) {
@@ -1346,6 +1455,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return DateFormat('dd MMM yyyy').format(date);
   }
 
+  // A compact labeled text field wrapped in CompositedTransformTarget so its
+  // paired overlay (see _syncOriginOverlay / _syncDestTopOverlay) can anchor
+  // its suggestion dropdown to this field's exact position and width.
   Widget _buildLocationField({
     required String label,
     required String hint,
@@ -1354,64 +1466,71 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required TextEditingController controller,
     required FocusNode focusNode,
     required ValueChanged<String> onChanged,
+    required LayerLink layerLink,
+    required GlobalKey fieldKey,
     VoidCallback? onEditingComplete,
   }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.black12),
-        borderRadius: BorderRadius.circular(10),
-        color: Colors.white,
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: iconColor),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    color: Colors.black54,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                SizedBox(
-                  height: 22,
-                  child: TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    onChanged: onChanged,
-                    onEditingComplete: onEditingComplete,
-                    textInputAction: TextInputAction.search,
+    return CompositedTransformTarget(
+      link: layerLink,
+      child: Container(
+        key: fieldKey,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.black12),
+          borderRadius: BorderRadius.circular(10),
+          color: Colors.white,
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: iconColor),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
                     style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: hint,
-                      hintStyle: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.black38,
-                      ),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
+                      fontSize: 10,
+                      color: Colors.black54,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ),
-              ],
+                  SizedBox(
+                    height: 22,
+                    child: TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      onChanged: onChanged,
+                      onEditingComplete: onEditingComplete,
+                      textInputAction: TextInputAction.search,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: hint,
+                        hintStyle: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black38,
+                        ),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
+  // The dropdown list rendered inside the FROM/TO overlay entries.
   Widget _buildTopSuggestionList(
     List<Map<String, String>> suggestions,
     void Function(Map<String, String>) onSelect,
@@ -1483,6 +1602,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  // Always-visible card above the accordion: origin/destination, trip
+  // dates, traveler count, and the "Explore" button that seeds Section 0
+  // (destination & activities) from these values.
   Widget _buildTripBasicsCard() {
     return Container(
       width: double.infinity,
@@ -1521,6 +1643,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       iconColor: Colors.green,
                       controller: _originController,
                       focusNode: _originFocusNode,
+                      layerLink: _originLayerLink,
+                      fieldKey: _originFieldKey,
                       onChanged: _updateOriginSuggestions,
                       onEditingComplete: () {
                         final txt = _originController.text.trim();
@@ -1541,6 +1665,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       iconColor: Colors.redAccent,
                       controller: _destTopController,
                       focusNode: _destTopFocusNode,
+                      layerLink: _destTopLayerLink,
+                      fieldKey: _destTopFieldKey,
                       onChanged: _updateDestTopSuggestions,
                       onEditingComplete: () {
                         final txt = _destTopController.text.trim();
@@ -1559,7 +1685,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
               // Trip dates (single date range picker)
               Material(
-                color: Colors.white,
+                color: const Color(0xFF4F46E5).withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(12),
                 child: InkWell(
                   onTap: _pickTripDates,
@@ -1569,12 +1695,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         horizontal: 12, vertical: 11),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.black12),
+                      border: Border.all(
+                        color: const Color(0xFF4F46E5).withValues(alpha: 0.35),
+                      ),
                     ),
                     child: Row(
                       children: [
                         const Icon(Icons.calendar_month,
-                            size: 18, color: Colors.black54),
+                            size: 18, color: Color(0xFF4F46E5)),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Column(
@@ -1585,7 +1713,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 'TRIP DATES',
                                 style: TextStyle(
                                   fontSize: 10,
-                                  color: Colors.black54,
+                                  color: Color(0xFF4F46E5),
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
@@ -1599,68 +1727,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   fontWeight: FontWeight.w700,
                                   color: (_tripFromDate == null ||
                                           _tripToDate == null)
-                                      ? Colors.black45
-                                      : Colors.black87,
+                                      ? const Color(0xFF4F46E5)
+                                          .withValues(alpha: 0.55)
+                                      : const Color(0xFF3730A3),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        const Icon(Icons.chevron_right, color: Colors.black45),
+                        const Icon(Icons.chevron_right,
+                            color: Color(0xFF4F46E5)),
                       ],
                     ),
                   ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              // Number of people
-              Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.black12),
-                  color: Colors.white,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.groups_2, size: 18, color: Colors.black54),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Number of people',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _numberOfPeople > 1
-                          ? () => _updatePeopleCount(_numberOfPeople - 1)
-                          : null,
-                      icon: const Icon(Icons.remove_circle_outline),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    Text(
-                      '$_numberOfPeople',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _numberOfPeople < 20
-                          ? () => _updatePeopleCount(_numberOfPeople + 1)
-                          : null,
-                      icon: const Icon(Icons.add_circle_outline),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ],
                 ),
               ),
 
@@ -1700,47 +1779,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ],
           ),
-          if ((_showOriginSuggestions && _originSuggestions.isNotEmpty) ||
-              (_showDestTopSuggestions && _destTopSuggestions.isNotEmpty))
-            Positioned(
-              top: 84,
-              left: 0,
-              right: 0,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: _showOriginSuggestions &&
-                            _originSuggestions.isNotEmpty
-                        ? ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 220),
-                            child: SingleChildScrollView(
-                              child: _buildTopSuggestionList(
-                                _originSuggestions,
-                                _selectOriginSuggestion,
-                              ),
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _showDestTopSuggestions &&
-                            _destTopSuggestions.isNotEmpty
-                        ? ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 220),
-                            child: SingleChildScrollView(
-                              child: _buildTopSuggestionList(
-                                _destTopSuggestions,
-                                _selectDestTopSuggestion,
-                              ),
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
@@ -1971,6 +2009,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  // Renders one wizard step as an ExpansionTile (or a locked placeholder if
+  // isUnlocked is false). Opening a section auto-closes any other open one,
+  // since _expanded is cleared before the new index is added, keeping the
+  // wizard to one open section at a time.
   Widget _buildAccordionSection({
     required int index,
     required String title,
@@ -2095,6 +2137,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   /// A non-interactive placeholder shown for sections whose prerequisite
   /// (the previous section) has not been completed yet.
+  // Greyed-out, non-interactive stand-in shown for a step whose predecessor
+  // isn't complete yet (see _isSectionUnlocked).
   Widget _buildLockedSection({required String title, required IconData icon}) {
     return Container(
       decoration: BoxDecoration(
@@ -2301,38 +2345,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: activities.map((activity) {
-                        final isSelected =
-                            _selectedActivities.contains(activity);
-                        return FilterChip(
-                          label: Text(
-                            activity,
-                            style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.black87,
-                              fontWeight: isSelected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                              fontSize: 12,
-                            ),
-                          ),
-                          selected: isSelected,
-                          onSelected: (_) {
-                            setState(() {
-                              if (isSelected) {
-                                _selectedActivities.remove(activity);
-                              } else {
-                                _selectedActivities.add(activity);
-                              }
-                            });
-                          },
-                          backgroundColor: Colors.grey[100],
-                          selectedColor: color,
-                          checkmarkColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        );
-                      }).toList(),
+                      children: activities
+                          .map(
+                              (activity) => _buildActivityCard(activity, color))
+                          .toList(),
                     ),
                   ],
                 ),
@@ -2340,6 +2356,121 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             }),
           ],
         ],
+      ),
+    );
+  }
+
+  // Selectable activity tile: shows a real photo (see _loadActivityImages)
+  // once one's arrived for this activity, otherwise falls back to a plain
+  // text chip so the grid doesn't look broken while images are loading.
+  Widget _buildActivityCard(String activity, Color color) {
+    final isSelected = _selectedActivities.contains(activity);
+    final imageUrl = _activityImages[activity];
+
+    void toggle() {
+      setState(() {
+        if (isSelected) {
+          _selectedActivities.remove(activity);
+        } else {
+          _selectedActivities.add(activity);
+        }
+      });
+    }
+
+    if (imageUrl == null) {
+      return FilterChip(
+        label: Text(
+          activity,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.black87,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+            fontSize: 12,
+          ),
+        ),
+        selected: isSelected,
+        onSelected: (_) => toggle(),
+        backgroundColor: Colors.grey[100],
+        selectedColor: color,
+        checkmarkColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      );
+    }
+
+    return InkWell(
+      onTap: toggle,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        width: 104,
+        height: 84,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? color : Colors.transparent,
+            width: 2.5,
+          ),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.network(
+              imageUrl,
+              fit: BoxFit.cover,
+              loadingBuilder: (context, child, progress) =>
+                  progress == null ? child : Container(color: Colors.grey[200]),
+              errorBuilder: (context, error, stackTrace) => Container(
+                color: Colors.grey[200],
+                alignment: Alignment.center,
+                child: Text(
+                  activity,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
+              ),
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.65),
+                  ],
+                  stops: const [0.4, 1.0],
+                ),
+              ),
+            ),
+            Positioned(
+              left: 6,
+              right: 6,
+              bottom: 6,
+              child: Text(
+                activity,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (isSelected)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.check, color: Colors.white, size: 12),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -2408,10 +2539,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         currencyCode: _selectedCurrencyCode,
                       ),
                     ],
-                    onChanged: (_) {
-                      setState(() {});
-                      _syncAllocationAmountControllers();
-                    },
+                    onChanged: (_) => setState(() {}),
                     decoration: const InputDecoration(
                       hintText: 'Enter your budget',
                       border: InputBorder.none,
@@ -2425,58 +2553,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Builder(
-            builder: (context) {
-              final enteredBudget = _enteredBudget ?? 0;
-              final totalAllocated =
-                  _allocations.values.fold<double>(0, (sum, v) => sum + v);
-              final allocatedAmount = enteredBudget * totalAllocated;
-              final remaining = enteredBudget - allocatedAmount;
-              final isNegative = remaining < 0;
-              return Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-                decoration: BoxDecoration(
-                  color: isNegative ? Colors.red.shade50 : Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: isNegative
-                        ? Colors.red.shade300
-                        : Colors.green.shade300,
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Remaining budget',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: isNegative
-                            ? Colors.red.shade700
-                            : Colors.green.shade700,
-                      ),
-                    ),
-                    Text(
-                      '${isNegative ? '-' : ''}${_formatBudgetAmount(remaining.abs())}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: isNegative ? Colors.red : Colors.green.shade700,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 32),
-          const Divider(),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               gradient: AppConfig.primaryGradient,
@@ -2501,200 +2580,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Budget Allocation',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 12),
-          ..._budgetCategories.map(_buildBudgetSlider),
-          const SizedBox(height: 24),
-          const Text(
-            'Allocation Summary',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.grey[50],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              children: _budgetCategories.map((category) {
-                final percentage = _allocations[category['id']]! * 100;
-                final amount =
-                    (_enteredBudget ?? 0) * _allocations[category['id']]!;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    children: [
-                      Icon(category['icon'] as IconData,
-                          size: 16, color: Colors.grey[600]),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          category['title'] as String,
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ),
-                      Text(
-                        '${percentage.toStringAsFixed(0)}% / ${_formatBudgetAmount(amount)}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppConfig.primaryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBudgetSlider(Map<String, dynamic> category) {
-    final categoryId = category['id'] as String;
-    final currentValue = _allocations[categoryId]!;
-    final amount = (_enteredBudget ?? 0) * currentValue;
-    final enteredBudget = _enteredBudget ?? 0;
-    final totalAllocated =
-        _allocations.values.fold<double>(0, (sum, v) => sum + v);
-    final remaining = enteredBudget - (enteredBudget * totalAllocated);
-    final isNegative = remaining < 0;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(category['icon'] as IconData,
-                  size: 20, color: AppConfig.primaryColor),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  category['title'] as String,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-              ),
-              Text(
-                '${(currentValue * 100).toStringAsFixed(0)}% • ${_formatBudgetAmount(amount)}',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppConfig.primaryColor,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: isNegative ? Colors.red.shade50 : Colors.green.shade50,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color:
-                      isNegative ? Colors.red.shade300 : Colors.green.shade300,
-                ),
-              ),
-              child: Text(
-                'Remaining: ${isNegative ? '-' : ''}${_formatBudgetAmount(remaining.abs())}',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color:
-                      isNegative ? Colors.red.shade700 : Colors.green.shade700,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SliderTheme(
-            data: SliderThemeData(
-              activeTrackColor: AppConfig.primaryColor,
-              inactiveTrackColor: Colors.grey[300],
-              thumbColor: AppConfig.primaryColor,
-              overlayColor: AppConfig.primaryColor.withValues(alpha: 0.2),
-              trackHeight: 4,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-            ),
-            child: Slider(
-              value: currentValue,
-              min: 0.0,
-              max: 1.0,
-              divisions: 100,
-              onChanged: (value) => _updateAllocation(categoryId, value),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _allocationAmountControllers[categoryId],
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    CurrencyInputFormatter(currencyCode: _selectedCurrencyCode),
-                  ],
-                  onChanged: (value) =>
-                      _updateAllocationFromAmount(categoryId, value),
-                  decoration: InputDecoration(
-                    hintText: 'Enter value directly',
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.grey[300]!),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.grey[300]!),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _selectedCurrencyCode,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[700],
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
           ),
         ],
       ),
@@ -2798,20 +2683,28 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               final value = item['value']! as String;
               final icon = item['icon']! as IconData;
               final selected = _transportController.text
-                  .toLowerCase()
+                  .split(',')
+                  .map((e) => e.trim().toLowerCase())
                   .contains(value.toLowerCase());
 
               return InkWell(
                 onTap: () {
                   final current = _transportController.text.trim();
-                  if (current.toLowerCase().contains(value.toLowerCase())) {
-                    return;
-                  }
-                  if (current.isEmpty) {
-                    _transportController.text = value;
+                  final parts = current
+                      .split(',')
+                      .map((e) => e.trim())
+                      .where((e) => e.isNotEmpty)
+                      .toList();
+                  final alreadySelected =
+                      parts.any((p) => p.toLowerCase() == value.toLowerCase());
+
+                  if (alreadySelected) {
+                    parts.removeWhere(
+                        (p) => p.toLowerCase() == value.toLowerCase());
                   } else {
-                    _transportController.text = '$current, $value';
+                    parts.add(value);
                   }
+                  _transportController.text = parts.join(', ');
                   setState(() {});
                 },
                 borderRadius: BorderRadius.circular(14),
@@ -3014,6 +2907,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  // Single-select chip (companion / occasion / experience level: only one
+  // choice highlighted at a time within its group).
   Widget _buildSelectionChip(
       String label, bool isSelected, VoidCallback onTap) {
     return ChoiceChip(
@@ -3034,6 +2929,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  // Multi-select chip group (accessibility / dietary / medical / language:
+  // any number of options can be toggled on within its group).
   Widget _buildMultiSelectSection(
       String title, List<String> options, Set<String> selected) {
     return Column(

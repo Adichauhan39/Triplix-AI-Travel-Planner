@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../config/app_config.dart';
 import 'google_places_web_stub.dart'
     if (dart.library.html) 'google_places_web.dart' as web;
 
@@ -16,7 +17,7 @@ class GooglePlacesService {
   GooglePlacesService({http.Client? client})
       : _client = client ?? http.Client();
 
-  static const String _apiKey = 'AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo';
+  static String get _apiKey => AppConfig.googleMapsApiKey;
 
   final http.Client _client;
 

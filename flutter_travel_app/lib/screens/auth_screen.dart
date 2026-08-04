@@ -551,6 +551,21 @@ class _LoginCardState extends State<_LoginCard>
   }
 
   Future<void> _handleLogin() async {
+    // Temporary demo account: skips form validation, captcha, and Firebase
+    // entirely so the app can be reviewed without a real inbox to verify.
+    // See AuthService.signInWithDemoAccount / AuthGuard.
+    if (_authService.matchesDemoCredentials(
+      _emailController.text,
+      _passwordController.text,
+    )) {
+      setState(() => _isLoading = true);
+      await _authService.signInWithDemoAccount();
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      Get.toNamed('/onboarding-loading', arguments: {'provider': 'email'});
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) return;
     if (!_captchaReady) {
       Get.snackbar(

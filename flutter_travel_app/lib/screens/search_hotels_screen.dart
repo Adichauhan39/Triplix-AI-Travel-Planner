@@ -2,10 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:animate_do/animate_do.dart';
 import 'package:get/get.dart';
+import 'package:provider/provider.dart';
 import '../config/app_config.dart';
+import '../services/affiliate_links.dart';
 import '../services/api_service.dart';
 import '../services/mock_data_service.dart';
 import '../models/hotel.dart';
+import '../providers/user_preferences_provider.dart';
+import '../providers/hotel_shortlist_provider.dart';
+import 'hotel_shortlist_screen.dart';
 
 class SearchHotelsScreen extends StatefulWidget {
   const SearchHotelsScreen({super.key});
@@ -49,7 +54,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
   DateTime _checkIn = DateTime.now();
   DateTime _checkOut = DateTime.now().add(const Duration(days: 1));
   int _guests = 2;
-  int _rooms = 1;
+  int _rooms = 0;
   String _specialRequest = '';
   RangeValues _priceRange = const RangeValues(0, 5000000);
   String _selectedType = 'All';
@@ -76,18 +81,14 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
     if (arguments != null && arguments is Map<String, dynamic>) {
       final cityInput = arguments['city'] as String?;
       setState(() {
-        // Find matching city from the list (case-insensitive)
         if (cityInput != null && cityInput.isNotEmpty) {
-          _selectedCity = _cities.firstWhere(
-            (city) => city.toLowerCase() == cityInput.toLowerCase(),
-            orElse: () => cityInput,
-          );
+          _selectedCity = _resolveCity(cityInput);
         }
         _checkIn = arguments['checkIn'] as DateTime? ?? DateTime.now();
         _checkOut = arguments['checkOut'] as DateTime? ??
             DateTime.now().add(const Duration(days: 1));
         _guests = arguments['guests'] as int? ?? 2;
-        _rooms = arguments['rooms'] as int? ?? 1;
+        _rooms = arguments['rooms'] as int? ?? 0;
         _specialRequest = arguments['specialRequest'] as String? ?? '';
 
         // Get hotel preferences
@@ -111,7 +112,48 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
           _searchHotels();
         });
       }
+    } else {
+      // No GetX arguments (e.g. opened via the Home quick-access card, which
+      // uses a plain Navigator.push) — fall back to whatever destination/
+      // dates/guests were saved during onboarding.
+      final prefs = Provider.of<UserPreferencesProvider>(
+        context,
+        listen: false,
+      ).preferences;
+
+      final destinationCity = prefs.destination?.split(',').first.trim();
+      if (destinationCity != null && destinationCity.isNotEmpty) {
+        setState(() {
+          _selectedCity = _resolveCity(destinationCity);
+          if (prefs.checkInDate != null) _checkIn = prefs.checkInDate!;
+          if (prefs.checkOutDate != null) _checkOut = prefs.checkOutDate!;
+          // Guests intentionally starts at 0 regardless of the trip's
+          // traveler count — the two are tracked independently.
+          _priceRange = RangeValues(0, _hotelBudget);
+        });
+
+        if (_cities.contains(_selectedCity)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _searchHotels();
+          });
+        }
+      }
     }
+  }
+
+  /// Matches [rawCity] against the fixed dropdown list (case-insensitive).
+  /// If there's no match — e.g. an onboarding destination like "Bhiwandi"
+  /// that isn't one of the 8 preset cities — adds it to the list instead of
+  /// dropping it, since DropdownButtonFormField asserts if its value isn't
+  /// exactly one of its items. Keeps whatever the user picked in onboarding
+  /// visible rather than silently clearing it.
+  String _resolveCity(String rawCity) {
+    final trimmed = rawCity.trim();
+    final matches =
+        _cities.where((city) => city.toLowerCase() == trimmed.toLowerCase());
+    if (matches.isNotEmpty) return matches.first;
+    _cities.add(trimmed);
+    return trimmed;
   }
 
   Future<void> _searchHotels() async {
@@ -318,7 +360,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
 
         message = criteria.isNotEmpty
             ? 'Find hotel with ${criteria.join(", ")}'
-            : 'Find best hotels for $_guests guests';
+            : 'Find best hotels, $_rooms ${_rooms == 1 ? 'room' : 'rooms'}';
       }
 
       // Call AI-powered search
@@ -443,6 +485,24 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
         title: const Text('Search Hotels'),
         centerTitle: true,
         actions: [
+          Consumer<HotelShortlistProvider>(
+            builder: (context, shortlist, _) => IconButton(
+              tooltip: 'Selected Hotel',
+              icon: Badge(
+                label: Text('${shortlist.hotels.length}'),
+                isLabelVisible: shortlist.hotels.isNotEmpty,
+                child: const Icon(Icons.favorite),
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const HotelShortlistScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
           if (_searchResults.isNotEmpty && _searched)
             IconButton(
               icon: const Icon(Icons.swipe),
@@ -523,10 +583,10 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
 
                   const SizedBox(height: 20),
 
-                  // Guests
+                  // Rooms
                   FadeInDown(
                     delay: const Duration(milliseconds: 200),
-                    child: _buildSectionTitle('Guests'),
+                    child: _buildSectionTitle('Rooms'),
                   ),
                   const SizedBox(height: 8),
                   FadeInDown(
@@ -535,13 +595,13 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                       children: [
                         IconButton(
                           onPressed: () => setState(
-                              () => _guests = (_guests - 1).clamp(1, 10)),
+                              () => _rooms = (_rooms - 1).clamp(0, 10)),
                           icon: const Icon(Icons.remove_circle_outline),
                         ),
                         Expanded(
                           child: Center(
                             child: Text(
-                              '$_guests ${_guests == 1 ? 'Guest' : 'Guests'}',
+                              '$_rooms ${_rooms == 1 ? 'Room' : 'Rooms'}',
                               style: const TextStyle(
                                   fontSize: 16, fontWeight: FontWeight.w600),
                             ),
@@ -549,7 +609,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                         ),
                         IconButton(
                           onPressed: () => setState(
-                              () => _guests = (_guests + 1).clamp(1, 10)),
+                              () => _rooms = (_rooms + 1).clamp(0, 10)),
                           icon: const Icon(Icons.add_circle_outline),
                         ),
                       ],
@@ -647,7 +707,8 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                           borderRadius:
                               BorderRadius.circular(AppConfig.radiusMedium),
                           border: Border.all(
-                            color: AppConfig.primaryColor.withValues(alpha: 0.3),
+                            color:
+                                AppConfig.primaryColor.withValues(alpha: 0.3),
                             width: 1,
                           ),
                         ),
@@ -761,7 +822,12 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                       itemBuilder: (context, index) {
                         return FadeInUp(
                           delay: Duration(milliseconds: 50 * index),
-                          child: _HotelCard(hotel: _searchResults[index]),
+                          child: _HotelCard(
+                            hotel: _searchResults[index],
+                            checkIn: _checkIn,
+                            checkOut: _checkOut,
+                            guests: _guests,
+                          ),
                         );
                       },
                     ),
@@ -820,11 +886,17 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
             setState(() {
               if (isCheckIn) {
                 _checkIn = selectedDay;
-                if (_checkOut.isBefore(_checkIn)) {
-                  _checkOut = _checkIn.add(const Duration(days: 1));
-                }
               } else {
                 _checkOut = selectedDay;
+              }
+              // Whichever field was tapped, always keep the earlier of the
+              // two picked dates as check-in and the later as check-out —
+              // don't rely on which field the user happened to edit.
+              if (_checkOut.isBefore(_checkIn)) {
+                final earlier = _checkOut;
+                final later = _checkIn;
+                _checkIn = earlier;
+                _checkOut = later;
               }
             });
             Navigator.pop(context);
@@ -888,246 +960,315 @@ class _DatePicker extends StatelessWidget {
 
 class _HotelCard extends StatelessWidget {
   final Hotel hotel;
+  final DateTime checkIn;
+  final DateTime checkOut;
+  final int guests;
 
-  const _HotelCard({required this.hotel});
+  const _HotelCard({
+    required this.hotel,
+    required this.checkIn,
+    required this.checkOut,
+    required this.guests,
+  });
 
   @override
   Widget build(BuildContext context) {
     final bool hasAIData =
         hotel.aiMatchScore != null || hotel.whyRecommended != null;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: hasAIData ? 4 : 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-        side: hasAIData
-            ? BorderSide(color: Colors.deepPurple.withValues(alpha: 0.3), width: 2)
-            : BorderSide.none,
-      ),
-      child: InkWell(
-        onTap: () {
-          // Navigate to hotel details
-        },
-        child: Column(
+    return Consumer<HotelShortlistProvider>(
+      builder: (context, shortlist, _) {
+        final isShortlisted = shortlist.isShortlisted(hotel);
+        return Stack(
           children: [
-            // AI Match Score Badge (if available)
-            if (hotel.aiMatchScore != null)
-              Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.deepPurple.withValues(alpha: 0.1),
-                      Colors.purple.withValues(alpha: 0.1),
-                    ],
-                  ),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(AppConfig.radiusMedium),
-                    topRight: Radius.circular(AppConfig.radiusMedium),
-                  ),
-                ),
-                child: Row(
+            Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              elevation: hasAIData ? 4 : 1,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
+                side: hasAIData
+                    ? BorderSide(
+                        color: Colors.deepPurple.withValues(alpha: 0.3),
+                        width: 2)
+                    : BorderSide.none,
+              ),
+              child: InkWell(
+                onTap: () => shortlist.toggle(hotel),
+                child: Column(
                   children: [
-                    const Icon(Icons.auto_awesome,
-                        color: Colors.deepPurple, size: 18),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${hotel.aiMatchScore} Match',
-                      style: const TextStyle(
-                        color: Colors.deepPurple,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                    // AI Match Score Badge (if available)
+                    if (hotel.aiMatchScore != null)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Colors.deepPurple.withValues(alpha: 0.1),
+                              Colors.purple.withValues(alpha: 0.1),
+                            ],
+                          ),
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(AppConfig.radiusMedium),
+                            topRight: Radius.circular(AppConfig.radiusMedium),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.auto_awesome,
+                                color: Colors.deepPurple, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${hotel.aiMatchScore} Match',
+                              style: const TextStyle(
+                                color: Colors.deepPurple,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const Spacer(),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.deepPurple,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Text(
+                                'AI Powered',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Image
+                          Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              color:
+                                  AppConfig.primaryColor.withValues(alpha: 0.1),
+                              borderRadius:
+                                  BorderRadius.circular(AppConfig.radiusSmall),
+                            ),
+                            child: const Icon(Icons.hotel,
+                                size: 40, color: AppConfig.primaryColor),
+                          ),
+                          const SizedBox(width: 12),
+                          // Details
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  hotel.name,
+                                  style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.location_on,
+                                        size: 14, color: Colors.grey),
+                                    const SizedBox(width: 4),
+                                    Text(hotel.city,
+                                        style: const TextStyle(
+                                            fontSize: 12, color: Colors.grey)),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.star,
+                                        size: 14, color: Colors.amber),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      hotel.rating.toString(),
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      '₹${hotel.pricePerNight.toInt()}/night',
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppConfig.successColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                // AI Why Recommended (if available)
+                                if (hotel.whyRecommended != null) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.purple.withValues(alpha: 0.05),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Colors.deepPurple
+                                            .withValues(alpha: 0.2),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      hotel.whyRecommended!,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: AppConfig.textSecondary,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+
+                                // AI Highlights (if available)
+                                if (hotel.highlights != null &&
+                                    hotel.highlights!.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 4,
+                                    runSpacing: 4,
+                                    children: hotel.highlights!
+                                        .take(3)
+                                        .map((highlight) {
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.deepPurple
+                                              .withValues(alpha: 0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Colors.deepPurple
+                                                .withValues(alpha: 0.3),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          highlight,
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.deepPurple,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ] else if (hotel.amenities.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 4,
+                                    children:
+                                        hotel.amenities.take(3).map((amenity) {
+                                      return Chip(
+                                        label: Text(amenity,
+                                            style:
+                                                const TextStyle(fontSize: 10)),
+                                        padding: EdgeInsets.zero,
+                                        materialTapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+
+                                // Perfect For (if available)
+                                if (hotel.perfectFor != null) ...[
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.check_circle,
+                                          size: 12, color: Colors.green),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          hotel.perfectFor!,
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.green,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.deepPurple,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Text(
-                        'AI Powered',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () => AffiliateLinks.open(
+                            AffiliateLinks.aviasalesHotelSearch(
+                              hotel: hotel,
+                              checkIn: checkIn,
+                              checkOut: checkOut,
+                              guests: guests,
+                            ),
+                          ),
+                          icon: const Icon(Icons.open_in_new, size: 16),
+                          label: const Text('Book on Aviasales'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppConfig.primaryColor,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(AppConfig.radiusSmall),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
-
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Image
-                  Container(
-                    width: 100,
-                    height: 100,
-                    decoration: BoxDecoration(
-                      color: AppConfig.primaryColor.withValues(alpha: 0.1),
-                      borderRadius:
-                          BorderRadius.circular(AppConfig.radiusSmall),
-                    ),
-                    child: const Icon(Icons.hotel,
-                        size: 40, color: AppConfig.primaryColor),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Material(
+                color: Colors.white,
+                shape: const CircleBorder(),
+                elevation: 2,
+                child: IconButton(
+                  icon: Icon(
+                    isShortlisted ? Icons.favorite : Icons.favorite_border,
+                    color: isShortlisted ? Colors.redAccent : Colors.grey,
                   ),
-                  const SizedBox(width: 12),
-                  // Details
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          hotel.name,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on,
-                                size: 14, color: Colors.grey),
-                            const SizedBox(width: 4),
-                            Text(hotel.city,
-                                style: const TextStyle(
-                                    fontSize: 12, color: Colors.grey)),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const Icon(Icons.star,
-                                size: 14, color: Colors.amber),
-                            const SizedBox(width: 4),
-                            Text(
-                              hotel.rating.toString(),
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            const Spacer(),
-                            Text(
-                              '₹${hotel.pricePerNight.toInt()}/night',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: AppConfig.successColor,
-                              ),
-                            ),
-                          ],
-                        ),
-
-                        // AI Why Recommended (if available)
-                        if (hotel.whyRecommended != null) ...[
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.purple.withValues(alpha: 0.05),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: Colors.deepPurple.withValues(alpha: 0.2),
-                              ),
-                            ),
-                            child: Text(
-                              hotel.whyRecommended!,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppConfig.textSecondary,
-                                fontStyle: FontStyle.italic,
-                              ),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-
-                        // AI Highlights (if available)
-                        if (hotel.highlights != null &&
-                            hotel.highlights!.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 4,
-                            runSpacing: 4,
-                            children:
-                                hotel.highlights!.take(3).map((highlight) {
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.deepPurple.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: Colors.deepPurple.withValues(alpha: 0.3),
-                                  ),
-                                ),
-                                child: Text(
-                                  highlight,
-                                  style: const TextStyle(
-                                    fontSize: 10,
-                                    color: Colors.deepPurple,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ] else if (hotel.amenities.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 4,
-                            children: hotel.amenities.take(3).map((amenity) {
-                              return Chip(
-                                label: Text(amenity,
-                                    style: const TextStyle(fontSize: 10)),
-                                padding: EdgeInsets.zero,
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                              );
-                            }).toList(),
-                          ),
-                        ],
-
-                        // Perfect For (if available)
-                        if (hotel.perfectFor != null) ...[
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              const Icon(Icons.check_circle,
-                                  size: 12, color: Colors.green),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  hotel.perfectFor!,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.green,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+                  onPressed: () => shortlist.toggle(hotel),
+                ),
               ),
             ),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 }

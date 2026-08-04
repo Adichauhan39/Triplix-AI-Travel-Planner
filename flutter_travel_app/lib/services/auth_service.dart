@@ -11,6 +11,42 @@ class AuthService {
   GoogleSignIn get _googleSignIn => _googleSignInInstance ??= GoogleSignIn();
   static const String _termsPolicyVersion = '2026-06';
 
+  // Temporary hardcoded demo account (no real Firebase user, no email
+  // verification step) so the app can be walked through without setting up
+  // a real inbox. See signInWithDemoAccount / AuthGuard.
+  static const String demoEmail = 'developer@triplix.ai';
+  static const String demoPassword = 'demo@1234';
+  static const String _demoSessionPrefsKey = 'is_demo_session';
+
+  // In-memory mirror of _demoSessionPrefsKey so AuthGuard (which runs
+  // synchronously) can check it without an async SharedPreferences read.
+  // Populated at startup by loadDemoSessionFlag() in main().
+  static bool isDemoSession = false;
+
+  bool matchesDemoCredentials(String email, String password) =>
+      email.trim().toLowerCase() == demoEmail && password == demoPassword;
+
+  /// Restores the demo-session flag after an app restart. Call once during
+  /// startup, before runApp, alongside the other service initializations.
+  static Future<void> loadDemoSessionFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    isDemoSession = prefs.getBool(_demoSessionPrefsKey) ?? false;
+  }
+
+  /// Bypasses Firebase entirely for the hardcoded demo credentials: marks
+  /// the session as logged in via SharedPreferences (same keys real sign-in
+  /// uses, so screens like AccountScreen render normally) and flips
+  /// isDemoSession so AuthGuard lets it through.
+  Future<void> signInWithDemoAccount() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_email', demoEmail);
+    await prefs.setString('user_name', 'Developer');
+    await prefs.setString('user_avatar', 'D');
+    await prefs.setBool('is_logged_in', true);
+    await prefs.setBool(_demoSessionPrefsKey, true);
+    isDemoSession = true;
+  }
+
   User? get currentUser => _auth.currentUser;
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
@@ -79,6 +115,8 @@ class AuthService {
     await prefs.remove('user_email');
     await prefs.remove('user_name');
     await prefs.remove('user_avatar');
+    await prefs.setBool(_demoSessionPrefsKey, false);
+    isDemoSession = false;
   }
 
   /// Send password reset email

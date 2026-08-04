@@ -59,6 +59,7 @@ import json
 import requests
 import random
 import base64
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # ── MongoDB Integration ─────────────────────────────────────────────────
@@ -1474,6 +1475,218 @@ def get_hotel_image(hotel_name, city):
 
 # Photo cache to avoid repeated API calls
 _photo_cache = {}
+
+# Themed fallback pools (all IDs verified to resolve on images.unsplash.com),
+# keyed by rough activity topic. Used when Places API finds nothing for an
+# abstract/generic activity word (e.g. "Daily Life", "Retail Therapy") that
+# isn't a real, searchable place.
+_ACTIVITY_FALLBACK_THEMES = {
+    'nature': [
+        "1441974231531-c6227db76b6e", "1441906363162-903afd0d3d52",
+        "1477587458883-47145ed94245", "1512621776951-a57141f2eefd",
+    ],
+    'spiritual': [
+        "1519501025264-65ba15a82390", "1476514525535-07fb3b4ae5f1",
+    ],
+    'food': [
+        "1517248135467-4c7edcad34c4", "1533105079780-92b9be482077",
+        "1555396273-367ea4eb4db5",
+    ],
+    'market': [
+        "1555529669-e69e7aa0ba9a", "1533900298318-6b8da08a523e",
+    ],
+    'heritage': [
+        "1519677100203-a0e668c92439", "1524492412937-b28074a5d7da",
+    ],
+    'urban': [
+        "1449824913935-59a10b8d2000", "1502602898657-3e91760cbb34",
+    ],
+    'entertainment': [
+        "1488646953014-85cb44e25828", "1566073771259-6a8506099945",
+    ],
+}
+
+_ACTIVITY_THEME_KEYWORDS = {
+    'nature': ['park', 'garden', 'lake', 'green', 'nature', 'picnic', 'river',
+               'zoo', 'hill', 'forest', 'beach', 'view'],
+    'spiritual': ['temple', 'shrine', 'mosque', 'church', 'dargah', 'pilgrim',
+                  'spiritual', 'religious', 'meditation', 'ashram', 'sacred'],
+    'food': ['food', 'cuisine', 'cafe', 'restaurant', 'dhaba', 'biryani',
+             'snack', 'sweet', 'dining', 'eatery', 'street food', 'diner'],
+    'market': ['market', 'shop', 'mall', 'bazaar', 'textile', 'retail',
+               'souvenir', 'boutique', 'wholesale'],
+    'heritage': ['fort', 'palace', 'monument', 'museum', 'heritage',
+                 'historical', 'ancient', 'old town', 'ruins', 'building'],
+    'urban': ['city', 'urban', 'cityscape', 'architecture', 'walk',
+              'local life', 'daily life', 'views', 'commercial', 'stroll'],
+    'entertainment': ['cinema', 'amusement', 'entertainment', 'theme park',
+                       'family fun', 'recreation', 'playground', 'event',
+                       'leisure'],
+}
+
+
+def _fallback_theme_for(query: str) -> str:
+    q = query.lower()
+    for theme, keywords in _ACTIVITY_THEME_KEYWORDS.items():
+        if any(kw in q for kw in keywords):
+            return theme
+    return 'urban'
+
+
+def get_activity_image(
+    query: str,
+    city: str,
+    used_urls: Optional[set] = None,
+    lock: Optional[threading.Lock] = None,
+) -> str:
+    """
+    Get a real image for a travel activity/attraction using Google Places API
+    (New). Same pattern as get_hotel_image, generalized to any short activity
+    keyword (e.g. "Fort", "Biryani") combined with the city, so onboarding's
+    destination-interests chips can show a real photo instead of plain text.
+
+    [used_urls]/[lock], when provided, avoid handing out the same photo to
+    two different activities in the same batch — small/less-mapped cities
+    often only have a handful of indexed Places, so without this, distinct
+    activities (e.g. "Local Market" and "Wholesale Market") can resolve to
+    the literal same place and photo.
+    """
+    cache_key = f"activity_{query}_{city}"
+    if cache_key in _photo_cache:
+        return _photo_cache[cache_key]
+
+    def claim(key: str) -> bool:
+        """Registers key as used if it isn't already; returns False if taken."""
+        if used_urls is None:
+            return True
+        if lock is not None:
+            with lock:
+                if key in used_urls:
+                    return False
+                used_urls.add(key)
+                return True
+        if key in used_urls:
+            return False
+        used_urls.add(key)
+        return True
+
+    try:
+        if not GOOGLE_PLACES_API_KEY:
+            raise ValueError("No GOOGLE_PLACES_API_KEY configured")
+
+        search_url = "https://places.googleapis.com/v1/places:searchText"
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+            'X-Goog-FieldMask': 'places.displayName,places.photos'
+        }
+        search_query = f"{query} in {city}, India"
+        resp = requests.post(search_url, headers=headers,
+            json={"textQuery": search_query, "maxResultCount": 3},
+            timeout=8
+        ).json()
+
+        # Dedupe by PLACE, not by final photo URL. Vague activity words
+        # (e.g. "City Exploration") in a small/sparsely-mapped city often
+        # resolve to the exact same top landmark as a concrete one (e.g.
+        # "Fort") — two different photos of that same place are still
+        # both "a picture of the fort", which reads as a duplicate to a
+        # user even though the URLs technically differ. A photo's `name`
+        # is "places/{place_id}/photos/{photo_id}", so the place_id prefix
+        # doubles as a stable per-place dedup key.
+        places = resp.get('places', [])
+        for place in places:
+            photos = place.get('photos', [])
+            if not photos:
+                continue
+            first_name = photos[0].get('name', '')
+            place_key = first_name.split('/photos/')[0] if first_name else ''
+            if not place_key or not claim(place_key):
+                continue  # this place already used by another activity
+
+            for photo in photos[:3]:
+                photo_name = photo.get('name', '')
+                if not photo_name:
+                    continue
+                media_url = f"https://places.googleapis.com/v1/{photo_name}/media?maxWidthPx=600&skipHttpRedirect=true&key={GOOGLE_PLACES_API_KEY}"
+                try:
+                    media_resp = requests.get(media_url, timeout=5).json()
+                    direct_url = media_resp.get('photoUri', '')
+                except Exception:
+                    continue
+                if direct_url:
+                    _photo_cache[cache_key] = direct_url
+                    return direct_url
+            # Claimed the place but couldn't resolve any of its photos
+            # (rare) — fall through and try the next place.
+
+        # Fallback: themed stock images, trying to avoid a repeat within
+        # this batch before accepting one.
+        theme = _fallback_theme_for(query)
+        candidates = _ACTIVITY_FALLBACK_THEMES[theme]
+        for photo_id in candidates:
+            if claim(photo_id):
+                url = f"https://images.unsplash.com/photo-{photo_id}?w=400&h=300&fit=crop"
+                _photo_cache[cache_key] = url
+                return url
+
+        # Every themed candidate was already used this batch — accept a
+        # repeat rather than return nothing.
+        url = f"https://images.unsplash.com/photo-{candidates[0]}?w=400&h=300&fit=crop"
+        _photo_cache[cache_key] = url
+        return url
+    except Exception as e:
+        print(f"[ACTIVITY IMAGE] [ERROR] '{query}' in {city}: {e}")
+        return "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&h=300&fit=crop"
+
+
+class ActivityImagesRequest(BaseModel):
+    city: str
+    activities: List[str]
+
+
+@app.post("/api/destination/activity-images")
+def get_activity_images(request: ActivityImagesRequest):
+    """
+    Batch-fetch one representative real photo per activity keyword for a
+    city (e.g. "Fort" -> a real fort photo for that city). Runs the Places
+    API lookups concurrently since a city's activity list can be 30+ items
+    and each lookup is a blocking HTTP call. Cache hits are seeded into
+    used_urls before dispatching fresh lookups, so a cached result and a
+    freshly-fetched one can't collide either.
+    """
+    try:
+        activities = list(dict.fromkeys(request.activities))  # dedupe, keep order
+        used_urls: set = set()
+        lock = threading.Lock()
+
+        results: Dict[str, str] = {}
+        to_fetch = []
+        for activity in activities:
+            cache_key = f"activity_{activity}_{request.city}"
+            cached = _photo_cache.get(cache_key)
+            if cached:
+                results[activity] = cached
+                used_urls.add(cached)
+            else:
+                to_fetch.append(activity)
+
+        if to_fetch:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                fetched = list(executor.map(
+                    lambda activity: (
+                        activity,
+                        get_activity_image(activity, request.city, used_urls, lock),
+                    ),
+                    to_fetch,
+                ))
+            results.update(dict(fetched))
+
+        return {"status": "success", "city": request.city, "images": results}
+    except Exception as e:
+        print(f"[ACTIVITY IMAGES ERROR] {e}")
+        return {"status": "error", "message": str(e), "images": {}}
+
 
 class HotelSearchRequest(BaseModel):
     message: str
@@ -4834,21 +5047,21 @@ def get_destination_suggestions(
         # Fallback 3: emergency in-memory suggestions to avoid empty UI states.
         if len(suggestions) < safe_limit:
             emergency_cities = [
-                ("Bilaspur", "India", "Growing city in Chhattisgarh", "Achanakmar Wildlife Sanctuary"),
-                ("Bilaspur (Himachal Pradesh)", "India", "Historic town near Gobind Sagar Lake", "Naina Devi Temple"),
-                ("Bikaner", "India", "Desert city in Rajasthan", "Junagarh Fort"),
-                ("Bhubaneswar", "India", "Temple city and Odisha capital", "Lingaraj Temple"),
-                ("Bhopal", "India", "City of lakes and Madhya Pradesh capital", "Upper Lake"),
-                ("Raipur", "India", "Capital city of Chhattisgarh", "Mahant Ghasidas Museum"),
-                ("Raigarh", "India", "Industrial city in Chhattisgarh", "Kelo River views"),
-                ("Ranchi", "India", "Jharkhand capital with waterfalls", "Hundru Falls"),
-                ("Rajgir", "India", "Ancient city in Bihar", "Vishwa Shanti Stupa"),
-                ("Rajkot", "India", "Major city in Gujarat", "Kaba Gandhi No Delo"),
-                ("Ranikhet", "India", "Himalayan hill station in Uttarakhand", "Pine forests"),
-                ("Rameswaram", "India", "Sacred island pilgrimage town", "Ramanathaswamy Temple"),
-                ("Rishikesh", "India", "Yoga capital on the Ganga", "River rafting"),
-                ("Rajasthan", "India", "Desert state with royal heritage", "Forts and palaces"),
-                ("Ratnagiri", "India", "Konkan coastal district", "Alphonso mangoes"),
+                ("Bilaspur", "India", "Chhattisgarh, India", "Achanakmar Wildlife Sanctuary"),
+                ("Bilaspur (Himachal Pradesh)", "India", "Himachal Pradesh, India", "Naina Devi Temple"),
+                ("Bikaner", "India", "Rajasthan, India", "Junagarh Fort"),
+                ("Bhubaneswar", "India", "Odisha, India", "Lingaraj Temple"),
+                ("Bhopal", "India", "Madhya Pradesh, India", "Upper Lake"),
+                ("Raipur", "India", "Chhattisgarh, India", "Mahant Ghasidas Museum"),
+                ("Raigarh", "India", "Chhattisgarh, India", "Kelo River views"),
+                ("Ranchi", "India", "Jharkhand, India", "Hundru Falls"),
+                ("Rajgir", "India", "Bihar, India", "Vishwa Shanti Stupa"),
+                ("Rajkot", "India", "Gujarat, India", "Kaba Gandhi No Delo"),
+                ("Ranikhet", "India", "Uttarakhand, India", "Pine forests"),
+                ("Rameswaram", "India", "Tamil Nadu, India", "Ramanathaswamy Temple"),
+                ("Rishikesh", "India", "Uttarakhand, India", "River rafting"),
+                ("Rajasthan", "India", "India", "Forts and palaces"),
+                ("Ratnagiri", "India", "Maharashtra, India", "Alphonso mangoes"),
             ]
 
             search = normalized_query.lower()

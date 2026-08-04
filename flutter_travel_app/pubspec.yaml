@@ -82,6 +82,9 @@ dependencies:
   share_plus: ^7.2.1
   flutter_easy_recaptcha_v2: ^0.1.0
 
+  # Environment variables (.env)
+  flutter_dotenv: ^5.2.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -94,6 +97,7 @@ flutter:
   uses-material-design: true
   
   assets:
+    - .env
     - assets/images/
     - assets/icons/
     - assets/animations/

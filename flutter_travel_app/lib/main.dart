@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'firebase_options.dart';
 
 // App-level configuration, feature screens, state providers, and API bootstrap.
@@ -29,11 +30,21 @@ import 'middleware/auth_guard.dart';
 import 'models/hotel.dart';
 import 'providers/app_provider.dart';
 import 'providers/user_preferences_provider.dart';
+import 'providers/hotel_shortlist_provider.dart';
 import 'services/api_service.dart';
+import 'services/auth_service.dart';
 
 void main() async {
   // Ensures plugins/channels are ready before async initialization.
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load API keys/secrets from .env (falls back to --dart-define values in
+  // AppConfig if this file is missing, e.g. in a CI build).
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (e) {
+    debugPrint('.env load error: $e');
+  }
 
   // Initialize Firebase
   try {
@@ -59,6 +70,14 @@ void main() async {
     debugPrint('API service init error: $e');
   }
 
+  // Restore the demo-account session flag (if any) so AuthGuard still lets
+  // a previously-demo-logged-in user through after an app restart.
+  try {
+    await AuthService.loadDemoSessionFlag();
+  } catch (e) {
+    debugPrint('Demo session flag load error: $e');
+  }
+
   runApp(const MyApp());
 }
 
@@ -73,6 +92,8 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AppProvider()),
         // User travel profile and onboarding selections.
         ChangeNotifierProvider(create: (_) => UserPreferencesProvider()),
+        // Hotels saved for comparison before booking.
+        ChangeNotifierProvider(create: (_) => HotelShortlistProvider()),
       ],
       child: GetMaterialApp(
         title: AppConfig.appName,

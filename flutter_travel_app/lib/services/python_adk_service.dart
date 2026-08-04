@@ -582,6 +582,38 @@ class PythonADKService {
     }
   }
 
+  /// Batch-fetches one real photo per activity keyword for a city (e.g.
+  /// "Fort" -> a real fort photo), so onboarding's interest chips can show
+  /// images instead of plain text. Returns an empty map on any failure —
+  /// callers should treat that as "no images available" rather than an
+  /// error, since the chips still work fine as plain text without images.
+  Future<Map<String, String>> getActivityImages({
+    required String city,
+    required List<String> activities,
+  }) async {
+    if (activities.isEmpty) return {};
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/destination/activity-images'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'city': city, 'activities': activities}),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success' && data['images'] is Map) {
+          return Map<String, String>.from(data['images']);
+        }
+      }
+      return {};
+    } catch (e) {
+      print('Activity images error: $e');
+      return {};
+    }
+  }
+
   /// Check if a city name is ambiguous and return disambiguation options
   Future<Map<String, dynamic>> disambiguateCity({
     required String city,
