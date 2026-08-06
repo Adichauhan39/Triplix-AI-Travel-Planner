@@ -3,7 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'firebase_options.dart';
 
+// App-level configuration, feature screens, state providers, and API bootstrap.
 import 'config/app_config.dart';
 import 'screens/home_screen.dart';
 import 'screens/search_hotels_screen.dart';
@@ -13,24 +17,66 @@ import 'screens/swipeable_hotels_screen.dart';
 import 'screens/cart_screen.dart';
 import 'screens/hotel_results_screen.dart';
 import 'screens/welcome_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'screens/destination_preferences_screen.dart';
 import 'screens/budget_preferences_screen.dart';
 import 'screens/transport_preferences_screen.dart';
 import 'screens/additional_context_screen.dart';
 import 'screens/ai_assistant_screen.dart';
+import 'screens/account_screen.dart';
+import 'screens/auth_screen.dart';
+import 'screens/post_login_verification_screen.dart';
+import 'middleware/auth_guard.dart';
 import 'models/hotel.dart';
 import 'providers/app_provider.dart';
 import 'providers/user_preferences_provider.dart';
+import 'providers/hotel_shortlist_provider.dart';
 import 'services/api_service.dart';
+import 'services/auth_service.dart';
 
 void main() async {
+  // Ensures plugins/channels are ready before async initialization.
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Load API keys/secrets from .env (falls back to --dart-define values in
+  // AppConfig if this file is missing, e.g. in a CI build).
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (e) {
+    debugPrint('.env load error: $e');
+  }
+
+  // Initialize Firebase
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    debugPrint('Firebase init error: $e');
+  }
+
   // Initialize Hive for local storage
-  await Hive.initFlutter();
+  try {
+    await Hive.initFlutter();
+  } catch (e) {
+    debugPrint('Hive init error: $e');
+  }
 
   // Initialize API service
-  await ApiService().initSession();
+  try {
+    // Starts/refreshes backend session state used by the app services.
+    await ApiService().initSession();
+  } catch (e) {
+    debugPrint('API service init error: $e');
+  }
+
+  // Restore the demo-account session flag (if any) so AuthGuard still lets
+  // a previously-demo-logged-in user through after an app restart.
+  try {
+    await AuthService.loadDemoSessionFlag();
+  } catch (e) {
+    debugPrint('Demo session flag load error: $e');
+  }
 
   runApp(const MyApp());
 }
@@ -42,13 +88,18 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        // Global app UI/feature state.
         ChangeNotifierProvider(create: (_) => AppProvider()),
+        // User travel profile and onboarding selections.
         ChangeNotifierProvider(create: (_) => UserPreferencesProvider()),
+        // Hotels saved for comparison before booking.
+        ChangeNotifierProvider(create: (_) => HotelShortlistProvider()),
       ],
       child: GetMaterialApp(
         title: AppConfig.appName,
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
+          // Theme is centralized so screens stay visually consistent.
           useMaterial3: false, // Temporarily disable Material 3 to fix icons
           primaryColor: AppConfig.primaryColor,
           scaffoldBackgroundColor: AppConfig.backgroundColor,
@@ -275,38 +326,115 @@ class MyApp extends StatelessWidget {
         ),
         initialRoute: '/',
         getPages: [
-          GetPage(name: '/', page: () => const WelcomeScreen()),
-          GetPage(name: '/home', page: () => const HomeScreen()),
+          // Auth and entry routes.
+          GetPage(
+              name: '/',
+              page: () => const SelectionArea(child: WelcomeScreen())),
+          GetPage(
+              name: '/auth',
+              page: () {
+                final args = Get.arguments;
+                final tab = args is Map && args['tab'] == 'signup'
+                    ? AuthTab.signup
+                    : AuthTab.login;
+                final openTerms = args is Map && args['openTerms'] == true;
+                return SelectionArea(
+                  child: AuthScreen(
+                    initialTab: tab,
+                    openTermsOnStart: openTerms,
+                  ),
+                );
+              }),
+          GetPage(
+              name: '/login',
+              page: () => const SelectionArea(
+                  child: AuthScreen(initialTab: AuthTab.login))),
+          GetPage(
+              name: '/onboarding-loading',
+              page: () =>
+                  const SelectionArea(child: PostLoginVerificationScreen())),
+          GetPage(
+              name: '/signup',
+              page: () => const SelectionArea(
+                  child: AuthScreen(initialTab: AuthTab.signup))),
+          GetPage(
+              name: '/terms',
+              page: () => const SelectionArea(
+                      child: AuthScreen(
+                    initialTab: AuthTab.login,
+                    openTermsOnStart: true,
+                  ))),
+          GetPage(
+              name: '/account',
+              page: () => const SelectionArea(child: AccountScreen()),
+              middlewares: [AuthGuard()]),
+
+          // Main experience routes.
+          GetPage(
+              name: '/home',
+              page: () => const SelectionArea(child: HomeScreen()),
+              middlewares: [AuthGuard()]),
+          GetPage(
+              name: '/onboarding',
+              page: () => const SelectionArea(child: OnboardingScreen()),
+              middlewares: [AuthGuard()]),
           GetPage(
               name: '/destination-preferences',
-              page: () => const DestinationPreferencesScreen()),
+              page: () =>
+                  const SelectionArea(child: DestinationPreferencesScreen()),
+              middlewares: [AuthGuard()]),
           GetPage(
               name: '/budget-preferences',
-              page: () => const BudgetPreferencesScreen()),
+              page: () => const SelectionArea(child: BudgetPreferencesScreen()),
+              middlewares: [AuthGuard()]),
           GetPage(
               name: '/transport-preferences',
-              page: () => const TransportPreferencesScreen()),
+              page: () =>
+                  const SelectionArea(child: TransportPreferencesScreen()),
+              middlewares: [AuthGuard()]),
           GetPage(
               name: '/additional-context',
-              page: () => const AdditionalContextScreen()),
-          GetPage(name: '/ai-assistant', page: () => const AiAssistantScreen()),
+              page: () => const SelectionArea(child: AdditionalContextScreen()),
+              middlewares: [AuthGuard()]),
           GetPage(
-              name: '/search-hotels', page: () => const SearchHotelsScreen()),
+              name: '/ai-assistant',
+              page: () => const SelectionArea(child: AiAssistantScreen()),
+              middlewares: [AuthGuard()]),
           GetPage(
-              name: '/hotel-results', page: () => const HotelResultsScreen()),
-          GetPage(name: '/swipe', page: () => const SwipeScreen()),
-          GetPage(name: '/bookings', page: () => const BookingsScreen()),
+              name: '/search-hotels',
+              page: () => const SelectionArea(child: SearchHotelsScreen()),
+              middlewares: [AuthGuard()]),
+          GetPage(
+              name: '/hotel-results',
+              page: () => const SelectionArea(child: HotelResultsScreen()),
+              middlewares: [AuthGuard()]),
+          GetPage(
+              name: '/swipe',
+              page: () => const SelectionArea(child: SwipeScreen()),
+              middlewares: [AuthGuard()]),
+          GetPage(
+              name: '/bookings',
+              page: () => const SelectionArea(child: BookingsScreen()),
+              middlewares: [AuthGuard()]),
+
+          // Utility routes that require runtime arguments.
           GetPage(
             name: '/swipeable-hotels',
             page: () {
               final args = Get.arguments as Map<String, dynamic>?;
               final hotels = args?['hotels'] as List<dynamic>? ?? [];
-              return SwipeableHotelsScreen(
-                hotels: hotels.cast<Hotel>(),
+              return SelectionArea(
+                child: SwipeableHotelsScreen(
+                  hotels: hotels.cast<Hotel>(),
+                ),
               );
             },
+            middlewares: [AuthGuard()],
           ),
-          GetPage(name: '/cart', page: () => const CartScreen()),
+          GetPage(
+              name: '/cart',
+              page: () => const SelectionArea(child: CartScreen()),
+              middlewares: [AuthGuard()]),
         ],
         builder: (context, child) => child ?? const SizedBox(),
       ),

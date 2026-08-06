@@ -99,17 +99,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           icon:
                               const Icon(Icons.arrow_back, color: Colors.white),
                         ),
-                        const Expanded(
-                          child: Text(
-                            '4/4',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
+                        const Spacer(),
                         const SizedBox(width: 48),
                       ],
                     ),
@@ -143,7 +133,8 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                         // AI Context Input
                         Icon(Icons.smart_toy_outlined,
                             size: 40,
-                            color: AppConfig.primaryColor.withValues(alpha: 0.7)),
+                            color:
+                                AppConfig.primaryColor.withValues(alpha: 0.7)),
                         const SizedBox(height: 12),
                         const Text(
                           'Anything else our AI should know?',
@@ -339,7 +330,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                         medical: _selectedMedical.toList(),
                         languages: _selectedLanguage.toList(),
                       );
-                      Get.offAllNamed('/home');
+                      Get.toNamed('/home');
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.transparent,

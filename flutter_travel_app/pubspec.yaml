@@ -6,7 +6,7 @@ version: 1.0.0+1
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/icons/OIP.webp"
+  image_path: "assets/images/triplix_sticker.png"
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -14,10 +14,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  firebase_core: ^3.9.0
+  firebase_auth: ^5.5.0
   
   # UI Components
   cupertino_icons: ^1.0.2
-  google_fonts: ^6.1.0
+  google_fonts: ^8.1.0
   flutter_svg: ^2.0.9
   cached_network_image: ^3.3.0
   shimmer: ^3.0.0
@@ -78,6 +80,10 @@ dependencies:
   
   # Share
   share_plus: ^7.2.1
+  flutter_easy_recaptcha_v2: ^0.1.0
+
+  # Environment variables (.env)
+  flutter_dotenv: ^5.2.1
 
 dev_dependencies:
   flutter_test:
@@ -91,6 +97,7 @@ flutter:
   uses-material-design: true
   
   assets:
+    - .env
     - assets/images/
     - assets/icons/
     - assets/animations/

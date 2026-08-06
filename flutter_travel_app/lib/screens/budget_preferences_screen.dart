@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
+import '../utils/currency_input_formatter.dart';
 import '../widgets/user_progress_checkpoint.dart';
 import '../providers/user_preferences_provider.dart';
 
@@ -14,30 +16,102 @@ class BudgetPreferencesScreen extends StatefulWidget {
 }
 
 class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
-  bool _isTotalBudget = true;
   final TextEditingController _budgetController = TextEditingController();
-
-  final Map<String, double> _allocations = {
-    'accommodation': 0.0,
-    'transportation': 0.0,
-    'food': 0.0,
-    'activities': 0.0,
-    'shopping': 0.0,
-    'miscellaneous': 0.0,
-  };
-
-  final List<Map<String, dynamic>> _budgetCategories = [
-    {'id': 'accommodation', 'title': 'Accommodation', 'icon': Icons.hotel},
-    {'id': 'transportation', 'title': 'Transportation', 'icon': Icons.directions_car},
-    {'id': 'food', 'title': 'Food & Dining', 'icon': Icons.restaurant},
-    {'id': 'activities', 'title': 'Activities', 'icon': Icons.local_activity},
-    {'id': 'shopping', 'title': 'Shopping', 'icon': Icons.shopping_bag},
-    {'id': 'miscellaneous', 'title': 'Emergency & Misc', 'icon': Icons.warning},
+  late String _selectedCurrencyCode;
+  static const List<String> _supportedCurrencyCodes = [
+    'USD',
+    'EUR',
+    'GBP',
+    'INR',
+    'JPY',
+    'CNY',
+    'AUD',
+    'CAD',
+    'SGD',
+    'AED',
   ];
 
-  double get _enteredBudget {
+  double? get _enteredBudget {
     final val = double.tryParse(_budgetController.text.replaceAll(',', ''));
-    return (val != null && val > 0) ? val : 5000;
+    return (val != null && val > 0) ? val : null;
+  }
+
+  /// Re-applies the grouping separators after the currency dropdown changes
+  /// so switching from USD (100,000) to INR (1,00,000) reformats live.
+  void _reformatBudgetForCurrency() {
+    final current = _enteredBudget;
+    if (current == null) return;
+    final formatted =
+        groupedNumberFormat(_selectedCurrencyCode).format(current.round());
+    _budgetController.value = TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+
+  String _defaultCurrencyForLocale(Locale locale) {
+    const countryToCurrency = {
+      'US': 'USD',
+      'CA': 'CAD',
+      'GB': 'GBP',
+      'IE': 'EUR',
+      'FR': 'EUR',
+      'DE': 'EUR',
+      'ES': 'EUR',
+      'IT': 'EUR',
+      'NL': 'EUR',
+      'PT': 'EUR',
+      'IN': 'INR',
+      'JP': 'JPY',
+      'CN': 'CNY',
+      'AU': 'AUD',
+      'NZ': 'NZD',
+      'SG': 'SGD',
+      'AE': 'AED',
+    };
+
+    final countryCode = locale.countryCode?.toUpperCase();
+    if (countryCode != null && countryToCurrency.containsKey(countryCode)) {
+      return countryToCurrency[countryCode]!;
+    }
+
+    try {
+      final format =
+          NumberFormat.simpleCurrency(locale: locale.toLanguageTag());
+      final code = format.currencyName;
+      if (code != null && code.isNotEmpty) {
+        return code.toUpperCase();
+      }
+    } catch (_) {
+      // Fall through to USD.
+    }
+    return 'USD';
+  }
+
+  String _currencySymbol(String code) {
+    try {
+      final format = NumberFormat.simpleCurrency(name: code);
+      if (format.currencySymbol.isNotEmpty) {
+        return format.currencySymbol;
+      }
+    } catch (_) {
+      // Fall through to code.
+    }
+    return code;
+  }
+
+  String _formatBudgetAmount(double amount, {bool includeCode = false}) {
+    final symbol = _currencySymbol(_selectedCurrencyCode);
+    final codeSuffix = includeCode ? ' $_selectedCurrencyCode' : '';
+    final grouped = groupedNumberFormat(_selectedCurrencyCode).format(amount.round());
+    return '$symbol$grouped$codeSuffix';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final locale = WidgetsBinding.instance.platformDispatcher.locale;
+    _selectedCurrencyCode = _defaultCurrencyForLocale(locale);
   }
 
   @override
@@ -70,23 +144,13 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               icon: const Icon(Icons.arrow_back,
                                   color: Colors.white),
                             ),
-                            const Expanded(
-                              child: Text(
-                                '2/4',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
+                            const Spacer(),
                             const SizedBox(width: 48),
                           ],
                         ),
                         const SizedBox(height: 16),
                         const Text(
-                          'Budget & Allocation',
+                          'What\'s your budget?',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 24,
@@ -111,82 +175,6 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Budget Type Toggle
-                            const Text(
-                              'Budget Type',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.grey[100],
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: GestureDetector(
-                                      onTap: () =>
-                                          setState(() => _isTotalBudget = true),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 12),
-                                        decoration: BoxDecoration(
-                                          color: _isTotalBudget
-                                              ? AppConfig.primaryColor
-                                              : Colors.transparent,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          'Total Budget',
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            color: _isTotalBudget
-                                                ? Colors.white
-                                                : Colors.black87,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: GestureDetector(
-                                      onTap: () => setState(
-                                          () => _isTotalBudget = false),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 12),
-                                        decoration: BoxDecoration(
-                                          color: !_isTotalBudget
-                                              ? AppConfig.primaryColor
-                                              : Colors.transparent,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          'Per Person',
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            color: !_isTotalBudget
-                                                ? Colors.white
-                                                : Colors.black87,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-
                             // Budget Input
                             const Text(
                               'Enter Amount',
@@ -201,17 +189,33 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               children: [
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 16),
+                                      horizontal: 12),
                                   decoration: BoxDecoration(
                                     color: Colors.grey[100],
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  child: const Text(
-                                    'INR',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.black87,
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<String>(
+                                      value: _selectedCurrencyCode,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                      icon: const Icon(Icons.arrow_drop_down),
+                                      items:
+                                          _supportedCurrencyCodes.map((code) {
+                                        return DropdownMenuItem<String>(
+                                          value: code,
+                                          child: Text(code),
+                                        );
+                                      }).toList(),
+                                      onChanged: (value) {
+                                        if (value == null) return;
+                                        setState(() =>
+                                            _selectedCurrencyCode = value);
+                                        _reformatBudgetForCurrency();
+                                      },
                                     ),
                                   ),
                                 ),
@@ -225,9 +229,14 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                     child: TextField(
                                       controller: _budgetController,
                                       keyboardType: TextInputType.number,
+                                      inputFormatters: [
+                                        CurrencyInputFormatter(
+                                          currencyCode: _selectedCurrencyCode,
+                                        ),
+                                      ],
                                       onChanged: (_) => setState(() {}),
                                       decoration: const InputDecoration(
-                                        hintText: '5,000',
+                                        hintText: 'Enter your budget',
                                         border: InputBorder.none,
                                         contentPadding: EdgeInsets.symmetric(
                                           horizontal: 16,
@@ -239,13 +248,11 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                 ),
                               ],
                             ),
-
                             const SizedBox(height: 32),
-                            const Divider(),
-                            const SizedBox(height: 16),
 
-                            // Budget Allocation Section
+                            // Total Budget Summary
                             Container(
+                              width: double.infinity,
                               padding: const EdgeInsets.all(20),
                               decoration: BoxDecoration(
                                 gradient: AppConfig.primaryGradient,
@@ -255,11 +262,15 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                 children: [
                                   const Text(
                                     'Total Trip Budget',
-                                    style: TextStyle(color: Colors.white, fontSize: 16),
+                                    style: TextStyle(
+                                        color: Colors.white, fontSize: 16),
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    '₹${_enteredBudget.toStringAsFixed(0)} INR',
+                                    _enteredBudget != null
+                                        ? _formatBudgetAmount(_enteredBudget!,
+                                            includeCode: true)
+                                        : 'Not set',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 32,
@@ -267,123 +278,6 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                     ),
                                   ),
                                 ],
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-
-                            const Text(
-                              'Budget Allocation',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-
-                            // Real-time remaining budget tracker
-                            Builder(
-                              builder: (context) {
-                                final totalAllocated = _allocations.values.fold<double>(0, (sum, v) => sum + v);
-                                final allocatedAmount = _enteredBudget * totalAllocated;
-                                final remaining = _enteredBudget - allocatedAmount;
-                                final isNegative = remaining < 0;
-                                return Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                                  margin: const EdgeInsets.only(bottom: 16),
-                                  decoration: BoxDecoration(
-                                    color: isNegative ? Colors.red.shade50 : Colors.green.shade50,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: isNegative ? Colors.red.shade300 : Colors.green.shade300,
-                                      width: 1.5,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Icon(
-                                            isNegative ? Icons.warning_amber_rounded : Icons.account_balance_wallet,
-                                            color: isNegative ? Colors.red : Colors.green.shade700,
-                                            size: 20,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            'Remaining',
-                                            style: TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w600,
-                                              color: isNegative ? Colors.red.shade700 : Colors.green.shade700,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Text(
-                                        '${isNegative ? "-" : ""}₹${remaining.abs().toStringAsFixed(0)}',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: isNegative ? Colors.red : Colors.green.shade700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-
-                            ..._budgetCategories
-                                .map((category) => _buildBudgetSlider(category)),
-                            const SizedBox(height: 24),
-
-                            // Allocation Summary
-                            const Text(
-                              'Allocation Summary',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[50],
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                children: _budgetCategories.map((category) {
-                                  final percentage = _allocations[category['id']]! * 100;
-                                  final amount = _enteredBudget * _allocations[category['id']]!;
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 4),
-                                    child: Row(
-                                      children: [
-                                        Icon(category['icon'] as IconData,
-                                            size: 16, color: Colors.grey[600]),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            category['title'] as String,
-                                            style: const TextStyle(fontSize: 14),
-                                          ),
-                                        ),
-                                        Text(
-                                          '${percentage.toStringAsFixed(0)}% / ₹${amount.toStringAsFixed(0)}',
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppConfig.primaryColor,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }).toList(),
                               ),
                             ),
                           ],
@@ -404,8 +298,22 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                       ),
                       child: ElevatedButton(
                         onPressed: () {
-                          final provider = Provider.of<UserPreferencesProvider>(context, listen: false);
-                          provider.updateBudget(_enteredBudget);
+                          final enteredBudget = _enteredBudget;
+                          if (enteredBudget == null) {
+                            Get.snackbar(
+                              'Budget required',
+                              'Please enter a valid budget amount.',
+                              snackPosition: SnackPosition.BOTTOM,
+                            );
+                            return;
+                          }
+                          final provider = Provider.of<UserPreferencesProvider>(
+                              context,
+                              listen: false);
+                          provider.updateBudget(
+                            enteredBudget,
+                            currencyCode: _selectedCurrencyCode,
+                          );
                           Get.toNamed('/transport-preferences');
                         },
                         style: ElevatedButton.styleFrom(
@@ -436,73 +344,5 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
         ],
       ),
     );
-  }
-
-  Widget _buildBudgetSlider(Map<String, dynamic> category) {
-    final categoryId = category['id'] as String;
-    final currentValue = _allocations[categoryId]!;
-    final amount = _enteredBudget * currentValue;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(category['icon'] as IconData, size: 20, color: AppConfig.primaryColor),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  category['title'] as String,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-              ),
-              Text(
-                '${(currentValue * 100).toStringAsFixed(0)}% • ₹${amount.toStringAsFixed(0)}',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppConfig.primaryColor,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          SliderTheme(
-            data: SliderThemeData(
-              activeTrackColor: AppConfig.primaryColor,
-              inactiveTrackColor: Colors.grey[300],
-              thumbColor: AppConfig.primaryColor,
-              overlayColor: AppConfig.primaryColor.withValues(alpha: 0.2),
-              trackHeight: 4,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-            ),
-            child: Slider(
-              value: currentValue,
-              min: 0.0,
-              max: 1.0,
-              divisions: 100,
-              onChanged: (value) => _updateAllocation(categoryId, value),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _updateAllocation(String categoryId, double newValue) {
-    setState(() {
-      _allocations[categoryId] = newValue;
-    });
   }
 }

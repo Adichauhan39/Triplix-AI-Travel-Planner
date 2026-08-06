@@ -1,21 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
+import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
+import '../models/hotel.dart';
 import '../services/python_adk_service.dart';
 import '../services/voice_input_service.dart';
 import '../services/trip_photo_service.dart';
 import '../providers/user_preferences_provider.dart';
+import '../widgets/triplix_logo.dart';
 import 'swipe_screen.dart';
 import 'bookings_screen.dart';
 import 'mock_booking_screen.dart';
 import 'route_map_screen.dart';
 import 'trip_reel_screen.dart';
+import 'trip_itinerary_screen.dart';
+import 'account_screen.dart';
+import 'search_hotels_screen.dart';
+import 'search_flights_screen.dart';
+import 'destination_preferences_screen.dart';
+import 'transport_preferences_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,14 +43,68 @@ class _HomeScreenState extends State<HomeScreen> {
     const BookingsScreen(),
     const BudgetTab(),
     const ProfileTab(),
+    const AccountScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _screens,
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: _selectedIndex,
+            children: _screens,
+          ),
+          Positioned(
+            top: 10,
+            right: 12,
+            child: SafeArea(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => setState(() => _selectedIndex = 5),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x22000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _selectedIndex == 5
+                              ? Icons.person
+                              : Icons.person_outline,
+                          color: AppConfig.primaryColor,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Account',
+                          style: TextStyle(
+                            color: AppConfig.primaryColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
@@ -73,6 +137,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.auto_awesome_mosaic_outlined),
             activeIcon: Icon(Icons.auto_awesome_mosaic),
             label: 'Reel',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_outline),
+            activeIcon: Icon(Icons.person),
+            label: 'Account',
           ),
         ],
       ),
@@ -107,6 +176,11 @@ class _HomeTabState extends State<HomeTab> {
       TextEditingController();
 
   final PythonADKService _pythonADK = PythonADKService();
+  final FocusNode _fromFocusNode = FocusNode();
+  Timer? _fromSuggestionDebounce;
+  List<Map<String, String>> _fromSuggestions = [];
+  bool _showFromSuggestions = false;
+  String _lastFromQuery = '';
 
   // Add a dummy state variable to force rebuilds
   int _rebuildCounter = 0;
@@ -130,8 +204,8 @@ class _HomeTabState extends State<HomeTab> {
       _lastGeneratedItinerary; // Store last itinerary for modification requests
   Map<String, dynamic>? _lastGeneratedItineraryData;
 
-  // MakeMyTrip-style form state
-  bool _showTripForm = true; // Show trip form initially
+  // MakeMyTrip-style form state (form removed — kept for AI chat context fallback)
+  bool _showTripForm = false;
   int _travelers = 1;
   int _rooms = 1;
 
@@ -142,7 +216,7 @@ class _HomeTabState extends State<HomeTab> {
     _messages.add({
       'sender': 'triplix',
       'message':
-          'Hi! I\'m Triplix, your AI travel assistant. Fill in your trip details above and tap Start Itinerary to get started!',
+          'Hi! I\'m Triplix, your AI travel assistant. Ask me anything about your trip.',
       'type': 'text',
       'timestamp': DateTime.now().toString(),
     });
@@ -154,10 +228,19 @@ class _HomeTabState extends State<HomeTab> {
         _stayCityController.text = prefs.destination!;
       }
     });
+    _fromFocusNode.addListener(() {
+      if (!_fromFocusNode.hasFocus && mounted) {
+        setState(() {
+          _showFromSuggestions = false;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
+    _fromSuggestionDebounce?.cancel();
+    _fromFocusNode.dispose();
     _queryController.dispose();
     _queryFocusNode.dispose(); // Dispose focus node
     _fromLocationController.dispose();
@@ -167,6 +250,97 @@ class _HomeTabState extends State<HomeTab> {
     _additionalQueryController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _updateFromSuggestions(String query) {
+    final normalized = query.trim().toLowerCase();
+    if (normalized.length < 2) {
+      _fromSuggestionDebounce?.cancel();
+      if (!mounted) return;
+      setState(() {
+        _fromSuggestions = [];
+        _showFromSuggestions = false;
+      });
+      return;
+    }
+
+    if (normalized == _lastFromQuery) return;
+
+    _fromSuggestionDebounce?.cancel();
+    _fromSuggestionDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () => _loadFromSuggestions(query),
+    );
+  }
+
+  Future<void> _loadFromSuggestions(String query) async {
+    final q = query.trim().toLowerCase();
+    if (q.length < 2) return;
+
+    _lastFromQuery = q;
+    final suggestions = await _pythonADK.getDestinationSuggestions(
+      query: query,
+      limit: 8,
+      preferPlaces: true,
+    );
+
+    if (!mounted || _fromLocationController.text.trim().toLowerCase() != q) {
+      return;
+    }
+
+    setState(() {
+      _fromSuggestions = suggestions;
+      _showFromSuggestions = suggestions.isNotEmpty && _fromFocusNode.hasFocus;
+    });
+  }
+
+  String _formatLocationLabel({
+    required String city,
+    required String country,
+    required String description,
+  }) {
+    final trimmedCity = city.trim();
+    final trimmedCountry = country.trim();
+    final trimmedDescription = description.trim();
+
+    if (trimmedDescription.isNotEmpty) {
+      final descLower = trimmedDescription.toLowerCase();
+      final cityLower = trimmedCity.toLowerCase();
+
+      if (descLower.contains(cityLower)) {
+        return trimmedDescription;
+      }
+
+      return '$trimmedCity, $trimmedDescription';
+    }
+
+    if (trimmedCountry.isNotEmpty) {
+      return '$trimmedCity, $trimmedCountry';
+    }
+    return trimmedCity;
+  }
+
+  void _selectFromSuggestion(Map<String, String> suggestion) {
+    final city = suggestion['city'] ?? '';
+    final country = suggestion['country'] ?? '';
+    final description = suggestion['description'] ?? '';
+    final formatted = _formatLocationLabel(
+      city: city,
+      country: country,
+      description: description,
+    );
+
+    setState(() {
+      _fromLocationController.text = formatted;
+      _fromLocationController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _fromLocationController.text.length),
+      );
+      _fromSuggestions = [];
+      _showFromSuggestions = false;
+      _lastFromQuery = '';
+    });
+
+    FocusScope.of(context).unfocus();
   }
 
   void _scrollToBottom() {
@@ -242,80 +416,44 @@ class _HomeTabState extends State<HomeTab> {
             '🏨 [HomeScreen] hotels count: ${(hotelResponse['data']['hotels'] as List).length}');
       }
 
+      final List<Hotel> hotelCards = [];
+      if (hotelResponse['success'] == true && hotelResponse['data'] != null) {
+        final hotels =
+            (hotelResponse['data']['hotels'] as List?)?.take(8).toList() ?? [];
+        print(
+            '🏨 [HomeScreen] Found ${hotels.length} hotels for one-page card board');
+
+        for (final item in hotels) {
+          if (item is Map) {
+            try {
+              hotelCards.add(Hotel.fromJson(Map<String, dynamic>.from(item)));
+            } catch (e) {
+              print('⚠️ [HomeScreen] Failed to parse hotel card: $e');
+            }
+          }
+        }
+      }
+
       setState(() {
         _isTyping = false;
         _messages.add({
           'sender': 'triplix',
-          'message': '🏨 Step 1/3: Let\'s find your perfect accommodation!\n\n'
-              '👉 Swipe RIGHT on up to 3 hotels you like\n'
-              '👈 Swipe LEFT to skip\n'
-              '💡 Selecting 2-3 gives you backup options!',
+          'message': hotelCards.isNotEmpty
+              ? '🏨 Step 1/3: I opened your hotel recommendations in one page.\n\n'
+                  '✅ Keep the hotels you like\n'
+                  '🟥 Move not-interested hotels to the red section.'
+              : 'I could not find hotels right now. Try adjusting your city or budget.',
           'type': 'text',
           'timestamp': DateTime.now().toString(),
         });
-
-        // Add hotel suggestions for swiping
-        if (hotelResponse['success'] == true && hotelResponse['data'] != null) {
-          final hotels =
-              (hotelResponse['data']['hotels'] as List?)?.take(5).toList() ??
-                  [];
-          print(
-              '🏨 [HomeScreen] Found ${hotels.length} hotels to show as swipe cards');
-          if (hotels.isNotEmpty) {
-            _messages.add({
-              'sender': 'triplix',
-              'message': 'Swipe through these amazing hotels:',
-              'type': 'suggestions',
-              'suggestions': hotels
-                  .map((hotel) => <String, dynamic>{
-                        'id': hotel['name']?.toString() ??
-                            'hotel_${hotels.indexOf(hotel)}',
-                        'type': 'hotel',
-                        'title': hotel['name']?.toString() ?? 'Hotel',
-                        'description':
-                            'Rating: ${hotel['rating'] ?? 'N/A'} ⭐\n${(hotel['amenities'] is List) ? (hotel['amenities'] as List).take(3).join(', ') : (hotel['amenities']?.toString() ?? '')}',
-                        'price': hotel['price_per_night'] ?? hotel['price'],
-                        'location': hotel['location']?.toString() ??
-                            hotel['city']?.toString() ??
-                            '',
-                        'rating': hotel['rating']?.toString() ?? '4.0',
-                        'image': hotel['image_url']?.toString() ??
-                            hotel['image']?.toString() ??
-                            hotel['photo']?.toString() ??
-                            'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&h=600&fit=crop',
-                        'stage': 'hotels',
-                      })
-                  .toList(),
-              'timestamp': DateTime.now().toString(),
-            });
-            _currentSuggestions = hotels
-                .map((hotel) => <String, dynamic>{
-                      'id': hotel['name']?.toString() ??
-                          'hotel_${hotels.indexOf(hotel)}',
-                      'type': 'hotel',
-                      'title': hotel['name']?.toString() ?? 'Hotel',
-                      'description':
-                          'Rating: ${hotel['rating'] ?? 'N/A'} ⭐\n${(hotel['amenities'] is List) ? (hotel['amenities'] as List).take(3).join(', ') : (hotel['amenities']?.toString() ?? '')}',
-                      'price': hotel['price_per_night'] ?? hotel['price'],
-                      'location': hotel['location']?.toString() ??
-                          hotel['city']?.toString() ??
-                          '',
-                      'rating': hotel['rating']?.toString() ?? '4.0',
-                      'image': hotel['image_url']?.toString() ??
-                          hotel['image']?.toString() ??
-                          hotel['photo']?.toString() ??
-                          'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&h=600&fit=crop',
-                      'stage': 'hotels',
-                    })
-                .toList();
-          } else {
-            print('⚠️ [HomeScreen] Hotels list was empty');
-          }
-        } else {
-          print(
-              '⚠️ [HomeScreen] hotelResponse success=${hotelResponse['success']}, data=${hotelResponse['data']}');
-        }
       });
+
+      if (hotelCards.isNotEmpty) {
+        Future.microtask(() {
+          if (!mounted) return;
+          Get.toNamed('/swipeable-hotels', arguments: {'hotels': hotelCards});
+        });
+      }
       _scrollToBottom();
     } catch (e) {
       print('❌ [HomeScreen] _processTravelDetails error: $e');
@@ -422,14 +560,20 @@ class _HomeTabState extends State<HomeTab> {
         'user_preferences': {
           'budget': userPrefs.budget,
           'destination': userPrefs.destination,
-          'from': _fromLocationController.text,
-          'to': _toLocationController.text,
-          'stay_city': _stayCityController.text,
+          'from': userPrefs.origin ?? _fromLocationController.text,
+          'to': userPrefs.destination ?? _toLocationController.text,
+          'stay_city': userPrefs.destination ?? _stayCityController.text,
           'dates': _datesController.text,
-          'duration_days': _startDate != null && _endDate != null
-              ? _endDate!.difference(_startDate!).inDays + 1
-              : null,
-          'travelers': _travelers,
+          'duration_days':
+              userPrefs.checkInDate != null && userPrefs.checkOutDate != null
+                  ? userPrefs.checkOutDate!
+                          .difference(userPrefs.checkInDate!)
+                          .inDays +
+                      1
+                  : (_startDate != null && _endDate != null
+                      ? _endDate!.difference(_startDate!).inDays + 1
+                      : null),
+          'travelers': userPrefs.numberOfPeople ?? _travelers,
           'activities':
               userPrefs.selectedActivities.toList(), // Convert to list
           'transport': userPrefs.selectedTransport.toList(), // Convert to list
@@ -1464,10 +1608,9 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                         color: Colors.white.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Icon(
-                        Icons.airplanemode_active,
-                        color: Colors.white,
+                      child: const TriplixLogo(
                         size: 24,
+                        borderRadius: BorderRadius.all(Radius.circular(12)),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -1480,19 +1623,69 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                       ),
                     ),
                     const Spacer(),
-                    if (!_showTripForm)
-                      IconButton(
-                        onPressed: () => setState(() => _showTripForm = true),
-                        icon: const Icon(Icons.flight_takeoff,
-                            color: Colors.white),
-                        tooltip: 'Start Itinerary',
-                      ),
                   ],
                 ),
               ),
 
-              // ── MakeMyTrip-style Trip Search Form ──
-              if (_showTripForm) _buildTripSearchForm(),
+              // Quick Access Sections: Hotels / Destination / Travel Mode
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: Column(
+                  children: [
+                    _buildQuickAccessRow(
+                      icon: Icons.hotel,
+                      title: 'Hotels',
+                      subtitle: 'Find and book stays',
+                      color: AppConfig.successColor,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SearchHotelsScreen(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildQuickAccessRow(
+                      icon: Icons.flight,
+                      title: 'Flights',
+                      subtitle: 'Search and book flights',
+                      color: Colors.blue,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SearchFlightsScreen(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildQuickAccessRow(
+                      icon: Icons.place,
+                      title: 'Destination',
+                      subtitle: 'Choose where to go',
+                      color: AppConfig.primaryColor,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const DestinationPreferencesScreen(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildQuickAccessRow(
+                      icon: Icons.directions_transit,
+                      title: 'Travel Mode',
+                      subtitle: 'Flight, train, bus or cab',
+                      color: AppConfig.warningColor,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const TransportPreferencesScreen(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
               // Chat Messages
               Expanded(
@@ -1592,6 +1785,74 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
     );
   }
 
+  Widget _buildQuickAccessRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: AppConfig.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppConfig.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: Colors.grey[400]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // MakeMyTrip-Style Trip Search Form
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1628,6 +1889,10 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                         hint: 'City',
                         icon: Icons.flight_takeoff,
                         iconColor: AppConfig.successColor,
+                        focusNode: _fromFocusNode,
+                        onTap: () => _updateFromSuggestions(
+                            _fromLocationController.text),
+                        onChanged: _updateFromSuggestions,
                       ),
                     ),
                     // Swap button
@@ -1666,6 +1931,80 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                     ),
                   ],
                 ),
+                if (_showFromSuggestions && _fromSuggestions.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppConfig.borderColor),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x11000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: _fromSuggestions.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final suggestion = entry.value;
+                        final city = suggestion['city'] ?? '';
+                        final country = suggestion['country'] ?? '';
+                        final description = suggestion['description'] ?? '';
+                        final locationLabel = _formatLocationLabel(
+                          city: city,
+                          country: country,
+                          description: description,
+                        );
+
+                        return InkWell(
+                          onTap: () => _selectFromSuggestion(suggestion),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              border: index == _fromSuggestions.length - 1
+                                  ? null
+                                  : Border(
+                                      bottom: BorderSide(
+                                        color: Colors.grey[200]!,
+                                      ),
+                                    ),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.location_on,
+                                  size: 16,
+                                  color: AppConfig.primaryColor,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    locationLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: AppConfig.textPrimary,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
 
                 // Date + Stay Row
@@ -1839,6 +2178,9 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
     required String hint,
     required IconData icon,
     Color? iconColor,
+    FocusNode? focusNode,
+    ValueChanged<String>? onChanged,
+    VoidCallback? onTap,
   }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1863,6 +2205,9 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                   height: 22,
                   child: TextField(
                     controller: controller,
+                    focusNode: focusNode,
+                    onChanged: onChanged,
+                    onTap: onTap,
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -2092,23 +2437,17 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                 topRight: Radius.circular(20),
               ),
             ),
-            child: Row(
+            child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: AppConfig.primaryColor,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.smart_toy,
-                    color: Colors.white,
-                    size: 16,
-                  ),
+                TriplixLogo(
+                  size: 16,
+                  padding: EdgeInsets.all(4),
+                  backgroundColor: Colors.white,
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
                 ),
-                const SizedBox(width: 8),
-                const Text(
+                SizedBox(width: 8),
+                Text(
                   'Triplix AI',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
@@ -2160,14 +2499,15 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
           if (message['is_itinerary'] == true)
             Padding(
               padding: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
-              child: Row(
+              child: Column(
                 children: [
-                  Expanded(
+                  SizedBox(
+                    width: double.infinity,
                     child: OutlinedButton.icon(
                       onPressed: () =>
-                          _showQRShareDialog(message['message'] ?? ''),
-                      icon: const Icon(Icons.qr_code_2, size: 18),
-                      label: const Text('Share Trip QR'),
+                          _openItineraryTimeline(message['message'] ?? ''),
+                      icon: const Icon(Icons.timeline, size: 18),
+                      label: const Text('View Itinerary Timeline'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppConfig.primaryColor,
                         side: const BorderSide(color: AppConfig.primaryColor),
@@ -2178,22 +2518,45 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () =>
-                          _shareItineraryText(message['message'] ?? ''),
-                      icon: const Icon(Icons.share, size: 18),
-                      label: const Text('Share Text'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppConfig.accentColor,
-                        side: const BorderSide(color: AppConfig.accentColor),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () =>
+                              _showQRShareDialog(message['message'] ?? ''),
+                          icon: const Icon(Icons.qr_code_2, size: 18),
+                          label: const Text('Share Trip QR'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppConfig.primaryColor,
+                            side:
+                                const BorderSide(color: AppConfig.primaryColor),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () =>
+                              _shareItineraryText(message['message'] ?? ''),
+                          icon: const Icon(Icons.share, size: 18),
+                          label: const Text('Share Text'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppConfig.accentColor,
+                            side:
+                                const BorderSide(color: AppConfig.accentColor),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -4350,6 +4713,108 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
     );
   }
 
+  void _openItineraryTimeline(String itineraryText) {
+    final from = _fromLocationController.text.trim();
+    final to = _toLocationController.text.trim();
+    final title = (from.isNotEmpty && to.isNotEmpty)
+        ? '$from to $to'
+        : 'My Trip Itinerary';
+
+    final dateRange = _buildDateRangeLabel();
+    final days = _buildTimelineDays(itineraryText);
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TripItineraryScreen(
+          tripTitle: title,
+          dateRange: dateRange,
+          days: days,
+        ),
+      ),
+    );
+  }
+
+  String _buildDateRangeLabel() {
+    if (_startDate != null && _endDate != null) {
+      return '${_startDate!.day}/${_startDate!.month}/${_startDate!.year} - '
+          '${_endDate!.day}/${_endDate!.month}/${_endDate!.year}';
+    }
+    return 'Dates not set';
+  }
+
+  List<Map<String, String>> _buildTimelineDays(String itineraryText) {
+    final List<Map<String, String>> days = [];
+
+    final regex = RegExp(
+      r'(?im)^\s*(?:\*\*)?(day\s*\d+)(?:\*\*)?\s*[:\-]?\s*(.*)$',
+    );
+    final matches = regex.allMatches(itineraryText).toList();
+
+    if (matches.isNotEmpty) {
+      for (int i = 0; i < matches.length; i++) {
+        final match = matches[i];
+        final dayLabel = _toTitleCase(match.group(1) ?? 'Day ${i + 1}');
+        final titleText = (match.group(2) ?? '').trim();
+
+        final start = match.end;
+        final end = (i < matches.length - 1)
+            ? matches[i + 1].start
+            : itineraryText.length;
+        final body = itineraryText.substring(start, end).trim();
+
+        final desc = _cleanItinerarySnippet(body);
+        days.add({
+          'date': dayLabel,
+          'title': titleText.isNotEmpty ? titleText : 'Plan',
+          'desc': desc.isNotEmpty ? desc : 'Activities planned for this day',
+        });
+      }
+    }
+
+    if (days.isEmpty && _acceptedDestinations.isNotEmpty) {
+      for (int i = 0; i < _acceptedDestinations.length; i++) {
+        final destination = _acceptedDestinations[i];
+        days.add({
+          'date': 'Day ${i + 1}',
+          'title': destination['title']?.toString() ?? 'Destination',
+          'desc': destination['description']?.toString() ??
+              'Explore local highlights and attractions.',
+        });
+      }
+    }
+
+    if (days.isEmpty) {
+      return [
+        {
+          'date': 'Day 1',
+          'title': 'Arrival & Orientation',
+          'desc': 'Check-in and explore the nearby area.',
+        },
+      ];
+    }
+
+    return days;
+  }
+
+  String _cleanItinerarySnippet(String text) {
+    return text
+        .replaceAll(RegExp(r'\*+'), '')
+        .replaceAll(RegExp(r'^[-•\d\.)\s]+', multiLine: true), '')
+        .replaceAll('\n', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  String _toTitleCase(String input) {
+    final parts = input.split(RegExp(r'\s+'));
+    return parts
+        .map((word) => word.isEmpty
+            ? word
+            : '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}')
+        .join(' ');
+  }
+
   void _shareItineraryText(String itineraryText) {
     final from = _fromLocationController.text;
     final to = _toLocationController.text;
@@ -5812,8 +6277,7 @@ class _BudgetTabState extends State<BudgetTab>
 
     final match = expenseMatch ?? altMatch;
     if (match != null) {
-      final amount =
-          double.tryParse(match.group(1)!.replaceAll(',', ''));
+      final amount = double.tryParse(match.group(1)!.replaceAll(',', ''));
       final desc = match.group(2)!.trim();
       if (amount != null && amount > 0) {
         final category = _inferCategory(desc);
@@ -5835,7 +6299,9 @@ class _BudgetTabState extends State<BudgetTab>
         d.contains('room') ||
         d.contains('stay') ||
         d.contains('resort') ||
-        d.contains('hostel')) return 'Accommodation';
+        d.contains('hostel')) {
+      return 'Accommodation';
+    }
     if (d.contains('flight') ||
         d.contains('train') ||
         d.contains('bus') ||
@@ -5843,7 +6309,9 @@ class _BudgetTabState extends State<BudgetTab>
         d.contains('cab') ||
         d.contains('uber') ||
         d.contains('ola') ||
-        d.contains('travel')) return 'Transportation';
+        d.contains('travel')) {
+      return 'Transportation';
+    }
     if (d.contains('food') ||
         d.contains('restaurant') ||
         d.contains('lunch') ||
@@ -5851,19 +6319,25 @@ class _BudgetTabState extends State<BudgetTab>
         d.contains('breakfast') ||
         d.contains('eat') ||
         d.contains('cafe') ||
-        d.contains('meal')) return 'Food & Dining';
+        d.contains('meal')) {
+      return 'Food & Dining';
+    }
     if (d.contains('ticket') ||
         d.contains('entry') ||
         d.contains('tour') ||
         d.contains('activity') ||
         d.contains('park') ||
         d.contains('museum') ||
-        d.contains('trek')) return 'Activities';
+        d.contains('trek')) {
+      return 'Activities';
+    }
     if (d.contains('shop') ||
         d.contains('souvenir') ||
         d.contains('market') ||
         d.contains('buy') ||
-        d.contains('gift')) return 'Shopping';
+        d.contains('gift')) {
+      return 'Shopping';
+    }
     return 'Emergency';
   }
 
@@ -5903,7 +6377,7 @@ class _BudgetTabState extends State<BudgetTab>
     if (msg.contains('split') ||
         msg.contains('divide') ||
         msg.contains('per person')) {
-      return '👥 Group Split (${_groupSize} people)\n\n'
+      return '👥 Group Split ($_groupSize people)\n\n'
           '💰 Total budget: ₹${_totalBudget.toStringAsFixed(0)}\n'
           '👤 Per person: ₹${_perPerson.toStringAsFixed(0)}\n'
           '💸 Spent per person: ₹${_spentPerPerson.toStringAsFixed(0)}\n'
@@ -5963,7 +6437,7 @@ class _BudgetTabState extends State<BudgetTab>
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: selectedCategory,
+                initialValue: selectedCategory,
                 decoration: InputDecoration(
                   labelText: 'Category',
                   prefixIcon: const Icon(Icons.category),
@@ -6067,7 +6541,7 @@ class _BudgetTabState extends State<BudgetTab>
         if (_isBudgetSet)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               gradient: AppConfig.primaryGradient,
             ),
             child: Row(
@@ -6600,7 +7074,8 @@ class _ProfileTabState extends State<ProfileTab> {
           // Stats bar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(gradient: AppConfig.primaryGradient),
+            decoration:
+                const BoxDecoration(gradient: AppConfig.primaryGradient),
             child: Row(
               children: [
                 _buildStatChip(Icons.photo_library, '${all.length}', 'Total'),
@@ -6683,7 +7158,7 @@ class _ProfileTabState extends State<ProfileTab> {
                           style: TextStyle(
                               fontSize: 20, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
-                      Text(
+                      const Text(
                         'Capture or upload your trip photos. AI will automatically filter out documents, blurry images, and bad photos — keeping only the best travel moments for your highlight reel.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
@@ -6716,7 +7191,7 @@ class _ProfileTabState extends State<ProfileTab> {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      Text(
+                      const Text(
                         'Loads 10 sample photos (8 travel + 2 documents)\nAI will approve travel photos & filter out documents',
                         textAlign: TextAlign.center,
                         style: TextStyle(
@@ -6974,38 +7449,44 @@ class _ProfileTabState extends State<ProfileTab> {
   void _showPhotoActions(TripPhoto photo) {
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('Delete Photo'),
-              onTap: () {
-                _photoService.removePhoto(photo.id);
-                Navigator.pop(ctx);
-              },
-            ),
-            if (photo.status == PhotoStatus.rejected)
+      builder: (ctx) => Material(
+        color: Theme.of(ctx).colorScheme.surface,
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
               ListTile(
-                leading: const Icon(Icons.check_circle,
-                    color: AppConfig.successColor),
-                title: const Text('Override: Include in Reel'),
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text('Delete Photo'),
                 onTap: () {
-                  _photoService.overrideStatus(photo.id, PhotoStatus.approved);
+                  _photoService.removePhoto(photo.id);
                   Navigator.pop(ctx);
                 },
               ),
-            if (photo.status == PhotoStatus.approved)
-              ListTile(
-                leading: const Icon(Icons.cancel, color: AppConfig.errorColor),
-                title: const Text('Override: Exclude from Reel'),
-                onTap: () {
-                  _photoService.overrideStatus(photo.id, PhotoStatus.rejected);
-                  Navigator.pop(ctx);
-                },
-              ),
-          ],
+              if (photo.status == PhotoStatus.rejected)
+                ListTile(
+                  leading: const Icon(Icons.check_circle,
+                      color: AppConfig.successColor),
+                  title: const Text('Override: Include in Reel'),
+                  onTap: () {
+                    _photoService.overrideStatus(
+                        photo.id, PhotoStatus.approved);
+                    Navigator.pop(ctx);
+                  },
+                ),
+              if (photo.status == PhotoStatus.approved)
+                ListTile(
+                  leading:
+                      const Icon(Icons.cancel, color: AppConfig.errorColor),
+                  title: const Text('Override: Exclude from Reel'),
+                  onTap: () {
+                    _photoService.overrideStatus(
+                        photo.id, PhotoStatus.rejected);
+                    Navigator.pop(ctx);
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );

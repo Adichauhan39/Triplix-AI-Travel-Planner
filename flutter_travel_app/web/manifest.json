@@ -1,11 +1,11 @@
 {
-    "name": "flutter_travel_app",
-    "short_name": "flutter_travel_app",
+    "name": "Triplix - India's AI Travel Assistant",
+    "short_name": "Triplix",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Triplix is India's AI-powered travel planning app, helping you find and book flights, hotels, trains, and buses across India with a personalized itinerary built around your budget and preferences.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

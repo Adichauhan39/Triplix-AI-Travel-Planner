@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../providers/user_preferences_provider.dart';
+import '../utils/currency_input_formatter.dart';
 
 class BudgetAllocationScreen extends StatefulWidget {
   const BudgetAllocationScreen({super.key});
@@ -21,19 +22,38 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
     'shopping': 0.1,
     'miscellaneous': 0.1,
   };
+  final Map<String, TextEditingController> _allocationAmountControllers = {};
 
   @override
   void initState() {
     super.initState();
+    final formatter = groupedNumberFormat('INR');
+    for (final category in _budgetCategories) {
+      final categoryId = category['id'] as String;
+      final amount = _totalBudget * (_allocations[categoryId] ?? 0);
+      _allocationAmountControllers[categoryId] =
+          TextEditingController(text: formatter.format(amount.round()));
+    }
     // Get budget from provider
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final provider = Provider.of<UserPreferencesProvider>(context, listen: false);
-      if (provider.preferences.budget != null && provider.preferences.budget! > 0) {
+      final provider =
+          Provider.of<UserPreferencesProvider>(context, listen: false);
+      if (provider.preferences.budget != null &&
+          provider.preferences.budget! > 0) {
         setState(() {
           _totalBudget = provider.preferences.budget!;
         });
+        _syncAllocationAmountControllers();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _allocationAmountControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
   }
 
   final List<Map<String, dynamic>> _budgetCategories = [
@@ -83,17 +103,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                           icon:
                               const Icon(Icons.arrow_back, color: Colors.white),
                         ),
-                        const Expanded(
-                          child: Text(
-                            '4/5',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
+                        const Spacer(),
                         const SizedBox(width: 48),
                       ],
                     ),
@@ -331,6 +341,49 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
               onChanged: (value) => _updateAllocation(categoryId, value),
             ),
           ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _allocationAmountControllers[categoryId],
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    CurrencyInputFormatter(currencyCode: 'INR'),
+                  ],
+                  onChanged: (value) =>
+                      _updateAllocationFromAmount(categoryId, value),
+                  decoration: InputDecoration(
+                    hintText: 'Enter value directly',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey[300]!),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.grey[300]!),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'INR',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[700],
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -366,6 +419,36 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
       // Normalize to ensure total is 100%
       _normalizeAllocations();
     });
+    _syncAllocationAmountControllers();
+  }
+
+  void _updateAllocationFromAmount(String categoryId, String rawValue) {
+    final parsed = double.tryParse(rawValue.replaceAll(',', '').trim());
+    if (parsed == null || _totalBudget <= 0) return;
+
+    final clampedAmount = parsed.clamp(0, _totalBudget);
+    final ratio = clampedAmount / _totalBudget;
+    _updateAllocation(categoryId, ratio);
+  }
+
+  void _syncAllocationAmountControllers({String? skipCategoryId}) {
+    final formatter = groupedNumberFormat('INR');
+    for (final category in _budgetCategories) {
+      final categoryId = category['id'] as String;
+      if (categoryId == skipCategoryId) continue;
+
+      final controller = _allocationAmountControllers[categoryId];
+      if (controller == null) continue;
+
+      final amount = _totalBudget * (_allocations[categoryId] ?? 0);
+      final text = formatter.format(amount.round());
+      if (controller.text != text) {
+        controller.value = controller.value.copyWith(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+      }
+    }
   }
 
   void _normalizeAllocations() {

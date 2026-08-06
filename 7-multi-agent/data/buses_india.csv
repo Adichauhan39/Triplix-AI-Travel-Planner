@@ -13,8 +13,8 @@ Kolkata,Delhi,B011,RedBus,Volvo AC,23:30,21:30,22h 0m,3,true,3500,"AC, WiFi, Ent
 Delhi,Chennai,B012,RedBus,Volvo AC,20:30,14:30,18h 0m,2,true,3200,"AC, WiFi, Entertainment, Meals, Water"
 Chennai,Delhi,B013,RedBus,Volvo AC,21:00,15:00,18h 0m,2,true,3200,"AC, WiFi, Entertainment, Meals, Water"
 Mumbai,Goa,B014,RedBus,AC Seater,08:00,14:00,6h 0m,1,true,1200,"AC, WiFi, Water"
-Goa,Mumbai,B015,RedBus,AC Seater,15:00,21:00,6h 0m,1,true,1200,AC, WiFi, Water
-Mumbai,Bangalore,B016,RedBus,Non AC,07:00,05:00,22h 0m,4,false,800,Basic seating, Water
-Bangalore,Mumbai,B017,RedBus,Non AC,18:00,16:00,22h 0m,4,false,800,Basic seating, Water
-Delhi,Pune,B018,RedBus,AC Seater,19:00,07:00,12h 0m,2,true,1800,AC, WiFi, Water
-Pune,Delhi,B019,RedBus,AC Seater,20:00,08:00,12h 0m,2,true,1800,AC, WiFi, Water
+Goa,Mumbai,B015,RedBus,AC Seater,15:00,21:00,6h 0m,1,true,1200,"AC, WiFi, Water"
+Mumbai,Bangalore,B016,RedBus,Non AC,07:00,05:00,22h 0m,4,false,800,"Basic seating, Water"
+Bangalore,Mumbai,B017,RedBus,Non AC,18:00,16:00,22h 0m,4,false,800,"Basic seating, Water"
+Delhi,Pune,B018,RedBus,AC Seater,19:00,07:00,12h 0m,2,true,1800,"AC, WiFi, Water"
+Pune,Delhi,B019,RedBus,AC Seater,20:00,08:00,12h 0m,2,true,1800,"AC, WiFi, Water"

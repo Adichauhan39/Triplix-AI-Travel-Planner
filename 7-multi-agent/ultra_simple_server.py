@@ -6,12 +6,13 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(override=True)
 
 # ── Vertex AI / Gemini Configuration ────────────────────────────────────
 # Supports two modes:
 #   1. Vertex AI (recommended for hackathon): set GOOGLE_GENAI_USE_VERTEXAI=TRUE
 #   2. Direct Gemini API (fallback): set GOOGLE_API_KEY
+
 USE_VERTEX_AI = os.getenv('GOOGLE_GENAI_USE_VERTEXAI', 'FALSE').upper() == 'TRUE'
 GOOGLE_CLOUD_PROJECT = os.getenv('GOOGLE_CLOUD_PROJECT', '')
 GOOGLE_CLOUD_LOCATION = os.getenv('GOOGLE_CLOUD_LOCATION', 'us-central1')
@@ -22,7 +23,7 @@ if USE_VERTEX_AI:
         import vertexai
         from vertexai.generative_models import GenerativeModel, Part, GenerationConfig
         vertexai.init(project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
-        print(f"✅ Vertex AI initialized (project={GOOGLE_CLOUD_PROJECT}, location={GOOGLE_CLOUD_LOCATION})")
+        print(f"[OK] Vertex AI initialized (project={GOOGLE_CLOUD_PROJECT}, location={GOOGLE_CLOUD_LOCATION})")
 
         # Create a compatibility shim so all existing genai.GenerativeModel() calls work
         class _GenaiCompat:
@@ -34,7 +35,7 @@ if USE_VERTEX_AI:
         genai = _GenaiCompat()
         _AI_MODE = "Vertex AI"
     except ImportError:
-        print("⚠️  google-cloud-aiplatform not installed — falling back to direct Gemini API")
+        print("[WARNING] google-cloud-aiplatform not installed — falling back to direct Gemini API")
         USE_VERTEX_AI = False
 
 if not USE_VERTEX_AI:
@@ -46,18 +47,20 @@ if not USE_VERTEX_AI:
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_API_KEY)
     _AI_MODE = "Gemini API"
-    print(f"✅ Gemini API configured (direct API key)")
+    print(f"[OK] Gemini API configured (direct API key)")
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import pandas as pd
 import json
 import requests
 import random
 import base64
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # ── MongoDB Integration ─────────────────────────────────────────────────
 # Import MongoDB layer (graceful fallback to CSV if MongoDB unavailable)
@@ -65,15 +68,32 @@ _mongodb_available = False
 try:
     import mongodb_layer as mdb
     _mongodb_available = True
-    print("✅ MongoDB layer loaded")
+    print("[OK] MongoDB layer loaded")
 except ImportError:
-    print("⚠️  MongoDB layer not available — using CSV only")
+    print("[WARNING] MongoDB layer not available — using CSV only")
 
 # Configure
 GOOGLE_PLACES_API_KEY = os.getenv('GOOGLE_PLACES_API_KEY', os.getenv('GOOGLE_API_KEY', ''))
 OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY', '')
+RECAPTCHA_SECRET_KEY = os.getenv('RECAPTCHA_SECRET_KEY', '')
+RECAPTCHA_ALLOWED_HOSTS = [
+    host.strip().lower()
+    for host in os.getenv('RECAPTCHA_ALLOWED_HOSTS', '').split(',')
+    if host.strip()
+]
+AMADEUS_CLIENT_ID = os.getenv('AMADEUS_CLIENT_ID', '')
+AMADEUS_CLIENT_SECRET = os.getenv('AMADEUS_CLIENT_SECRET', '')
+AMADEUS_HOST = os.getenv('AMADEUS_HOST', 'https://test.api.amadeus.com').rstrip('/')
+USE_AMADEUS_HOTEL_PRICES = os.getenv('USE_AMADEUS_HOTEL_PRICES', 'TRUE').upper() == 'TRUE'
+USE_AMADEUS_FLIGHTS = os.getenv('USE_AMADEUS_FLIGHTS', 'TRUE').upper() == 'TRUE'
+DESTINATION_SUGGESTIONS_AI_ONLY = os.getenv('DESTINATION_SUGGESTIONS_AI_ONLY', 'FALSE').upper() == 'TRUE'
+DESTINATION_SUGGESTIONS_USE_AI_FILL = os.getenv('DESTINATION_SUGGESTIONS_USE_AI_FILL', 'FALSE').upper() == 'TRUE'
+_destination_suggestions_cache: Dict[str, Dict[str, Any]] = {}
+_DESTINATION_CACHE_TTL_SECONDS = 300
+_amadeus_token_cache: Dict[str, Any] = {'access_token': '', 'expires_at': 0}
 hotels_df = pd.read_csv('data/hotels_india.csv')
 flights_df = pd.read_csv('data/flights_india.csv')
+destinations_df = pd.read_csv('data/destinations_india.csv')
 
 # Load transportation data
 try:
@@ -119,11 +139,11 @@ async def startup_event():
         try:
             connected = await asyncio.wait_for(mdb.check_connection(), timeout=5.0)
             if connected:
-                print("✅ MongoDB Atlas connected successfully")
+                print("[OK] MongoDB Atlas connected successfully")
             else:
-                print("⚠️  MongoDB not reachable — falling back to CSV data")
+                print("[WARNING] MongoDB not reachable — falling back to CSV data")
         except (Exception, asyncio.TimeoutError) as e:
-            print(f"⚠️  MongoDB connection error: {e} — falling back to CSV data")
+            print(f"[WARNING] MongoDB connection error: {e} — falling back to CSV data")
 
 
 @app.on_event("shutdown")
@@ -216,7 +236,7 @@ def _get_weather_forecast(city: str, date_str: str) -> dict:
         'temp': '25-30°C',
         'condition': 'Pleasant',
         'description': 'Weather data unavailable',
-        'icon': '🌤️',
+        'icon': '[PARTLY_CLOUDY]',
         'humidity': None,
         'wind': None,
     }
@@ -262,23 +282,23 @@ def _get_weather_forecast(city: str, date_str: str) -> dict:
 
         weather = closest_forecast['weather'][0]
         weather_id = weather['id']
-        icon = '☀️'
+        icon = '[SUN]'
         if weather_id < 300:
-            icon = '⛈️'
+            icon = '[STORM]'
         elif weather_id < 400:
-            icon = '🌦️'
+            icon = '[CLOUDY]'
         elif weather_id < 600:
-            icon = '🌧️'
+            icon = '[RAIN]'
         elif weather_id < 700:
-            icon = '🌨️'
+            icon = '[SNOW]'
         elif weather_id < 800:
-            icon = '🌫️'
+            icon = '[FOG]'
         elif weather_id == 800:
-            icon = '☀️'
+            icon = '[SUN]'
         elif weather_id == 801:
-            icon = '🌤️'
+            icon = '[PARTLY_CLOUDY]'
         elif weather_id < 805:
-            icon = '☁️'
+            icon = '[CLOUDS]'
 
         temp_min = round(closest_forecast['main']['temp_min'])
         temp_max = round(closest_forecast['main']['temp_max'])
@@ -545,9 +565,9 @@ def _create_recommendation(hotel_name, hotel_type, amenities, city, price, ratin
     recommendation = ""
     
     if rating >= 4.5:
-        recommendation += f"⭐ Excellent choice! {hotel_name} boasts outstanding reviews and premium amenities. "
+        recommendation += f"[STAR] Excellent choice! {hotel_name} boasts outstanding reviews and premium amenities. "
     elif rating >= 4.0:
-        recommendation += f"👍 Great value! {hotel_name} offers reliable service with good amenities. "
+        recommendation += f"[GOOD] Great value! {hotel_name} offers reliable service with good amenities. "
     
     # Price-based recommendation
     if price < 2000:
@@ -595,9 +615,319 @@ def _get_nearby_attractions(city):
     }
     return attractions.get(city, [f'Local attractions in {city}'])
 
+def _parse_iso_date(date_input: Any) -> Optional[str]:
+    """Normalize date values to YYYY-MM-DD for downstream APIs."""
+    if not date_input:
+        return None
+    raw = str(date_input).strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace('Z', '+00:00')).date().isoformat()
+    except ValueError:
+        pass
+    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+def _city_to_iata(city: str) -> Optional[str]:
+    """Convert supported Indian cities to IATA city/airport codes for Amadeus."""
+    mapping = {
+        'delhi': 'DEL',
+        'new delhi': 'DEL',
+        'mumbai': 'BOM',
+        'bengaluru': 'BLR',
+        'bangalore': 'BLR',
+        'goa': 'GOI',
+        'jaipur': 'JAI',
+        'agra': 'AGR',
+        'hyderabad': 'HYD',
+        'pune': 'PNQ',
+        'kolkata': 'CCU',
+        'chennai': 'MAA',
+        'ahmedabad': 'AMD',
+        'kochi': 'COK',
+        'cochin': 'COK',
+        'lucknow': 'LKO',
+    }
+    return mapping.get(str(city).strip().lower())
+
+def _amadeus_credentials_ready() -> bool:
+    return bool(AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET)
+
+def _map_flight_class_to_amadeus(travel_class: str) -> str:
+    mapping = {
+        'economy': 'ECONOMY',
+        'premium_economy': 'PREMIUM_ECONOMY',
+        'business': 'BUSINESS',
+        'first_class': 'FIRST',
+        'first': 'FIRST',
+    }
+    return mapping.get((travel_class or 'economy').strip().lower(), 'ECONOMY')
+
+def _fetch_amadeus_flights(
+    from_city: str,
+    to_city: str,
+    departure_date: str,
+    return_date: Optional[str],
+    passengers: int,
+    travel_class: str,
+) -> List[Dict[str, Any]]:
+    """Fetch live flight offers from Amadeus and map to app flight shape."""
+    if not USE_AMADEUS_FLIGHTS:
+        return []
+
+    token = _get_amadeus_access_token()
+    if not token:
+        return []
+
+    origin = _city_to_iata(from_city)
+    destination = _city_to_iata(to_city)
+    dep = _parse_iso_date(departure_date)
+    ret = _parse_iso_date(return_date) if return_date else None
+    if not origin or not destination or not dep:
+        return []
+
+    params = {
+        'originLocationCode': origin,
+        'destinationLocationCode': destination,
+        'departureDate': dep,
+        'adults': max(1, int(passengers or 1)),
+        'travelClass': _map_flight_class_to_amadeus(travel_class),
+        'currencyCode': 'INR',
+        'max': 12,
+    }
+    if ret:
+        params['returnDate'] = ret
+
+    try:
+        resp = requests.get(
+            f"{AMADEUS_HOST}/v2/shopping/flight-offers",
+            headers={'Authorization': f'Bearer {token}'},
+            params=params,
+            timeout=18,
+        )
+        if resp.status_code != 200:
+            print(f"[AMADEUS] Flight offers failed: {resp.status_code} {resp.text[:220]}")
+            return []
+
+        offers = resp.json().get('data', []) or []
+        mapped: List[Dict[str, Any]] = []
+
+        for offer in offers:
+            itineraries = offer.get('itineraries', []) or []
+            if not itineraries:
+                continue
+
+            first_itinerary = itineraries[0]
+            segments = first_itinerary.get('segments', []) or []
+            if not segments:
+                continue
+
+            first_seg = segments[0]
+            last_seg = segments[-1]
+
+            dep_at = str(first_seg.get('departure', {}).get('at', ''))
+            arr_at = str(last_seg.get('arrival', {}).get('at', ''))
+            dep_time = dep_at[11:16] if 'T' in dep_at else dep_at
+            arr_time = arr_at[11:16] if 'T' in arr_at else arr_at
+
+            price_obj = offer.get('price', {}) or {}
+            try:
+                total_price = float(price_obj.get('grandTotal') or price_obj.get('total') or 0)
+            except (TypeError, ValueError):
+                total_price = 0.0
+            if total_price <= 0:
+                continue
+
+            carrier = first_seg.get('carrierCode', 'AIRLINE')
+            flight_no = f"{carrier}{first_seg.get('number', '')}".strip()
+            aircraft = first_seg.get('aircraft', {}).get('code', 'Aircraft')
+
+            mapped.append({
+                'id': str(offer.get('id') or f"{flight_no}_{dep_time}"),
+                'provider': carrier,
+                'route_number': flight_no,
+                'from_city': str(from_city).title(),
+                'to_city': str(to_city).title(),
+                'departure_time': dep_time,
+                'arrival_time': arr_time,
+                'duration': first_itinerary.get('duration', 'PT0H0M'),
+                'stops': max(0, len(segments) - 1),
+                'vehicle_type': aircraft,
+                'price': total_price,
+                'class': travel_class.title(),
+                'amenities': [],
+                'description': f"{carrier} flight {flight_no} from {str(from_city).title()} to {str(to_city).title()}.",
+                'why_recommended': 'Live Amadeus fare with real-time availability.',
+                'passengers': max(1, int(passengers or 1)),
+                'departure_date': dep,
+                'return_date': ret,
+                'extras': [],
+                'accessibility': [],
+                'source': 'amadeus',
+                'raw_offer': offer,
+            })
+
+        return mapped
+    except Exception as e:
+        print(f"[AMADEUS] Flight fetch error: {e}")
+        return []
+
+def _get_amadeus_access_token() -> Optional[str]:
+    now_ts = datetime.utcnow().timestamp()
+    cached_token = _amadeus_token_cache.get('access_token', '')
+    expires_at = float(_amadeus_token_cache.get('expires_at', 0) or 0)
+    if cached_token and expires_at > (now_ts + 30):
+        return cached_token
+
+    if not _amadeus_credentials_ready():
+        return None
+
+    try:
+        response = requests.post(
+            f"{AMADEUS_HOST}/v1/security/oauth2/token",
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            data={
+                'grant_type': 'client_credentials',
+                'client_id': AMADEUS_CLIENT_ID,
+                'client_secret': AMADEUS_CLIENT_SECRET,
+            },
+            timeout=12,
+        )
+        if response.status_code != 200:
+            print(f"[AMADEUS] Token request failed: {response.status_code} {response.text[:200]}")
+            return None
+        payload = response.json()
+        token = payload.get('access_token')
+        expires_in = int(payload.get('expires_in', 1800) or 1800)
+        if token:
+            _amadeus_token_cache['access_token'] = token
+            _amadeus_token_cache['expires_at'] = now_ts + expires_in
+            return token
+    except Exception as e:
+        print(f"[AMADEUS] Token error: {e}")
+    return None
+
+def _fetch_amadeus_hotels(city: str, budget: float, check_in: str, check_out: str) -> List[Dict[str, Any]]:
+    """Fetch live hotel offers from Amadeus and map to app hotel shape."""
+    token = _get_amadeus_access_token()
+    if not token:
+        return []
+
+    city_code = _city_to_iata(city)
+    if not city_code:
+        print(f"[AMADEUS] No IATA mapping for city: {city}")
+        return []
+
+    headers = {'Authorization': f'Bearer {token}'}
+    try:
+        list_resp = requests.get(
+            f"{AMADEUS_HOST}/v1/reference-data/locations/hotels/by-city",
+            headers=headers,
+            params={'cityCode': city_code, 'radius': 20, 'radiusUnit': 'KM'},
+            timeout=15,
+        )
+        if list_resp.status_code != 200:
+            print(f"[AMADEUS] Hotel list failed: {list_resp.status_code} {list_resp.text[:200]}")
+            return []
+        hotels_data = list_resp.json().get('data', [])
+        hotel_ids = [h.get('hotelId') for h in hotels_data if h.get('hotelId')][:20]
+        if not hotel_ids:
+            return []
+
+        offers_resp = requests.get(
+            f"{AMADEUS_HOST}/v3/shopping/hotel-offers",
+            headers=headers,
+            params={
+                'hotelIds': ','.join(hotel_ids),
+                'adults': 1,
+                'roomQuantity': 1,
+                'checkInDate': check_in,
+                'checkOutDate': check_out,
+                'currency': 'INR',
+                'bestRateOnly': 'true',
+            },
+            timeout=20,
+        )
+        if offers_resp.status_code != 200:
+            print(f"[AMADEUS] Offers failed: {offers_resp.status_code} {offers_resp.text[:200]}")
+            return []
+
+        response_data = offers_resp.json().get('data', [])
+        results: List[Dict[str, Any]] = []
+        for item in response_data:
+            hotel_info = item.get('hotel', {}) or {}
+            offers = item.get('offers', []) or []
+            if not offers:
+                continue
+
+            offer = offers[0]
+            price_obj = offer.get('price', {}) or {}
+            total_price = price_obj.get('total')
+            currency = price_obj.get('currency', 'INR')
+            try:
+                nightly_price = float(total_price)
+            except (TypeError, ValueError):
+                continue
+
+            if budget and nightly_price > float(budget):
+                continue
+
+            hotel_name = hotel_info.get('name', 'Hotel')
+            amenities: List[str] = []
+            hotel_type = 'Hotel'
+            rating = float(hotel_info.get('rating') or 4.2)
+            description = _create_hotel_description(hotel_name, hotel_type, amenities, city, rating)
+            why_recommended = _create_recommendation(hotel_name, hotel_type, amenities, city, nightly_price, rating)
+            nearby_attractions = _get_nearby_attractions(city)
+            image_url = get_hotel_image(hotel_name, city)
+
+            results.append({
+                'name': hotel_name,
+                'city': city,
+                'price_per_night': nightly_price,
+                'price_currency': currency,
+                'type': hotel_type,
+                'rating': rating,
+                'amenities': amenities,
+                'description': description,
+                'why_recommended': why_recommended,
+                'nearby_attractions': nearby_attractions,
+                'image_url': image_url,
+                'image': image_url,
+            })
+
+        return results[:10]
+    except Exception as e:
+        print(f"[AMADEUS] Fetch error: {e}")
+        return []
+
 def _search_flights(from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility):
     """Search for flights"""
     try:
+        # Prefer live Amadeus fares first when credentials are available.
+        live_flights = _fetch_amadeus_flights(
+            from_city=from_city,
+            to_city=to_city,
+            departure_date=departure_date,
+            return_date=return_date,
+            passengers=passengers,
+            travel_class=travel_class,
+        )
+        if live_flights:
+            print(f"[OK] Amadeus: {len(live_flights)} flights")
+            return {
+                'status': 'success',
+                'powered_by': 'Amadeus',
+                'ai_used': False,
+                'results': live_flights,
+                'count': len(live_flights),
+            }
+
         # Try CSV first
         filtered_flights = flights_df[
             (flights_df['from_city'].str.lower() == from_city) &
@@ -613,7 +943,7 @@ def _search_flights(from_city, to_city, departure_date, return_date, passengers,
         has_special = len(preferences) > 0 or len(extras) > 0 or len(accessibility) > 0 or travel_class != 'economy'
 
         if len(filtered_flights) > 0 and not has_special:
-            print(f"✅ CSV: {len(filtered_flights)} flights")
+            print(f"[OK] CSV: {len(filtered_flights)} flights")
             results = []
             for _, f in filtered_flights.iterrows():
                 price = f['economy_price'] if travel_class == 'economy' else f['business_price']
@@ -626,7 +956,7 @@ def _search_flights(from_city, to_city, departure_date, return_date, passengers,
         return _ai_search_travel("flight", from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility)
 
     except Exception as e:
-        print(f"❌ Flight search error: {e}")
+        print(f"[ERROR] Flight search error: {e}")
         return {"status": "error", "message": str(e)}
 
 def _search_trains(from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility):
@@ -645,7 +975,7 @@ def _search_trains(from_city, to_city, departure_date, return_date, passengers, 
                 filtered_trains = filtered_trains[filtered_trains['sleeper_available'] == True]
 
             if len(filtered_trains) > 0:
-                print(f"✅ CSV: {len(filtered_trains)} trains")
+                print(f"[OK] CSV: {len(filtered_trains)} trains")
                 results = []
                 for _, t in filtered_trains.iterrows():
                     results.append(_create_train_result(t, travel_class, preferences, passengers, departure_date, return_date, extras, accessibility))
@@ -655,7 +985,7 @@ def _search_trains(from_city, to_city, departure_date, return_date, passengers, 
         return _ai_search_travel("train", from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility)
 
     except Exception as e:
-        print(f"❌ Train search error: {e}")
+        print(f"[ERROR] Train search error: {e}")
         return {"status": "error", "message": str(e)}
 
 def _search_buses(from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility):
@@ -672,7 +1002,7 @@ def _search_buses(from_city, to_city, departure_date, return_date, passengers, t
                 filtered_buses = filtered_buses[filtered_buses['ac_available'] == True]
 
             if len(filtered_buses) > 0:
-                print(f"✅ CSV: {len(filtered_buses)} buses")
+                print(f"[OK] CSV: {len(filtered_buses)} buses")
                 results = []
                 for _, b in filtered_buses.iterrows():
                     results.append(_create_bus_result(b, travel_class, preferences, passengers, departure_date, return_date, extras, accessibility))
@@ -682,7 +1012,7 @@ def _search_buses(from_city, to_city, departure_date, return_date, passengers, t
         return _ai_search_travel("bus", from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility)
 
     except Exception as e:
-        print(f"❌ Bus search error: {e}")
+        print(f"[ERROR] Bus search error: {e}")
         return {"status": "error", "message": str(e)}
 
 def _search_car_rentals(from_city, departure_date, return_date, passengers, travel_class, preferences, extras, duration_hours, accessibility):
@@ -696,7 +1026,7 @@ def _search_car_rentals(from_city, departure_date, return_date, passengers, trav
                 filtered_cars = filtered_cars[filtered_cars['private'] == True]
 
             if len(filtered_cars) > 0:
-                print(f"✅ CSV: {len(filtered_cars)} car rentals")
+                print(f"[OK] CSV: {len(filtered_cars)} car rentals")
                 results = []
                 for _, c in filtered_cars.iterrows():
                     results.append(_create_car_result(c, travel_class, preferences, passengers, departure_date, return_date, duration_hours, extras, accessibility))
@@ -706,7 +1036,7 @@ def _search_car_rentals(from_city, departure_date, return_date, passengers, trav
         return _ai_search_travel("car_rental", from_city, None, departure_date, return_date, passengers, travel_class, preferences, extras, "one_way", accessibility, duration_hours)
 
     except Exception as e:
-        print(f"❌ Car rental search error: {e}")
+        print(f"[ERROR] Car rental search error: {e}")
         return {"status": "error", "message": str(e)}
 
 def _search_taxis(from_city, to_city, departure_date, passengers, travel_class, preferences, extras, accessibility):
@@ -719,7 +1049,7 @@ def _search_taxis(from_city, to_city, departure_date, passengers, travel_class, 
             ]
 
             if len(filtered_taxis) > 0:
-                print(f"✅ CSV: {len(filtered_taxis)} taxis")
+                print(f"[OK] CSV: {len(filtered_taxis)} taxis")
                 results = []
                 for _, t in filtered_taxis.iterrows():
                     results.append(_create_taxi_result(t, travel_class, preferences, passengers, departure_date, extras, accessibility))
@@ -729,7 +1059,7 @@ def _search_taxis(from_city, to_city, departure_date, passengers, travel_class, 
         return _ai_search_travel("taxi", from_city, to_city, departure_date, None, passengers, travel_class, preferences, extras, "one_way", accessibility)
 
     except Exception as e:
-        print(f"❌ Taxi search error: {e}")
+        print(f"[ERROR] Taxi search error: {e}")
         return {"status": "error", "message": str(e)}
 
 def _search_bikes(from_city, to_city, departure_date, passengers, travel_class, preferences, extras, duration_hours, accessibility):
@@ -742,7 +1072,7 @@ def _search_bikes(from_city, to_city, departure_date, passengers, travel_class, 
             ]
 
             if len(filtered_bikes) > 0:
-                print(f"✅ CSV: {len(filtered_bikes)} bike rentals")
+                print(f"[OK] CSV: {len(filtered_bikes)} bike rentals")
                 results = []
                 for _, b in filtered_bikes.iterrows():
                     results.append(_create_bike_result(b, travel_class, preferences, passengers, departure_date, duration_hours, extras, accessibility))
@@ -752,12 +1082,12 @@ def _search_bikes(from_city, to_city, departure_date, passengers, travel_class, 
         return _ai_search_travel("bike_scooter", from_city, to_city, departure_date, None, passengers, travel_class, preferences, extras, "one_way", accessibility, duration_hours)
 
     except Exception as e:
-        print(f"❌ Bike search error: {e}")
+        print(f"[ERROR] Bike search error: {e}")
         return {"status": "error", "message": str(e)}
 
 def _ai_search_travel(mode, from_city, to_city, departure_date, return_date, passengers, travel_class, preferences, extras, travel_type, accessibility, duration_hours=None):
     """Use AI to search for travel options"""
-    print(f"🤖 Using Gemini AI for {mode} search...")
+    print(f"[AI] Using Gemini AI for {mode} search...")
 
     mode_names = {
         "flight": "flights",
@@ -883,7 +1213,7 @@ Format: {{"results": [{{"id": "FL001", "provider": "Air India", ...}}]}}"""
         import random
         result['match_score'] = f"{random.randint(85, 98)}% Match"
 
-    print(f"✅ Gemini: {len(results)} {mode} results")
+    print(f"[OK] Gemini: {len(results)} {mode} results")
 
     return {'status': 'success', 'powered_by': 'Gemini AI', 'ai_used': True, 'results': results, 'count': len(results)}
 
@@ -1096,13 +1426,13 @@ def get_hotel_image(hotel_name, city):
                         direct_url = media_resp.get('photoUri', '')
                         if direct_url:
                             _photo_cache[cache_key] = direct_url
-                            print(f"[IMAGE] ✅ Found real image for '{hotel_name}' in {city}")
+                            print(f"[IMAGE] [OK] Found real image for '{hotel_name}' in {city}")
                             return direct_url
                     except:
                         continue
         
         # Fallback: use hotel-type-specific Unsplash images
-        print(f"[IMAGE] ⚠️ Using fallback image for '{hotel_name}' in {city}")
+        print(f"[IMAGE] [WARNING] Using fallback image for '{hotel_name}' in {city}")
         name_lower = hotel_name.lower()
         
         # Categorize by hotel type keywords
@@ -1139,12 +1469,224 @@ def get_hotel_image(hotel_name, city):
         _photo_cache[cache_key] = url
         return url
     except Exception as e:
-        print(f"[IMAGE] ❌ Error for '{hotel_name}': {e}")
+        print(f"[IMAGE] [ERROR] Error for '{hotel_name}': {e}")
         url = "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&h=600&fit=crop"
         return url
 
 # Photo cache to avoid repeated API calls
 _photo_cache = {}
+
+# Themed fallback pools (all IDs verified to resolve on images.unsplash.com),
+# keyed by rough activity topic. Used when Places API finds nothing for an
+# abstract/generic activity word (e.g. "Daily Life", "Retail Therapy") that
+# isn't a real, searchable place.
+_ACTIVITY_FALLBACK_THEMES = {
+    'nature': [
+        "1441974231531-c6227db76b6e", "1441906363162-903afd0d3d52",
+        "1477587458883-47145ed94245", "1512621776951-a57141f2eefd",
+    ],
+    'spiritual': [
+        "1519501025264-65ba15a82390", "1476514525535-07fb3b4ae5f1",
+    ],
+    'food': [
+        "1517248135467-4c7edcad34c4", "1533105079780-92b9be482077",
+        "1555396273-367ea4eb4db5",
+    ],
+    'market': [
+        "1555529669-e69e7aa0ba9a", "1533900298318-6b8da08a523e",
+    ],
+    'heritage': [
+        "1519677100203-a0e668c92439", "1524492412937-b28074a5d7da",
+    ],
+    'urban': [
+        "1449824913935-59a10b8d2000", "1502602898657-3e91760cbb34",
+    ],
+    'entertainment': [
+        "1488646953014-85cb44e25828", "1566073771259-6a8506099945",
+    ],
+}
+
+_ACTIVITY_THEME_KEYWORDS = {
+    'nature': ['park', 'garden', 'lake', 'green', 'nature', 'picnic', 'river',
+               'zoo', 'hill', 'forest', 'beach', 'view'],
+    'spiritual': ['temple', 'shrine', 'mosque', 'church', 'dargah', 'pilgrim',
+                  'spiritual', 'religious', 'meditation', 'ashram', 'sacred'],
+    'food': ['food', 'cuisine', 'cafe', 'restaurant', 'dhaba', 'biryani',
+             'snack', 'sweet', 'dining', 'eatery', 'street food', 'diner'],
+    'market': ['market', 'shop', 'mall', 'bazaar', 'textile', 'retail',
+               'souvenir', 'boutique', 'wholesale'],
+    'heritage': ['fort', 'palace', 'monument', 'museum', 'heritage',
+                 'historical', 'ancient', 'old town', 'ruins', 'building'],
+    'urban': ['city', 'urban', 'cityscape', 'architecture', 'walk',
+              'local life', 'daily life', 'views', 'commercial', 'stroll'],
+    'entertainment': ['cinema', 'amusement', 'entertainment', 'theme park',
+                       'family fun', 'recreation', 'playground', 'event',
+                       'leisure'],
+}
+
+
+def _fallback_theme_for(query: str) -> str:
+    q = query.lower()
+    for theme, keywords in _ACTIVITY_THEME_KEYWORDS.items():
+        if any(kw in q for kw in keywords):
+            return theme
+    return 'urban'
+
+
+def get_activity_image(
+    query: str,
+    city: str,
+    used_urls: Optional[set] = None,
+    lock: Optional[threading.Lock] = None,
+) -> str:
+    """
+    Get a real image for a travel activity/attraction using Google Places API
+    (New). Same pattern as get_hotel_image, generalized to any short activity
+    keyword (e.g. "Fort", "Biryani") combined with the city, so onboarding's
+    destination-interests chips can show a real photo instead of plain text.
+
+    [used_urls]/[lock], when provided, avoid handing out the same photo to
+    two different activities in the same batch — small/less-mapped cities
+    often only have a handful of indexed Places, so without this, distinct
+    activities (e.g. "Local Market" and "Wholesale Market") can resolve to
+    the literal same place and photo.
+    """
+    cache_key = f"activity_{query}_{city}"
+    if cache_key in _photo_cache:
+        return _photo_cache[cache_key]
+
+    def claim(key: str) -> bool:
+        """Registers key as used if it isn't already; returns False if taken."""
+        if used_urls is None:
+            return True
+        if lock is not None:
+            with lock:
+                if key in used_urls:
+                    return False
+                used_urls.add(key)
+                return True
+        if key in used_urls:
+            return False
+        used_urls.add(key)
+        return True
+
+    try:
+        if not GOOGLE_PLACES_API_KEY:
+            raise ValueError("No GOOGLE_PLACES_API_KEY configured")
+
+        search_url = "https://places.googleapis.com/v1/places:searchText"
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+            'X-Goog-FieldMask': 'places.displayName,places.photos'
+        }
+        search_query = f"{query} in {city}, India"
+        resp = requests.post(search_url, headers=headers,
+            json={"textQuery": search_query, "maxResultCount": 3},
+            timeout=8
+        ).json()
+
+        # Dedupe by PLACE, not by final photo URL. Vague activity words
+        # (e.g. "City Exploration") in a small/sparsely-mapped city often
+        # resolve to the exact same top landmark as a concrete one (e.g.
+        # "Fort") — two different photos of that same place are still
+        # both "a picture of the fort", which reads as a duplicate to a
+        # user even though the URLs technically differ. A photo's `name`
+        # is "places/{place_id}/photos/{photo_id}", so the place_id prefix
+        # doubles as a stable per-place dedup key.
+        places = resp.get('places', [])
+        for place in places:
+            photos = place.get('photos', [])
+            if not photos:
+                continue
+            first_name = photos[0].get('name', '')
+            place_key = first_name.split('/photos/')[0] if first_name else ''
+            if not place_key or not claim(place_key):
+                continue  # this place already used by another activity
+
+            for photo in photos[:3]:
+                photo_name = photo.get('name', '')
+                if not photo_name:
+                    continue
+                media_url = f"https://places.googleapis.com/v1/{photo_name}/media?maxWidthPx=600&skipHttpRedirect=true&key={GOOGLE_PLACES_API_KEY}"
+                try:
+                    media_resp = requests.get(media_url, timeout=5).json()
+                    direct_url = media_resp.get('photoUri', '')
+                except Exception:
+                    continue
+                if direct_url:
+                    _photo_cache[cache_key] = direct_url
+                    return direct_url
+            # Claimed the place but couldn't resolve any of its photos
+            # (rare) — fall through and try the next place.
+
+        # Fallback: themed stock images, trying to avoid a repeat within
+        # this batch before accepting one.
+        theme = _fallback_theme_for(query)
+        candidates = _ACTIVITY_FALLBACK_THEMES[theme]
+        for photo_id in candidates:
+            if claim(photo_id):
+                url = f"https://images.unsplash.com/photo-{photo_id}?w=400&h=300&fit=crop"
+                _photo_cache[cache_key] = url
+                return url
+
+        # Every themed candidate was already used this batch — accept a
+        # repeat rather than return nothing.
+        url = f"https://images.unsplash.com/photo-{candidates[0]}?w=400&h=300&fit=crop"
+        _photo_cache[cache_key] = url
+        return url
+    except Exception as e:
+        print(f"[ACTIVITY IMAGE] [ERROR] '{query}' in {city}: {e}")
+        return "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&h=300&fit=crop"
+
+
+class ActivityImagesRequest(BaseModel):
+    city: str
+    activities: List[str]
+
+
+@app.post("/api/destination/activity-images")
+def get_activity_images(request: ActivityImagesRequest):
+    """
+    Batch-fetch one representative real photo per activity keyword for a
+    city (e.g. "Fort" -> a real fort photo for that city). Runs the Places
+    API lookups concurrently since a city's activity list can be 30+ items
+    and each lookup is a blocking HTTP call. Cache hits are seeded into
+    used_urls before dispatching fresh lookups, so a cached result and a
+    freshly-fetched one can't collide either.
+    """
+    try:
+        activities = list(dict.fromkeys(request.activities))  # dedupe, keep order
+        used_urls: set = set()
+        lock = threading.Lock()
+
+        results: Dict[str, str] = {}
+        to_fetch = []
+        for activity in activities:
+            cache_key = f"activity_{activity}_{request.city}"
+            cached = _photo_cache.get(cache_key)
+            if cached:
+                results[activity] = cached
+                used_urls.add(cached)
+            else:
+                to_fetch.append(activity)
+
+        if to_fetch:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                fetched = list(executor.map(
+                    lambda activity: (
+                        activity,
+                        get_activity_image(activity, request.city, used_urls, lock),
+                    ),
+                    to_fetch,
+                ))
+            results.update(dict(fetched))
+
+        return {"status": "success", "city": request.city, "images": results}
+    except Exception as e:
+        print(f"[ACTIVITY IMAGES ERROR] {e}")
+        return {"status": "error", "message": str(e), "images": {}}
+
 
 class HotelSearchRequest(BaseModel):
     message: str
@@ -1154,6 +1696,11 @@ class AgentRequest(BaseModel):
     message: str
     context: Optional[Dict[str, Any]] = {}
     page: Optional[str] = "home"
+
+class RecaptchaVerifyRequest(BaseModel):
+    token: str
+    action: Optional[str] = 'auth'
+    remote_ip: Optional[str] = None
 
 class FlightSearchRequest(BaseModel):
     from_city: str
@@ -1208,6 +1755,92 @@ async def health_check():
         "ai_mode": _AI_MODE,
         "vertex_ai": USE_VERTEX_AI,
         "version": "2.0",
+        "google_places_key_loaded": bool(GOOGLE_PLACES_API_KEY),
+        "google_api_key_loaded": bool(GOOGLE_API_KEY),
+        "recaptcha_configured": bool(RECAPTCHA_SECRET_KEY),
+        "google_places_key_prefix": GOOGLE_PLACES_API_KEY[:6] + "…" if GOOGLE_PLACES_API_KEY else "MISSING",
+    }
+
+@app.post("/api/security/verify-captcha")
+async def verify_captcha(payload: RecaptchaVerifyRequest, request: Request):
+    """Verify reCAPTCHA token server-side using Google's siteverify API."""
+    print(f"[CAPTCHA] Incoming verify request | action={payload.action} | token_len={len(payload.token or '')} | secret_len={len(RECAPTCHA_SECRET_KEY)} | allowed_hosts={RECAPTCHA_ALLOWED_HOSTS}", flush=True)
+
+    if not RECAPTCHA_SECRET_KEY:
+        print("[CAPTCHA] Rejected: RECAPTCHA_SECRET_KEY not configured", flush=True)
+        return {
+            'success': False,
+            'verified': False,
+            'reason': 'captcha_not_configured',
+        }
+
+    remote_ip = payload.remote_ip or (request.client.host if request.client else None)
+
+    try:
+        verify_response = requests.post(
+            'https://www.google.com/recaptcha/api/siteverify',
+            data={
+                'secret': RECAPTCHA_SECRET_KEY,
+                'response': payload.token,
+                'remoteip': remote_ip or '',
+            },
+            timeout=8,
+        )
+    except Exception as exc:
+        print(f"[CAPTCHA] Google siteverify network error: {exc}", flush=True)
+        return {
+            'success': False,
+            'verified': False,
+            'reason': 'network_error',
+            'error': str(exc),
+        }
+
+    if verify_response.status_code != 200:
+        print(f"[CAPTCHA] Google returned non-200: {verify_response.status_code} body={verify_response.text[:200]}", flush=True)
+        return {
+            'success': False,
+            'verified': False,
+            'reason': 'google_verify_failed',
+            'status_code': verify_response.status_code,
+        }
+
+    try:
+        data = verify_response.json()
+    except Exception:
+        print(f"[CAPTCHA] Could not parse Google response: {verify_response.text[:200]}", flush=True)
+        return {
+            'success': False,
+            'verified': False,
+            'reason': 'invalid_google_response',
+        }
+
+    print(f"[CAPTCHA] Google siteverify response: {data}", flush=True)
+
+    verified = bool(data.get('success'))
+    hostname = str(data.get('hostname', '')).lower().strip()
+    reason = 'ok' if verified else 'google_verification_failed'
+
+    if verified and RECAPTCHA_ALLOWED_HOSTS and hostname:
+        host_allowed = False
+        for allowed in RECAPTCHA_ALLOWED_HOSTS:
+            if hostname == allowed or hostname.endswith(f'.{allowed}'):
+                host_allowed = True
+                break
+        if not host_allowed:
+            print(f"[CAPTCHA] Hostname '{hostname}' not in allowed list {RECAPTCHA_ALLOWED_HOSTS}", flush=True)
+            verified = False
+            reason = 'hostname_mismatch'
+
+    print(f"[CAPTCHA] Final result: verified={verified} reason={reason} hostname={hostname}", flush=True)
+
+    return {
+        'success': True,
+        'verified': verified,
+        'reason': reason,
+        'hostname': data.get('hostname'),
+        'challenge_ts': data.get('challenge_ts'),
+        'error_codes': data.get('error-codes', []),
+        'action': payload.action,
     }
 
 @app.post("/api/analyze-photo")
@@ -2487,6 +3120,36 @@ async def search_hotels(request: HotelSearchRequest):
         has_special = any(word in message.lower() for word in ['near', 'airport', 'beach', 'luxury', 'special'])
         has_special_request = 'special request:' in message.lower()
 
+        # ── Try Amadeus live prices first ──
+        if _amadeus_credentials_ready() and not has_special_request:
+            check_in = (
+                _parse_iso_date(request.context.get('check_in_date'))
+                or _parse_iso_date(request.context.get('departure_date'))
+                or (datetime.now().date() + timedelta(days=7)).isoformat()
+            )
+            check_out = (
+                _parse_iso_date(request.context.get('check_out_date'))
+                or _parse_iso_date(request.context.get('return_date'))
+                or (datetime.fromisoformat(check_in) + timedelta(days=1)).date().isoformat()
+            )
+
+            if check_out <= check_in:
+                check_out = (datetime.fromisoformat(check_in) + timedelta(days=1)).date().isoformat()
+
+            amadeus_hotels = _fetch_amadeus_hotels(city=city, budget=budget, check_in=check_in, check_out=check_out)
+            if amadeus_hotels:
+                print(f"[AMADEUS SUCCESS] Live hotel offers: {len(amadeus_hotels)}")
+                return {
+                    'status': 'success',
+                    'powered_by': 'Amadeus Hotel Offers',
+                    'ai_used': False,
+                    'hotels': amadeus_hotels,
+                    'count': len(amadeus_hotels),
+                    'live_prices': True,
+                    'check_in_date': check_in,
+                    'check_out_date': check_out,
+                }
+
         # ── Try MongoDB first ──
         if _mongodb_available and not has_special and not has_special_request:
             try:
@@ -3206,6 +3869,25 @@ def search_travel(request: TravelBookingRequest):
         print(f"❌ Travel search error: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.post("/api/flights/search")
+def search_flights_direct(request: FlightSearchRequest):
+    """Direct flight search endpoint (Amadeus -> CSV -> AI fallback)."""
+    from_city = request.from_city.lower().strip()
+    to_city = request.to_city.lower().strip()
+    travel_class = (request.flight_class or 'economy').lower().strip()
+    return _search_flights(
+        from_city=from_city,
+        to_city=to_city,
+        departure_date=request.departure_date,
+        return_date=request.return_date,
+        passengers=max(1, int(request.passengers or 1)),
+        travel_class=travel_class,
+        preferences=request.preferences or [],
+        extras=[],
+        travel_type='round_trip' if request.return_date else 'one_way',
+        accessibility=[],
+    )
+
 # ============================================================
 # GOOGLE PLACES API (NEW) ENDPOINTS
 # ============================================================
@@ -3814,7 +4496,7 @@ def get_destination_interests(request: dict):
         if not city:
             return {"status": "error", "message": "City is required", "categories": []}
 
-        print(f"\n🏙️ Generating interests for: {city}")
+        print(f"\n Generating interests for: {city}")
 
         prompt = f"""You are a travel expert. For the city "{city}" in India, generate the most relevant interest categories that a traveler can explore there.
 
@@ -3897,7 +4579,99 @@ Example for Goa:
         print(f"   ❌ Destination interests error: {e}")
         import traceback
         traceback.print_exc()
+        fallback_categories = _build_destination_interest_fallback(city)
+        if fallback_categories:
+            print(f"   ♻️ Using CSV fallback categories for {city}")
+            return {
+                "status": "success",
+                "city": city,
+                "categories": fallback_categories,
+                "source": "csv_fallback",
+            }
         return {"status": "error", "message": str(e), "categories": []}
+
+
+def _build_destination_interest_fallback(city: str):
+    """Create deterministic onboarding interest categories from CSV data."""
+    try:
+        if not city:
+            return []
+
+        city_key = city.split(",")[0].strip().lower()
+        if not city_key:
+            return []
+
+        filtered = destinations_df[
+            destinations_df['city'].fillna('').str.lower() == city_key
+        ]
+
+        if filtered.empty:
+            filtered = destinations_df[
+                destinations_df['city'].fillna('').str.lower().str.contains(city_key)
+            ]
+
+        if filtered.empty:
+            return []
+
+        row = filtered.iloc[0]
+
+        def _split_values(value):
+            if value is None:
+                return []
+            return [item.strip() for item in str(value).split('|') if item and item.strip()]
+
+        activities = _split_values(row.get('activities'))
+        attraction_types = _split_values(row.get('nearby_attractions_type'))
+        location_types = _split_values(row.get('location_type'))
+        cuisine = _split_values(row.get('cuisine'))
+        famous_for = str(row.get('famous_for', '')).strip()
+
+        categories = []
+
+        if activities:
+            categories.append({
+                "id": "top_activities",
+                "title": "Top Activities",
+                "icon": "local_activity",
+                "activities": activities[:8],
+            })
+
+        if attraction_types:
+            categories.append({
+                "id": "popular_spots",
+                "title": "Popular Spots",
+                "icon": "camera_alt",
+                "activities": attraction_types[:8],
+            })
+
+        if location_types:
+            categories.append({
+                "id": "travel_style",
+                "title": "Travel Style",
+                "icon": "terrain",
+                "activities": location_types[:6],
+            })
+
+        if cuisine:
+            categories.append({
+                "id": "food_dining",
+                "title": "Food & Dining",
+                "icon": "restaurant",
+                "activities": cuisine[:6],
+            })
+
+        if famous_for:
+            categories.append({
+                "id": "must_explore",
+                "title": "Must Explore",
+                "icon": "star",
+                "activities": [famous_for],
+            })
+
+        return categories[:8]
+    except Exception as fallback_error:
+        print(f"   ❌ CSV fallback failed: {fallback_error}")
+        return []
 
 
 # ============================================================
@@ -3962,6 +4736,378 @@ RULES:
     except Exception as e:
         print(f"   ❌ Disambiguation error: {e}")
         return {"status": "error", "message": str(e), "ambiguous": False, "options": []}
+
+
+@app.get("/api/destination/suggestions")
+def get_destination_suggestions(
+    query: str,
+    limit: int = 8,
+    prefer_places: bool = False,
+):
+    """Destination autocomplete suggestions with AI-first mode.
+
+    Set DESTINATION_SUGGESTIONS_AI_ONLY=TRUE to force AI-only suggestions.
+    """
+    print(
+        f"[DESTINATION] Request: query={query}, limit={limit}, prefer_places={prefer_places}"
+    )
+    try:
+        normalized_query = query.strip()
+        if not normalized_query:
+            return {
+                "status": "success",
+                "query": query,
+                "suggestions": [],
+            }
+
+        safe_limit = max(1, min(limit, 10))
+        suggestions = []
+        seen_keys = set()
+        query_key = normalized_query.lower()
+
+        # Exact cache hit.
+        now_ts = datetime.utcnow().timestamp()
+        cached = _destination_suggestions_cache.get(query_key)
+        if (
+            not prefer_places
+            and cached
+            and now_ts - cached.get("ts", 0) <= _DESTINATION_CACHE_TTL_SECONDS
+        ):
+            return {
+                "status": "success",
+                "query": query,
+                "suggestions": cached.get("suggestions", [])[:safe_limit],
+                "source": "cache",
+            }
+
+        # Prefix cache reuse for incremental typing.
+        if not prefer_places and len(query_key) >= 2:
+            for i in range(len(query_key) - 1, 1, -1):
+                prefix = query_key[:i]
+                cached_prefix = _destination_suggestions_cache.get(prefix)
+                if not cached_prefix:
+                    continue
+                if now_ts - cached_prefix.get("ts", 0) > _DESTINATION_CACHE_TTL_SECONDS:
+                    continue
+
+                prefix_suggestions = cached_prefix.get("suggestions", [])
+                filtered = [
+                    item for item in prefix_suggestions
+                    if query_key in str(item.get("city", "")).lower()
+                ][:safe_limit]
+
+                if filtered:
+                    _destination_suggestions_cache[query_key] = {
+                        "ts": now_ts,
+                        "suggestions": filtered,
+                    }
+                    return {
+                        "status": "success",
+                        "query": query,
+                        "suggestions": filtered,
+                        "source": "cache_prefix",
+                    }
+
+        def _append_ai_suggestions(max_count: int) -> None:
+            """Append AI suggestions with strict timeout to protect autocomplete latency."""
+            try:
+                ai_prompt = (
+                    f"Autocomplete travel destinations for query '{normalized_query}'. "
+                    f"Return up to {max_count} items as strict JSON array only. "
+                    "Each item: city, country, description, famous_for. "
+                    "Prioritize prefix matches, deduplicate, keep text short."
+                )
+
+                def _generate_ai_suggestions():
+                    model = genai.GenerativeModel("gemini-2.5-flash")
+                    return model.generate_content(ai_prompt)
+
+                # Hard timeout so typing does not feel blocked by LLM latency.
+                executor = ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(_generate_ai_suggestions)
+                try:
+                    ai_response = future.result(timeout=2.5)
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
+
+                ai_text = (ai_response.text or "").strip()
+
+                if ai_text.startswith("```"):
+                    ai_text = ai_text.split("```", 1)[1]
+                    if ai_text.startswith("json"):
+                        ai_text = ai_text[4:]
+                    ai_text = ai_text.strip()
+                    if "```" in ai_text:
+                        ai_text = ai_text.split("```", 1)[0].strip()
+
+                parsed_ai = json.loads(ai_text) if ai_text else []
+                if isinstance(parsed_ai, dict):
+                    parsed_ai = parsed_ai.get("suggestions", [])
+                if not isinstance(parsed_ai, list):
+                    parsed_ai = []
+
+                for item in parsed_ai:
+                    city = str(item.get("city", "")).strip()
+                    country = str(item.get("country", "")).strip()
+                    description = str(item.get("description", "")).strip()
+                    famous_for = str(item.get("famous_for", "")).strip()
+
+                    if not city:
+                        continue
+
+                    key = f"{city.lower()}|{country.lower()}"
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+
+                    suggestions.append({
+                        "city": city,
+                        "country": country,
+                        "description": description,
+                        "famous_for": famous_for,
+                    })
+
+                    if len(suggestions) >= safe_limit:
+                        break
+
+            except FuturesTimeoutError:
+                print("   [INFO] AI autocomplete timed out; using non-AI suggestions")
+            except Exception as ai_error:
+                print(f"   [WARNING] AI suggestions unavailable: {ai_error}")
+
+        if DESTINATION_SUGGESTIONS_AI_ONLY:
+            _append_ai_suggestions(safe_limit)
+            return {
+                "status": "success",
+                "query": query,
+                "suggestions": suggestions,
+                "source": "ai",
+                "ai_only": True,
+            }
+
+        # Fallback 1: Google Places Autocomplete (dynamic, non-hardcoded)
+        if GOOGLE_PLACES_API_KEY and len(suggestions) < safe_limit:
+            try:
+                field_mask = (
+                    "suggestions.placePrediction.text.text,"
+                    "suggestions.placePrediction.structuredFormat.mainText.text,"
+                    "suggestions.placePrediction.structuredFormat.secondaryText.text"
+                )
+                response = requests.post(
+                    "https://places.googleapis.com/v1/places:autocomplete",
+                    headers=_google_headers(field_mask),
+                    json={
+                        "input": normalized_query,
+                        "includedPrimaryTypes": ["(cities)"],
+                        "includeQueryPredictions": False,
+                    },
+                    timeout=1.2,
+                )
+
+                if response.status_code == 200:
+                    payload = response.json()
+                    for item in payload.get("suggestions", []):
+                        prediction = item.get("placePrediction", {})
+                        structured = prediction.get("structuredFormat", {})
+                        main_text = structured.get("mainText", {}).get("text", "").strip()
+                        secondary_text = structured.get("secondaryText", {}).get("text", "").strip()
+
+                        if not main_text:
+                            fallback = prediction.get("text", {}).get("text", "").strip()
+                            if fallback:
+                                # Best effort split "City, Country" style labels.
+                                parts = [part.strip() for part in fallback.split(',') if part.strip()]
+                                main_text = parts[0] if parts else ""
+                                secondary_text = ", ".join(parts[1:]) if len(parts) > 1 else ""
+
+                        if not main_text:
+                            continue
+
+                        country = ""
+                        if secondary_text:
+                            secondary_parts = [p.strip() for p in secondary_text.split(',') if p.strip()]
+                            country = secondary_parts[-1] if secondary_parts else secondary_text
+
+                        key = f"{main_text.lower()}|{country.lower()}"
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+
+                        suggestions.append({
+                            "city": main_text,
+                            "country": country,
+                            "description": secondary_text,
+                            "famous_for": "",
+                        })
+
+                        if len(suggestions) >= safe_limit:
+                            break
+            except Exception as places_error:
+                print(f"   [WARNING] Places autocomplete fallback to CSV: {places_error}")
+
+        # Fallback 1b: Google Places Text Search for queries that autocomplete may miss.
+        if GOOGLE_PLACES_API_KEY and len(suggestions) < safe_limit and len(normalized_query) >= 3:
+            try:
+                field_mask = (
+                    "places.displayName.text,"
+                    "places.formattedAddress,"
+                    "places.types"
+                )
+                response = requests.post(
+                    "https://places.googleapis.com/v1/places:searchText",
+                    headers=_google_headers(field_mask),
+                    json={
+                        "textQuery": f"{normalized_query} city in India",
+                        "maxResultCount": max(5, safe_limit * 2),
+                    },
+                    timeout=1.5,
+                )
+
+                if response.status_code == 200:
+                    payload = response.json()
+                    for place in payload.get("places", []):
+                        display_name = str(place.get("displayName", {}).get("text", "")).strip()
+                        formatted_address = str(place.get("formattedAddress", "")).strip()
+
+                        if not display_name:
+                            continue
+
+                        country = ""
+                        if formatted_address:
+                            parts = [p.strip() for p in formatted_address.split(',') if p.strip()]
+                            country = parts[-1] if parts else ""
+
+                        key = f"{display_name.lower()}|{country.lower()}"
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+
+                        suggestions.append({
+                            "city": display_name,
+                            "country": country,
+                            "description": formatted_address,
+                            "famous_for": "",
+                        })
+
+                        if len(suggestions) >= safe_limit:
+                            break
+            except Exception as places_text_error:
+                print(f"   [WARNING] Places text search fallback unavailable: {places_text_error}")
+
+        # Fast path: when Places filled enough cards, return immediately.
+        if len(suggestions) >= safe_limit:
+            _destination_suggestions_cache[query_key] = {
+                "ts": datetime.utcnow().timestamp(),
+                "suggestions": suggestions[:safe_limit],
+            }
+            return {
+                "status": "success",
+                "query": query,
+                "suggestions": suggestions,
+                "source": "places",
+            }
+
+        # Fallback 2: local CSV (India-focused) when AI/Places are unavailable or insufficient.
+        if len(suggestions) < safe_limit:
+            search = normalized_query.lower()
+            filtered = destinations_df[
+                destinations_df['city'].fillna('').str.lower().str.contains(search)
+            ].copy()
+
+            if not filtered.empty:
+                filtered['match_priority'] = filtered['city'].fillna('').str.lower().apply(
+                    lambda city: 0 if city.startswith(search) else 1
+                )
+                filtered = filtered.sort_values(['match_priority', 'city'])
+
+                for _, row in filtered.iterrows():
+                    city = str(row.get('city', '')).strip()
+                    if not city:
+                        continue
+
+                    key = f"{city.lower()}|india"
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+
+                    suggestions.append({
+                        "city": city,
+                        "country": "India",
+                        "description": str(row.get('description', '')).strip(),
+                        "famous_for": str(row.get('famous_for', '')).strip(),
+                    })
+
+                    if len(suggestions) >= safe_limit:
+                        break
+
+        # AI fallback: only fill missing slots, and only when query is meaningful.
+        if DESTINATION_SUGGESTIONS_USE_AI_FILL and len(suggestions) < safe_limit and len(normalized_query) >= 3:
+            _append_ai_suggestions(safe_limit - len(suggestions))
+
+        # Fallback 3: emergency in-memory suggestions to avoid empty UI states.
+        if len(suggestions) < safe_limit:
+            emergency_cities = [
+                ("Bilaspur", "India", "Chhattisgarh, India", "Achanakmar Wildlife Sanctuary"),
+                ("Bilaspur (Himachal Pradesh)", "India", "Himachal Pradesh, India", "Naina Devi Temple"),
+                ("Bikaner", "India", "Rajasthan, India", "Junagarh Fort"),
+                ("Bhubaneswar", "India", "Odisha, India", "Lingaraj Temple"),
+                ("Bhopal", "India", "Madhya Pradesh, India", "Upper Lake"),
+                ("Raipur", "India", "Chhattisgarh, India", "Mahant Ghasidas Museum"),
+                ("Raigarh", "India", "Chhattisgarh, India", "Kelo River views"),
+                ("Ranchi", "India", "Jharkhand, India", "Hundru Falls"),
+                ("Rajgir", "India", "Bihar, India", "Vishwa Shanti Stupa"),
+                ("Rajkot", "India", "Gujarat, India", "Kaba Gandhi No Delo"),
+                ("Ranikhet", "India", "Uttarakhand, India", "Pine forests"),
+                ("Rameswaram", "India", "Tamil Nadu, India", "Ramanathaswamy Temple"),
+                ("Rishikesh", "India", "Uttarakhand, India", "River rafting"),
+                ("Rajasthan", "India", "India", "Forts and palaces"),
+                ("Ratnagiri", "India", "Maharashtra, India", "Alphonso mangoes"),
+            ]
+
+            search = normalized_query.lower()
+            ranked = sorted(
+                emergency_cities,
+                key=lambda item: (0 if item[0].lower().startswith(search) else 1, item[0]),
+            )
+
+            for city, country, description, famous_for in ranked:
+                if search not in city.lower():
+                    continue
+
+                key = f"{city.lower()}|{country.lower()}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+
+                suggestions.append({
+                    "city": city,
+                    "country": country,
+                    "description": description,
+                    "famous_for": famous_for,
+                })
+
+                if len(suggestions) >= safe_limit:
+                    break
+
+        _destination_suggestions_cache[query_key] = {
+            "ts": datetime.utcnow().timestamp(),
+            "suggestions": suggestions[:safe_limit],
+        }
+
+        return {
+            "status": "success",
+            "query": query,
+            "suggestions": suggestions,
+        }
+
+    except Exception as e:
+        print(f"   [ERROR] Destination suggestions error: {e}")
+        return {
+            "status": "error",
+            "query": query,
+            "message": str(e),
+            "suggestions": [],
+        }
 
 
 # ── Swipe Recommendations ───────────────────────────────────────────────
@@ -4203,7 +5349,12 @@ async def get_bookings(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
+    worker_count = int(os.getenv("UVICORN_WORKERS", "2"))
     print("Starting Ultra-Simple Hotel Search Server...")
     print("Server will run on http://localhost:8001")
     print("Mode: CSV + Gemini AI + Google Places + Maps + Vision + Translate")
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    print(f"Uvicorn workers: {worker_count}")
+    if worker_count > 1:
+        uvicorn.run("ultra_simple_server:app", host="0.0.0.0", port=8001, workers=worker_count)
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=8001)

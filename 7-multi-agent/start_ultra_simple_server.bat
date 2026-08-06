@@ -2,7 +2,7 @@
 REM Ultra-Simple Hotel Search Server Launcher
 REM This starts the backend on port 8001
 
-cd /d "c:\Hack2skill\Hack2skill finale\7-multi-agent"
+cd /d "%~dp0"
 
 echo.
 echo ============================================================
@@ -19,6 +19,12 @@ echo.
 echo ============================================================
 echo.
 
-python ultra_simple_server.py
+if exist "..\.venv\Scripts\python.exe" (
+	..\.venv\Scripts\python.exe ultra_simple_server.py
+) else if exist ".venv\Scripts\python.exe" (
+	.venv\Scripts\python.exe ultra_simple_server.py
+) else (
+	python ultra_simple_server.py
+)
 
 pause

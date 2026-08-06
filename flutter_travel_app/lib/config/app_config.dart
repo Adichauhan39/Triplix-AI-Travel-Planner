@@ -1,13 +1,56 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppConfig {
   // API Configuration
-  static const String baseUrl =
-      'https://triplix-server-1026563611026.us-central1.run.app'; // Cloud Run deployed server
+  // Default points to local backend on port 8001 for development.
+  // Override for production builds with:
+  //   --dart-define=API_BASE_URL=https://triplix-server-lzmvxvmz5q-uc.a.run.app
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:8001',
+  );
   static const String apiVersion = 'v1';
 
-  // Gemini API Key
-  static const String geminiApiKey = 'AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo';
+  // Captcha Configuration
+  static const String recaptchaSiteKey = String.fromEnvironment(
+    'RECAPTCHA_SITE_KEY',
+    defaultValue: '',
+  );
+
+  // Google Maps / Places API key. Read from .env at runtime (see
+  // GOOGLE_MAPS_API_KEY in .env.example); falls back to a --dart-define of
+  // the same name for CI/build environments without a bundled .env file.
+  static String get googleMapsApiKey {
+    if (dotenv.isInitialized) {
+      final fromEnv = dotenv.env['GOOGLE_MAPS_API_KEY'];
+      if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    }
+    return const String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+  }
+
+  // Booking.com affiliate "aid" param for redirect links (see
+  // services/affiliate_links.dart). Empty until you sign up for the
+  // Booking.com Affiliate Partner Program — redirects work with no aid,
+  // they just won't be credited to an account until this is set.
+  static String get bookingComAffiliateId {
+    if (dotenv.isInitialized) {
+      final fromEnv = dotenv.env['BOOKING_AFFILIATE_ID'];
+      if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    }
+    return const String.fromEnvironment('BOOKING_AFFILIATE_ID');
+  }
+
+  // TravelPayouts publisher "marker" ID for redirect links (see
+  // services/affiliate_links.dart). This is your TravelPayouts account ID —
+  // shown as "ID" in the account sidebar.
+  static String get travelpayoutsMarkerId {
+    if (dotenv.isInitialized) {
+      final fromEnv = dotenv.env['TRAVELPAYOUTS_MARKER_ID'];
+      if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+    }
+    return const String.fromEnvironment('TRAVELPAYOUTS_MARKER_ID');
+  }
 
   // API Endpoints
   static const String chatEndpoint = '/chat';
@@ -18,17 +61,17 @@ class AppConfig {
   static const String budgetEndpoint = '/budget';
 
   // App Configuration
-  static const String appName = 'AI Travel Booking';
+  static const String appName = 'Triplix - India\'s AI Travel Assistant';
   static const String appVersion = '1.0.0';
 
   // Colors - Exact EaseMyTrip color scheme
-  static const Color primaryColor = Color(0xFF1e3a8a); // Deep Blue
+  static const Color primaryColor = Color.fromARGB(255, 181, 181, 183); // Deep Blue
   static const Color secondaryColor = Color(0xFFdc2626); // Red
   static const Color accentColor = Color(0xFFea580c); // Orange
   static const Color backgroundColor =
       Color(0xFFF8FAFC); // Light gray background
   static const Color cardColor = Colors.white;
-  static const Color surfaceColor = Color(0xFFFFFFFF);
+  static const Color surfaceColor = Color.fromARGB(255, 176, 142, 142);
   static const Color textPrimary = Color(0xFF1e293b); // Dark slate
   static const Color textSecondary = Color(0xFF64748b); // Medium gray
   static const Color textTertiary = Color(0xFF94a3b8); // Light gray

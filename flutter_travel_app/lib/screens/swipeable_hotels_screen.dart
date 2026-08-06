@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:animate_do/animate_do.dart';
 import '../config/app_config.dart';
 import '../models/hotel.dart';
 import '../services/mock_data_service.dart';
+import '../services/python_adk_service.dart';
 import '../services/preference_learning_service.dart';
 
 class SwipeableHotelsScreen extends StatefulWidget {
@@ -15,67 +15,32 @@ class SwipeableHotelsScreen extends StatefulWidget {
   State<SwipeableHotelsScreen> createState() => _SwipeableHotelsScreenState();
 }
 
-class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
-    with SingleTickerProviderStateMixin {
+class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
   final PreferenceLearningService _learningService =
       PreferenceLearningService();
   final MockDataService _mockData = MockDataService();
+  final PythonADKService _aiService = PythonADKService();
 
-  late List<Hotel> _remainingHotels;
+  late List<Hotel> _recommendedHotels;
   final List<Hotel> _cart = [];
   final List<Hotel> _rejected = [];
-
-  int _currentIndex = 0;
-  double _dragDistance = 0;
-  bool _isDragging = false;
-
-  late AnimationController _animationController;
-  late Animation<Offset> slideAnimation;
 
   @override
   void initState() {
     super.initState();
-    _remainingHotels = List.from(widget.hotels);
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    slideAnimation = Tween<Offset>(
-      begin: Offset.zero,
-      end: const Offset(2, 0),
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    ));
+    _recommendedHotels = List.from(widget.hotels);
   }
 
-  @override
-  void dispose() {
-    _animationController.dispose();
-    super.dispose();
-  }
-
-  void _onSwipeRight() async {
-    if (_currentIndex >= _remainingHotels.length) return;
-
-    final hotel = _remainingHotels[_currentIndex];
+  Future<void> _likeHotel(Hotel hotel) async {
     setState(() {
-      _cart.add(hotel);
+      _recommendedHotels.removeWhere((h) => h.id == hotel.id);
+      if (!_cart.any((h) => h.id == hotel.id)) {
+        _cart.add(hotel);
+      }
+      _rejected.removeWhere((h) => h.id == hotel.id);
     });
 
-    // Learn from this preference
     await _learningService.recordLike(hotel);
-
-    // Animate card out
-    await _animationController.forward();
-
-    setState(() {
-      _currentIndex++;
-    });
-
-    _animationController.reset();
-
-    // Show feedback
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -90,40 +55,22 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
       ),
     );
 
-    // Load more recommendations if running low
-    if (_currentIndex >= _remainingHotels.length - 2) {
+    if (_recommendedHotels.length <= 2) {
       _loadMoreRecommendations();
     }
   }
 
-  void _onSwipeLeft() async {
-    if (_currentIndex >= _remainingHotels.length) return;
-
-    final hotel = _remainingHotels[_currentIndex];
+  Future<void> _dislikeHotel(Hotel hotel) async {
     setState(() {
-      _rejected.add(hotel);
+      _recommendedHotels.removeWhere((h) => h.id == hotel.id);
+      if (!_rejected.any((h) => h.id == hotel.id)) {
+        _rejected.add(hotel);
+      }
+      _cart.removeWhere((h) => h.id == hotel.id);
     });
 
-    // Learn from this rejection
     await _learningService.recordDislike(hotel);
 
-    // Animate card out
-    slideAnimation = Tween<Offset>(
-      begin: Offset.zero,
-      end: const Offset(-2, 0),
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    ));
-    await _animationController.forward();
-
-    setState(() {
-      _currentIndex++;
-    });
-
-    _animationController.reset();
-
-    // Show feedback
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Row(
@@ -138,10 +85,19 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
       ),
     );
 
-    // Load more recommendations if running low
-    if (_currentIndex >= _remainingHotels.length - 2) {
+    if (_recommendedHotels.length <= 2) {
       _loadMoreRecommendations();
     }
+  }
+
+  void _restoreRejectedHotel(Hotel hotel) {
+    setState(() {
+      _rejected.removeWhere((h) => h.id == hotel.id);
+      if (!_recommendedHotels.any((h) => h.id == hotel.id) &&
+          !_cart.any((h) => h.id == hotel.id)) {
+        _recommendedHotels.insert(0, hotel);
+      }
+    });
   }
 
   Future<void> _loadMoreRecommendations() async {
@@ -151,13 +107,144 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
       excludeIds: [
         ..._cart.map((h) => h.id),
         ..._rejected.map((h) => h.id),
-        ..._remainingHotels.map((h) => h.id),
+        ..._recommendedHotels.map((h) => h.id),
       ],
     );
 
     setState(() {
-      _remainingHotels.addAll(newHotels);
+      _recommendedHotels.addAll(newHotels);
     });
+  }
+
+  Future<void> _showHotelAiDialog(Hotel hotel) async {
+    final questionController = TextEditingController();
+    String aiResponse = '';
+    bool isLoading = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> askAi() async {
+              final question = questionController.text.trim();
+              if (question.isEmpty || isLoading) return;
+
+              setDialogState(() {
+                isLoading = true;
+                aiResponse = '';
+              });
+
+              final result = await _aiService.sendToManager(
+                message:
+                    'User is evaluating a hotel before decision. Answer the user query clearly and concisely.\n\n'
+                    'Hotel: ${hotel.name}\n'
+                    'City: ${hotel.city}\n'
+                    'Type: ${hotel.type}\n'
+                    'Price/night: ₹${hotel.pricePerNight.toStringAsFixed(0)}\n'
+                    'Rating: ${hotel.rating}\n'
+                    'Amenities: ${hotel.amenities.join(', ')}\n'
+                    'Description: ${hotel.description}\n\n'
+                    'User question: $question',
+                context: {
+                  'hotel': hotel.toJson(),
+                  'question': question,
+                  'intent': 'hotel_pre_decision_enquiry',
+                },
+                page: 'home',
+              );
+
+              setDialogState(() {
+                isLoading = false;
+                aiResponse = (result['response'] ?? '').toString().trim();
+                if (aiResponse.isEmpty) {
+                  aiResponse = 'I could not generate a response right now.';
+                }
+              });
+            }
+
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Icon(Icons.smart_toy, color: AppConfig.primaryColor),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Ask AI about ${hotel.name}',
+                      style: const TextStyle(fontSize: 18),
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 560,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: questionController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText:
+                            'Example: Is this hotel good for family and airport connectivity?',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      onSubmitted: (_) => askAi(),
+                    ),
+                    const SizedBox(height: 12),
+                    if (isLoading)
+                      const Row(
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 8),
+                          Text('AI is thinking...'),
+                        ],
+                      ),
+                    if (!isLoading && aiResponse.isNotEmpty)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppConfig.primaryColor.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color:
+                                AppConfig.primaryColor.withValues(alpha: 0.2),
+                          ),
+                        ),
+                        child: Text(
+                          aiResponse,
+                          style: const TextStyle(height: 1.4),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Close'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: isLoading ? null : askAi,
+                  icon: const Icon(Icons.send),
+                  label: const Text('Ask AI'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    questionController.dispose();
   }
 
   void _viewCart() {
@@ -166,12 +253,9 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
 
   @override
   Widget build(BuildContext context) {
-    final hasMoreCards = _currentIndex < _remainingHotels.length;
-    final currentHotel = hasMoreCards ? _remainingHotels[_currentIndex] : null;
-
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Swipe Hotels'),
+        title: const Text('Hotel Recommendations'),
         centerTitle: true,
         actions: [
           Stack(
@@ -210,256 +294,248 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen>
         ],
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            // Progress indicator
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Hotel ${_currentIndex + 1} of ${_remainingHotels.length}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      Text(
-                        '${_cart.length} in cart',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: AppConfig.primaryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(
-                    value: hasMoreCards
-                        ? _currentIndex / _remainingHotels.length
-                        : 1.0,
-                    backgroundColor: Colors.grey[200],
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      AppConfig.primaryColor,
-                    ),
-                  ),
-                ],
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildSectionHeader(
+                title: 'Recommended Hotels',
+                subtitle: '${_recommendedHotels.length} cards',
+                icon: Icons.recommend,
+                color: AppConfig.primaryColor,
               ),
+              const SizedBox(height: 10),
+              if (_recommendedHotels.isEmpty)
+                _buildEmptyBox(
+                  message: 'No more recommendations right now.',
+                  actionLabel: 'Load More',
+                  onPressed: _loadMoreRecommendations,
+                )
+              else
+                ..._recommendedHotels.map(
+                  (hotel) => _buildRecommendationCard(hotel),
+                ),
+              const SizedBox(height: 18),
+              _buildSectionHeader(
+                title: 'Liked Hotels',
+                subtitle: '${_cart.length} saved',
+                icon: Icons.favorite,
+                color: Colors.green,
+              ),
+              const SizedBox(height: 10),
+              if (_cart.isEmpty)
+                _buildEmptyBox(
+                  message: 'Hotels you like will stay here.',
+                )
+              else
+                ..._cart.map(
+                  (hotel) => _buildCompactHotelCard(
+                    hotel,
+                    accentColor: Colors.green,
+                    trailing: TextButton(
+                      onPressed: () => _showHotelDetails(hotel),
+                      child: const Text('Details'),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 18),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: _buildSectionHeader(
+                  title: 'Not Interested',
+                  subtitle: '${_rejected.length} rejected',
+                  icon: Icons.close,
+                  color: Colors.red,
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (_rejected.isEmpty)
+                _buildEmptyBox(
+                  message:
+                      'Hotels you reject will be moved here in red section.',
+                )
+              else
+                ..._rejected.map(
+                  (hotel) => _buildCompactHotelCard(
+                    hotel,
+                    accentColor: Colors.red,
+                    trailing: TextButton.icon(
+                      onPressed: () => _restoreRejectedHotel(hotel),
+                      icon: const Icon(Icons.undo, size: 16),
+                      label: const Text('Restore'),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+        ),
+        Text(
+          subtitle,
+          style:
+              TextStyle(color: Colors.grey[700], fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyBox(
+      {required String message, String? actionLabel, VoidCallback? onPressed}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: Colors.grey[700]),
             ),
+          ),
+          if (actionLabel != null && onPressed != null)
+            TextButton(onPressed: onPressed, child: Text(actionLabel)),
+        ],
+      ),
+    );
+  }
 
-            // Card Stack
-            Expanded(
-              child: hasMoreCards
-                  ? Stack(
-                      children: [
-                        // Next card (preview)
-                        if (_currentIndex + 1 < _remainingHotels.length)
-                          Center(
-                            child: Transform.scale(
-                              scale: 0.9,
-                              child: Opacity(
-                                opacity: 0.5,
-                                child: _buildHotelCard(
-                                  _remainingHotels[_currentIndex + 1],
-                                  isInteractive: false,
-                                ),
-                              ),
-                            ),
-                          ),
-
-                        // Current card
-                        Center(
-                          child: GestureDetector(
-                            onHorizontalDragStart: (details) {
-                              setState(() {
-                                _isDragging = true;
-                                _dragDistance = 0;
-                              });
-                            },
-                            onHorizontalDragUpdate: (details) {
-                              setState(() {
-                                _dragDistance += details.delta.dx;
-                              });
-                            },
-                            onHorizontalDragEnd: (details) {
-                              setState(() {
-                                _isDragging = false;
-                              });
-
-                              if (_dragDistance > 100) {
-                                _onSwipeRight();
-                              } else if (_dragDistance < -100) {
-                                _onSwipeLeft();
-                              } else {
-                                setState(() {
-                                  _dragDistance = 0;
-                                });
-                              }
-                            },
-                            child: Transform.translate(
-                              offset: Offset(_dragDistance, 0),
-                              child: Transform.rotate(
-                                angle: _dragDistance / 1000,
-                                child: _buildHotelCard(
-                                  currentHotel!,
-                                  isInteractive: true,
-                                ),
-                              ),
-                            ),
-                          ),
+  Widget _buildRecommendationCard(Hotel hotel) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x16000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          ListTile(
+            leading: CircleAvatar(
+              backgroundColor: AppConfig.primaryColor.withValues(alpha: 0.12),
+              backgroundImage: hotel.imageUrl.isNotEmpty
+                  ? NetworkImage(hotel.imageUrl)
+                  : null,
+              child: hotel.imageUrl.isEmpty
+                  ? const Icon(Icons.hotel, color: AppConfig.primaryColor)
+                  : null,
+            ),
+            title: Text(
+              hotel.name,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              '${hotel.city} • ${hotel.rating}★ • ₹${hotel.pricePerNight.toStringAsFixed(0)}/night',
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.info_outline),
+              onPressed: () => _showHotelDetails(hotel),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            child: Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _showHotelAiDialog(hotel),
+                    icon: const Icon(Icons.smart_toy),
+                    label: const Text('Ask AI before deciding'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _dislikeHotel(hotel),
+                        icon: const Icon(Icons.close, color: Colors.red),
+                        label: const Text('Not Interested'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red,
+                          side: BorderSide(color: Colors.red.shade300),
                         ),
-
-                        // Swipe indicators
-                        if (_isDragging) ...[
-                          if (_dragDistance > 50)
-                            Positioned(
-                              top: 100,
-                              right: 50,
-                              child: FadeIn(
-                                child: Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Row(
-                                    children: [
-                                      Icon(Icons.favorite,
-                                          color: Colors.white, size: 32),
-                                      SizedBox(width: 8),
-                                      Text(
-                                        'LIKE',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          if (_dragDistance < -50)
-                            Positioned(
-                              top: 100,
-                              left: 50,
-                              child: FadeIn(
-                                child: Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Row(
-                                    children: [
-                                      Text(
-                                        'NOPE',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      SizedBox(width: 8),
-                                      Icon(Icons.close,
-                                          color: Colors.white, size: 32),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ],
-                    )
-                  : Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.check_circle_outline,
-                            size: 80,
-                            color: Colors.grey[400],
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No more hotels!',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'You\'ve reviewed all available hotels',
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.grey[500],
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          if (_cart.isNotEmpty)
-                            ElevatedButton.icon(
-                              onPressed: _viewCart,
-                              icon: const Icon(Icons.shopping_cart),
-                              label: Text('View Cart (${_cart.length})'),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 32,
-                                  vertical: 16,
-                                ),
-                              ),
-                            ),
-                        ],
                       ),
                     ),
-            ),
-
-            // Action buttons
-            if (hasMoreCards)
-              Padding(
-                padding: const EdgeInsets.all(24),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Dislike button
-                    FloatingActionButton(
-                      heroTag: 'dislike',
-                      onPressed: _onSwipeLeft,
-                      backgroundColor: Colors.white,
-                      child:
-                          const Icon(Icons.close, color: Colors.red, size: 32),
-                    ),
-
-                    // Info button
-                    FloatingActionButton(
-                      heroTag: 'info',
-                      onPressed: () {
-                        _showHotelDetails(currentHotel!);
-                      },
-                      backgroundColor: Colors.white,
-                      child: const Icon(Icons.info_outline,
-                          color: AppConfig.primaryColor, size: 28),
-                    ),
-
-                    // Like button
-                    FloatingActionButton(
-                      heroTag: 'like',
-                      onPressed: _onSwipeRight,
-                      backgroundColor: Colors.white,
-                      child: const Icon(Icons.favorite,
-                          color: Colors.green, size: 32),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => _likeHotel(hotel),
+                        icon: const Icon(Icons.favorite),
+                        label: const Text('Keep'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
                     ),
                   ],
                 ),
-              ),
-          ],
-        ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactHotelCard(
+    Hotel hotel, {
+    required Color accentColor,
+    Widget? trailing,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accentColor.withValues(alpha: 0.5)),
+      ),
+      child: ListTile(
+        leading: Icon(Icons.hotel, color: accentColor),
+        title: Text(hotel.name,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(
+            '${hotel.city} • ₹${hotel.pricePerNight.toStringAsFixed(0)}/night'),
+        trailing: trailing,
       ),
     );
   }

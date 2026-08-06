@@ -37,7 +37,7 @@ def get_hotel_location_and_images(hotel_name: str, city: str) -> Dict[str, Any]:
     api_key = os.getenv('GOOGLE_PLACES_API_KEY')
     
     if not api_key:
-        print("⚠️ WARNING: GOOGLE_PLACES_API_KEY not found in environment")
+        print("\033[91m WARNING: GOOGLE_PLACES_API_KEY not found in environment \033[0m")
         return {
             "hotel_name": hotel_name,
             "city": city,
@@ -48,7 +48,7 @@ def get_hotel_location_and_images(hotel_name: str, city: str) -> Dict[str, Any]:
             "message": "Please configure GOOGLE_PLACES_API_KEY in .env file"
         }
     
-    print(f"🔍 Searching Google Places for: {hotel_name} in {city}")
+    print(f" Searching Google Places for: {hotel_name} in {city}")
     
     try:
         # Search for the place using Text Search
@@ -61,10 +61,10 @@ def get_hotel_location_and_images(hotel_name: str, city: str) -> Dict[str, Any]:
         search_response = requests.get(search_url, params=search_params, timeout=10)
         search_data = search_response.json()
         
-        print(f"📡 Google Places API Response Status: {search_data.get('status')}")
+        print(f" Google Places API Response Status: {search_data.get('status')}")
         
         if search_data.get("status") != "OK" or not search_data.get("results"):
-            print(f"⚠️ No results found for {hotel_name}")
+            print(f" No results found for {hotel_name}")
             return {
                 "hotel_name": hotel_name,
                 "city": city,
@@ -79,7 +79,7 @@ def get_hotel_location_and_images(hotel_name: str, city: str) -> Dict[str, Any]:
         place = search_data["results"][0]
         place_id = place.get("place_id")
         
-        print(f"✅ Found place_id: {place_id}")
+        print(f" Found place_id: {place_id}")
         
         # Get place details including photos
         details_url = "https://maps.googleapis.com/maps/api/place/details/json"
@@ -93,7 +93,7 @@ def get_hotel_location_and_images(hotel_name: str, city: str) -> Dict[str, Any]:
         details_data = details_response.json()
         
         if details_data.get("status") != "OK":
-            print(f"⚠️ Details fetch failed: {details_data.get('status')}")
+            print(f" Details fetch failed: {details_data.get('status')}")
             raise Exception("Could not fetch place details")
         
         result = details_data.get("result", {})
@@ -101,7 +101,7 @@ def get_hotel_location_and_images(hotel_name: str, city: str) -> Dict[str, Any]:
         # Extract photos
         photo_urls = []
         if result.get("photos"):
-            print(f"📸 Found {len(result['photos'])} photos")
+            print(f" Found {len(result['photos'])} photos")
             for photo in result["photos"][:5]:  # Get up to 5 photos
                 photo_reference = photo.get("photo_reference")
                 if photo_reference:

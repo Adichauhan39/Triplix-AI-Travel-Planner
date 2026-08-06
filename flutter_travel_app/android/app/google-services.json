@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "966084332372",
+    "project_id": "triplix-831cc",
+    "storage_bucket": "triplix-831cc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:966084332372:android:9c9c02ff8b4e1fc54756c1",
+        "android_client_info": {
+          "package_name": "com.example.flutter_travel_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkl_3cuB3eFKoy6wPjqVJARlJXCGhrTr0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

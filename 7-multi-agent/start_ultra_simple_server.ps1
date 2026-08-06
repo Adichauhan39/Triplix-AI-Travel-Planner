@@ -8,7 +8,7 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 
 # Navigate to backend directory
-Set-Location "c:\Hack2skill\Hack2skill finale\7-multi-agent"
+Set-Location $PSScriptRoot
 
 Write-Host "📍 Current directory: $(Get-Location)" -ForegroundColor Yellow
 Write-Host ""
@@ -62,7 +62,13 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 
 # Start the server
-python ultra_simple_server.py
+if (Test-Path "..\.venv\Scripts\python.exe") {
+    & "..\.venv\Scripts\python.exe" ultra_simple_server.py
+} elseif (Test-Path ".\.venv\Scripts\python.exe") {
+    & ".\.venv\Scripts\python.exe" ultra_simple_server.py
+} else {
+    python ultra_simple_server.py
+}
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan

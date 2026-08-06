@@ -1,6 +1,8 @@
 class UserPreferences {
   String? destination;
+  String? origin;
   double? budget;
+  String budgetCurrencyCode = 'USD';
   List<String> selectedActivities = [];
   List<String> selectedTransport = [];
   List<String> selectedAccommodation = [];
@@ -20,6 +22,7 @@ class UserPreferences {
   int? numberOfPeople;
 
   bool get hasDestination => destination != null && destination!.isNotEmpty;
+  bool get hasOrigin => origin != null && origin!.isNotEmpty;
   bool get hasBudget => budget != null && budget! > 0;
   bool get hasActivities => selectedActivities.isNotEmpty;
   bool get hasTransport => selectedTransport.isNotEmpty;
@@ -42,7 +45,9 @@ class UserPreferences {
 
   Map<String, dynamic> toJson() => {
         'destination': destination,
+        'origin': origin,
         'budget': budget,
+        'budgetCurrencyCode': budgetCurrencyCode,
         'selectedActivities': selectedActivities,
         'selectedTransport': selectedTransport,
         'selectedAccommodation': selectedAccommodation,
@@ -64,7 +69,15 @@ class UserPreferences {
 
   void fromJson(Map<String, dynamic> json) {
     destination = json['destination'];
-    budget = json['budget'];
+    origin = json['origin'];
+    final budgetValue = json['budget'];
+    if (budgetValue is num) {
+      budget = budgetValue.toDouble();
+    } else {
+      budget = null;
+    }
+    budgetCurrencyCode =
+        (json['budgetCurrencyCode'] as String?)?.toUpperCase() ?? 'USD';
     selectedActivities = List<String>.from(json['selectedActivities'] ?? []);
     selectedTransport = List<String>.from(json['selectedTransport'] ?? []);
     selectedAccommodation =

@@ -5,6 +5,7 @@ import '../models/hotel.dart';
 import '../models/destination.dart';
 import '../models/travel_option.dart';
 import '../models/booking.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ApiService {
   static final ApiService _instance = ApiService._internal();
@@ -97,7 +98,7 @@ class ApiService {
   }) async {
     try {
       // Use port 8001 for the lightweight AI test server
-      final aiBaseUrl = AppConfig.baseUrl;
+      const aiBaseUrl = AppConfig.baseUrl;
 
       final response = await http
           .post(
@@ -293,6 +294,7 @@ class ApiService {
               'check_out_date': checkOutDate?.toIso8601String(),
               'total_price': totalPrice,
               'session_id': _sessionId,
+              'user_id': FirebaseAuth.instance.currentUser?.uid,
             }),
           )
           .timeout(AppConfig.connectionTimeout);

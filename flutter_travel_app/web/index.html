@@ -18,7 +18,14 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Triplix is India's AI-powered travel planning app. Find and book flights, hotels, trains, and buses across India with a personalized itinerary built around your budget, dates, and preferences, powered by Google Gemini.">
+  <meta name="keywords" content="India travel planner, AI travel assistant India, flight booking India, hotel booking India, train booking India, bus booking India, trip itinerary India, domestic travel India">
+
+  <!-- Open Graph / social link previews -->
+  <meta property="og:title" content="Triplix - India's AI Travel Assistant">
+  <meta property="og:description" content="Plan and book flights, hotels, trains, and buses across India with an AI-powered travel assistant that builds your itinerary around your budget and preferences.">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="en_IN">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -29,9 +36,12 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>Triplix - Travel Assistant</title>
+  <title>Triplix - India's AI Travel Assistant | Flights, Hotels, Trains & Bus Booking</title>
   <link rel="manifest" href="manifest.json">
-  
+
+  <!-- Google reCAPTCHA v2 (checkbox) API -->
+  <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+
   <style>
     body {
       margin: 0;
@@ -114,6 +124,23 @@
   </style>
 </head>
 <body>
+  <!-- Flutter web renders entirely client-side via JS, so crawlers/bots
+       that don't execute JS (search engines doing a quick pass, some
+       affiliate-network review bots) see nothing without this fallback. -->
+  <noscript>
+    <h1>Triplix - India's AI Travel Assistant</h1>
+    <p>
+      Triplix is an AI-powered travel planning app for travel across India.
+      Tell Triplix your budget, travel dates, and preferences, and it builds
+      a personalized trip itinerary for you, powered by Google Gemini.
+    </p>
+    <p>
+      Search and compare flights, hotels, trains, and bus routes between
+      Indian cities like Mumbai, Delhi, Goa, Bangalore, Jaipur, Kolkata,
+      Chennai, and Hyderabad, shortlist your favorites, and book directly
+      through our trusted travel partners.
+    </p>
+  </noscript>
   <div id="splash-screen">
     <div class="logo-container">
       <img src="favicon.png" alt="Triplix Logo" class="triplix-logo">
@@ -121,6 +148,24 @@
     <div class="loading-spinner"></div>
   </div>
   
+  <script>
+    // Force clear all service workers and caches to fix white screen
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var r of registrations) {
+          r.unregister();
+        }
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(function(names) {
+        for (var name of names) {
+          caches.delete(name);
+        }
+      });
+    }
+  </script>
+
   <script>
     // Remove splash screen once Flutter is loaded
     window.addEventListener('load', function() {
@@ -146,8 +191,24 @@
     });
   </script>
   
-  <!-- Google Maps JavaScript API -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCmAB483DdI6EU73LLXbnXwd5I47YxYjWo"></script>
+  <!-- Google Maps JavaScript API (with Places library for city autocomplete).
+       The key is supplied by env.js (gitignored, generated from
+       GOOGLE_MAPS_API_KEY in .env - see web/env.js.example) so it's never
+       committed to this file. -->
+  <script src="env.js"></script>
+  <script>
+    (function () {
+      var key = (window.GOOGLE_MAPS_API_KEY || '');
+      var script = document.createElement('script');
+      script.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&libraries=places';
+      document.head.appendChild(script);
+    })();
+  </script>
+
+  <!-- Firebase JS SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

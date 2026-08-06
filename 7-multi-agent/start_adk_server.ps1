@@ -1,5 +1,5 @@
 # ADK Travel Booking Server Launcher
-# Run this script to start the ADK-integrated backend on port 8001
+# Run this script to start the ultra-simple backend on port 8001
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
@@ -8,7 +8,7 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 
 # Navigate to backend directory
-Set-Location "c:\Hack2skill\Hack2skill finale\7-multi-agent"
+Set-Location $PSScriptRoot
 
 Write-Host "📍 Current directory: $(Get-Location)" -ForegroundColor Yellow
 Write-Host ""
@@ -56,12 +56,12 @@ foreach ($file in $dataFiles) {
 }
 Write-Host "✅ Data files found" -ForegroundColor Green
 
-# Verify adk_server.py exists
-if (-not (Test-Path "adk_server.py")) {
+# Verify ultra_simple_server.py exists
+if (-not (Test-Path "ultra_simple_server.py")) {
     Write-Host "❌ Error: Server file not found" -ForegroundColor Red
     exit 1
 }
-Write-Host "✅ ADK server file found" -ForegroundColor Green
+Write-Host "✅ Ultra-simple server file found" -ForegroundColor Green
 
 # Check Python environment
 Write-Host ""
@@ -77,16 +77,22 @@ try {
 # Check if required packages are installed
 Write-Host ""
 Write-Host "📦 Checking dependencies..." -ForegroundColor Yellow
-$requiredPackages = @("fastapi", "uvicorn", "pandas", "google-generativeai", "python-dotenv")
+$requiredPackages = @(
+    @{ Package = "fastapi"; Import = "fastapi" },
+    @{ Package = "uvicorn"; Import = "uvicorn" },
+    @{ Package = "pandas"; Import = "pandas" },
+    @{ Package = "google-generativeai"; Import = "google.generativeai" },
+    @{ Package = "python-dotenv"; Import = "dotenv" }
+)
 $missingPackages = @()
 
 foreach ($package in $requiredPackages) {
     try {
-        python -c "import $package" 2>$null
-        Write-Host "✅ $package installed" -ForegroundColor Green
+        python -c "import $($package.Import)" 2>$null
+        Write-Host "✅ $($package.Package) installed" -ForegroundColor Green
     } catch {
-        $missingPackages += $package
-        Write-Host "❌ $package missing" -ForegroundColor Red
+        $missingPackages += $package.Package
+        Write-Host "❌ $($package.Package) missing" -ForegroundColor Red
     }
 }
 
@@ -102,13 +108,18 @@ if ($missingPackages.Count -gt 0) {
 }
 
 Write-Host ""
-Write-Host "🚀 Starting ADK Travel Booking Server..." -ForegroundColor Cyan
+Write-Host "🚀 Starting Ultra-Simple Travel Booking Server..." -ForegroundColor Cyan
 Write-Host "📡 Server will be available at: http://localhost:8001" -ForegroundColor Cyan
-Write-Host "🤖 Google ADK Manager Agent integrated!" -ForegroundColor Cyan
+Write-Host "🤖 ADK-compatible endpoints included!" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Yellow
 Write-Host ""
 
 # Start the server
-python adk_server.py</content>
-<parameter name="filePath">c:\Hack2skill\Hack2skill finale\7-multi-agent\start_adk_server.ps1
+if (Test-Path "..\.venv\Scripts\python.exe") {
+    & "..\.venv\Scripts\python.exe" ultra_simple_server.py
+} elseif (Test-Path ".\.venv\Scripts\python.exe") {
+    & ".\.venv\Scripts\python.exe" ultra_simple_server.py
+} else {
+    python ultra_simple_server.py
+}
