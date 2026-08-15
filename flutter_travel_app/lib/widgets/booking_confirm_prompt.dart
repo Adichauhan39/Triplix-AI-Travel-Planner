@@ -343,6 +343,22 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   List<Map<String, String>> _suggestions = [];
   bool _lookingUp = false;
 
+  /// The city's hotels, loaded once when the sheet opens. Kept separate from
+  /// [_suggestions] so typing can filter them locally for an instant result,
+  /// and so clearing the field restores the full list instead of nothing.
+  List<Map<String, String>> _cityHotels = [];
+
+  /// Places results keyed by the query that produced them, so re-typing or
+  /// backspacing reuses what we already fetched rather than waiting on the
+  /// network again. Mirrors the prefix cache behind the onboarding city
+  /// fields, which is what makes those feel instant.
+  final Map<String, List<Map<String, String>>> _hotelCache = {};
+
+  /// The suggestion the user tapped. Selecting is not saving: this only marks
+  /// the card so they can see their choice, and "Save to itinerary" is what
+  /// actually commits it.
+  String? _selectedHotel;
+
   /// True while the final "did you mean?" check runs on save.
   bool _verifying = false;
 
@@ -409,9 +425,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         query: 'hotel', city: widget.city, limit: 6);
     if (!mounted) return;
     setState(() {
-      // Don't clobber anything the user has already typed their way to.
-      if (found != null && _controller.text.trim().isEmpty) {
-        _suggestions = found;
+      if (found != null) {
+        _cityHotels = found;
+        // Don't clobber anything the user has already typed their way to.
+        if (_controller.text.trim().isEmpty) _suggestions = found;
       }
       _lookingUp = false;
     });
@@ -889,43 +906,85 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     }
   }
 
+  /// Hotels already in memory whose name contains [query] — the instant half
+  /// of the lookup, shown while the Places call is still in flight so the list
+  /// reacts on the keystroke rather than after a round trip.
+  ///
+  /// Searches the city list and every cached response, deliberately not the
+  /// currently displayed [_suggestions]: filtering the visible list would make
+  /// it shrink-only, so backspacing could never bring a hotel back.
+  List<Map<String, String>> _localMatches(String query) {
+    final seen = <String>{};
+    final out = <Map<String, String>>[];
+    for (final h in [..._cityHotels, ..._hotelCache.values.expand((e) => e)]) {
+      final name = h['name'] ?? '';
+      if (name.toLowerCase().contains(query) && seen.add(name.toLowerCase())) {
+        out.add(h);
+      }
+    }
+    return out;
+  }
+
   void _onQueryChanged(String value) {
     _debounce?.cancel();
     // Editing after picking makes it free text again.
     _pickedFromPlaces = false;
+    _selectedHotel = null;
 
-    final query = value.trim();
-    if (query.length < 3) {
+    final query = value.trim().toLowerCase();
+    // Below the useful-query threshold, fall back to the city list rather than
+    // an empty box — clearing the field should return the user to where they
+    // started, not to nothing.
+    if (query.length < 2) {
       setState(() {
-        _suggestions = [];
+        _suggestions = _cityHotels;
         _lookingUp = false;
       });
       return;
     }
 
-    setState(() => _lookingUp = true);
-    _debounce = Timer(const Duration(milliseconds: 400), () async {
+    // Instant pass: a cached response for this exact query, otherwise a local
+    // filter over what's already on screen.
+    final cached = _hotelCache[query];
+    final immediate = cached ?? _localMatches(query);
+    setState(() {
+      if (immediate.isNotEmpty) _suggestions = immediate;
+      _lookingUp = cached == null;
+    });
+    if (cached != null) return;
+
+    // 250ms rather than the onboarding fields' 120ms: each miss here is a
+    // billed Places call taking ~2s, and the instant pass above already
+    // covers the gap, so a shorter debounce would buy responsiveness the
+    // user can't perceive at roughly double the API spend.
+    _debounce = Timer(const Duration(milliseconds: 250), () async {
       final found = await _adkService.searchHotelNames(
           query: query, city: widget.city, limit: 6);
       if (!mounted) return;
       // Ignore a response the user has already typed past.
-      if (_controller.text.trim() != query) return;
+      if (_controller.text.trim().toLowerCase() != query) return;
       setState(() {
         // null = lookup failed. Keep whatever was already on screen rather
         // than blanking the list on a transient error.
-        if (found != null) _suggestions = found;
+        if (found != null) {
+          _hotelCache[query] = found;
+          _suggestions = found;
+        }
         _lookingUp = false;
       });
     });
   }
 
+  /// Marks a suggestion as the user's choice. Deliberately does not save or
+  /// close: the list stays up with the selection ticked so they can change
+  /// their mind, and "Save to itinerary" is the only thing that commits.
   void _pick(String name) {
     _debounce?.cancel();
     _controller.text = name;
     _pickedFromPlaces = true;
     FocusScope.of(context).unfocus();
     setState(() {
-      _suggestions = [];
+      _selectedHotel = name;
       _lookingUp = false;
     });
   }
@@ -1131,13 +1190,17 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           if (!_isFlight && _suggestions.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
-              _controller.text.trim().isEmpty
-                  ? 'Hotels in ${widget.city} — tap the one you booked'
-                  : 'Did you mean one of these?',
+              _selectedHotel != null
+                  ? 'Selected — tap "Save to itinerary" to add it'
+                  : _controller.text.trim().isEmpty
+                      ? 'Hotels in ${widget.city} — tap the one you booked'
+                      : 'Did you mean one of these?',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: Colors.grey[700],
+                color: _selectedHotel != null
+                    ? AppConfig.primaryColor
+                    : Colors.grey[700],
               ),
             ),
             const SizedBox(height: 8),
@@ -1148,13 +1211,22 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                   children: _suggestions.map((s) {
                     final name = s['name'] ?? '';
                     final address = s['address'] ?? '';
+                    final selected = _selectedHotel == name;
                     return Card(
                       margin: const EdgeInsets.only(bottom: 8),
                       elevation: 0,
+                      color: selected
+                          ? AppConfig.primaryColor.withValues(alpha: 0.08)
+                          : null,
                       shape: RoundedRectangleBorder(
                         borderRadius:
                             BorderRadius.circular(AppConfig.radiusSmall),
-                        side: BorderSide(color: Colors.grey.shade300),
+                        side: BorderSide(
+                          color: selected
+                              ? AppConfig.primaryColor
+                              : Colors.grey.shade300,
+                          width: selected ? 2 : 1,
+                        ),
                       ),
                       child: InkWell(
                         borderRadius:
@@ -1165,7 +1237,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                               horizontal: 12, vertical: 10),
                           child: Row(
                             children: [
-                              const Icon(Icons.hotel,
+                              Icon(selected ? Icons.check_circle : Icons.hotel,
                                   size: 20, color: AppConfig.primaryColor),
                               const SizedBox(width: 10),
                               Expanded(
@@ -1189,8 +1261,9 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                                   ],
                                 ),
                               ),
-                              Icon(Icons.chevron_right,
-                                  size: 18, color: Colors.grey[500]),
+                              if (!selected)
+                                Icon(Icons.chevron_right,
+                                    size: 18, color: Colors.grey[500]),
                             ],
                           ),
                         ),
