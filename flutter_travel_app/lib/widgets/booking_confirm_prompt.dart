@@ -367,8 +367,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
 
   // Sentinels for the "did you mean?" dialog, so its three outcomes stay
   // distinguishable from a real hotel name.
-  static const String _editSentinel = ' edit';
-  static const String _keepSentinel = ' keep';
+  static const String _editSentinel = '\u0000edit';
+  static const String _keepSentinel = '\u0000keep';
 
   /// True when the user has typed a flight that none of the listed ones match,
   /// i.e. they're going the manual route and need a Save button.
@@ -383,12 +383,38 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   @override
   void initState() {
     super.initState();
-    if (_isFlight &&
-        widget.flightOrigin.isNotEmpty &&
-        widget.flightDestination.isNotEmpty &&
-        widget.flightDate != null) {
-      _loadFlightOptions();
+    if (_isFlight) {
+      if (widget.flightOrigin.isNotEmpty &&
+          widget.flightDestination.isNotEmpty &&
+          widget.flightDate != null) {
+        _loadFlightOptions();
+      }
+    } else if (widget.city.isNotEmpty) {
+      _loadCityHotels();
     }
+  }
+
+  /// Lists hotels in the city as soon as the sheet opens, so the user can just
+  /// tap the one they booked.
+  ///
+  /// Previously nothing appeared until they typed three characters, which
+  /// meant the common case — "I booked something in Bhilai, which was it" —
+  /// showed an empty box, and a misspelling then produced no matches at all.
+  /// Flights already work this way; hotels didn't.
+  Future<void> _loadCityHotels() async {
+    setState(() => _lookingUp = true);
+    // Generic query: Places treats it as "hotels in <city>" and returns the
+    // prominent ones, which is the right starting list to recognise from.
+    final found = await _adkService.searchHotelNames(
+        query: 'hotel', city: widget.city, limit: 6);
+    if (!mounted) return;
+    setState(() {
+      // Don't clobber anything the user has already typed their way to.
+      if (found != null && _controller.text.trim().isEmpty) {
+        _suggestions = found;
+      }
+      _lookingUp = false;
+    });
   }
 
   /// Fetches the real departures for this route and date. Same source the
@@ -1087,7 +1113,33 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           // Real properties from Google Places. Tapping one replaces whatever
           // was typed, so a misspelling still ends up as the hotel's actual
           // name — when Places can find it.
+          // First load only — afterwards the field's own suffix spinner covers
+          // refinements, so the list doesn't jump while the user types.
+          if (!_isFlight && _lookingUp && _suggestions.isEmpty) ...[
+            const SizedBox(height: 12),
+            const Row(
+              children: [
+                SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 10),
+                Text('Finding hotels…', style: TextStyle(fontSize: 13)),
+              ],
+            ),
+          ],
           if (!_isFlight && _suggestions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              _controller.text.trim().isEmpty
+                  ? 'Hotels in ${widget.city} — tap the one you booked'
+                  : 'Did you mean one of these?',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
             const SizedBox(height: 8),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 220),
