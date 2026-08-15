@@ -343,6 +343,26 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   List<Map<String, String>> _suggestions = [];
   bool _lookingUp = false;
 
+  /// The city's hotels, loaded once when the sheet opens. Kept separate from
+  /// [_suggestions] so typing can filter them locally for an instant result,
+  /// and so clearing the field restores the full list instead of nothing.
+  List<Map<String, String>> _cityHotels = [];
+
+  /// Places results keyed by the query that produced them, so re-typing or
+  /// backspacing reuses what we already fetched rather than waiting on the
+  /// network again. Mirrors the prefix cache behind the onboarding city
+  /// fields, which is what makes those feel instant.
+  final Map<String, List<Map<String, String>>> _hotelCache = {};
+
+  /// The suggestion the user tapped. Selecting is not saving: this only marks
+  /// the card so they can see their choice, and "Save to itinerary" is what
+  /// actually commits it.
+  String? _selectedHotel;
+
+  /// Set when a lookup succeeded but matched nothing, so the city list shown
+  /// in its place can be labelled honestly rather than looking like results.
+  bool _noMatch = false;
+
   /// True while the final "did you mean?" check runs on save.
   bool _verifying = false;
 
@@ -367,8 +387,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
 
   // Sentinels for the "did you mean?" dialog, so its three outcomes stay
   // distinguishable from a real hotel name.
-  static const String _editSentinel = ' edit';
-  static const String _keepSentinel = ' keep';
+  static const String _editSentinel = '\u0000edit';
+  static const String _keepSentinel = '\u0000keep';
 
   /// True when the user has typed a flight that none of the listed ones match,
   /// i.e. they're going the manual route and need a Save button.
@@ -383,12 +403,39 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   @override
   void initState() {
     super.initState();
-    if (_isFlight &&
-        widget.flightOrigin.isNotEmpty &&
-        widget.flightDestination.isNotEmpty &&
-        widget.flightDate != null) {
-      _loadFlightOptions();
+    if (_isFlight) {
+      if (widget.flightOrigin.isNotEmpty &&
+          widget.flightDestination.isNotEmpty &&
+          widget.flightDate != null) {
+        _loadFlightOptions();
+      }
+    } else if (widget.city.isNotEmpty) {
+      _loadCityHotels();
     }
+  }
+
+  /// Lists hotels in the city as soon as the sheet opens, so the user can just
+  /// tap the one they booked.
+  ///
+  /// Previously nothing appeared until they typed three characters, which
+  /// meant the common case — "I booked something in Bhilai, which was it" —
+  /// showed an empty box, and a misspelling then produced no matches at all.
+  /// Flights already work this way; hotels didn't.
+  Future<void> _loadCityHotels() async {
+    setState(() => _lookingUp = true);
+    // Generic query: Places treats it as "hotels in <city>" and returns the
+    // prominent ones, which is the right starting list to recognise from.
+    final found = await _adkService.searchHotelNames(
+        query: 'hotel', city: widget.city, limit: 6);
+    if (!mounted) return;
+    setState(() {
+      if (found != null) {
+        _cityHotels = found;
+        // Don't clobber anything the user has already typed their way to.
+        if (_controller.text.trim().isEmpty) _suggestions = found;
+      }
+      _lookingUp = false;
+    });
   }
 
   /// Fetches the real departures for this route and date. Same source the
@@ -546,6 +593,21 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     return matches.isEmpty ? _flightOptions : matches;
   }
 
+  /// Whether "Save to itinerary" does anything yet.
+  ///
+  /// For a hotel this requires tapping a card, not merely typing. A typed name
+  /// is a guess at a property we have no record of, and saving it puts an
+  /// unverified hotel on the itinerary; the cards are right there, so choosing
+  /// one costs a tap. Someone whose hotel genuinely isn't listed uses "I don't
+  /// have it yet", which records the stay without inventing a name for it.
+  ///
+  /// Flights keep the typed path: tapping a flight already saves outright, so
+  /// gating this on a selection would leave the button permanently dead and
+  /// strand anyone who knows their flight number but isn't offered it.
+  bool get _canSave => _isFlight
+      ? _controller.text.trim().isNotEmpty
+      : _selectedHotel != null;
+
   /// Tapping a flight IS the confirmation — it closes the sheet and saves.
   ///
   /// There's nothing left to ask once a flight is chosen: the number and its
@@ -567,6 +629,18 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     _debounce?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Records the booking with no flight or hotel detail, and closes at once.
+  ///
+  /// Deliberately does not go through [_close]. That checks a typed name
+  /// against Places, which takes a couple of seconds — pointless here, since
+  /// the user has just said they don't have the detail, and it made the button
+  /// feel broken. Nothing typed is kept: it was rejected by the user, not
+  /// entered. Any pending lookup is cancelled on the way out.
+  void _dismiss() {
+    _debounce?.cancel();
+    Navigator.of(context).pop(const _DetailResult('', false));
   }
 
   /// Closes the sheet, but for a hotel name the user typed rather than picked,
@@ -863,43 +937,91 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     }
   }
 
+  /// Hotels already in memory whose name contains [query] — the instant half
+  /// of the lookup, shown while the Places call is still in flight so the list
+  /// reacts on the keystroke rather than after a round trip.
+  ///
+  /// Searches the city list and every cached response, deliberately not the
+  /// currently displayed [_suggestions]: filtering the visible list would make
+  /// it shrink-only, so backspacing could never bring a hotel back.
+  List<Map<String, String>> _localMatches(String query) {
+    final seen = <String>{};
+    final out = <Map<String, String>>[];
+    for (final h in [..._cityHotels, ..._hotelCache.values.expand((e) => e)]) {
+      final name = h['name'] ?? '';
+      if (name.toLowerCase().contains(query) && seen.add(name.toLowerCase())) {
+        out.add(h);
+      }
+    }
+    return out;
+  }
+
   void _onQueryChanged(String value) {
     _debounce?.cancel();
     // Editing after picking makes it free text again.
     _pickedFromPlaces = false;
+    _selectedHotel = null;
+    _noMatch = false;
 
-    final query = value.trim();
-    if (query.length < 3) {
+    final query = value.trim().toLowerCase();
+    // Below the useful-query threshold, fall back to the city list rather than
+    // an empty box — clearing the field should return the user to where they
+    // started, not to nothing.
+    if (query.length < 2) {
       setState(() {
-        _suggestions = [];
+        _suggestions = _cityHotels;
         _lookingUp = false;
       });
       return;
     }
 
-    setState(() => _lookingUp = true);
-    _debounce = Timer(const Duration(milliseconds: 400), () async {
+    // Instant pass: a cached response for this exact query, otherwise a local
+    // filter over what's already on screen.
+    final cached = _hotelCache[query];
+    final immediate = cached ?? _localMatches(query);
+    setState(() {
+      if (immediate.isNotEmpty) _suggestions = immediate;
+      _lookingUp = cached == null;
+    });
+    if (cached != null) return;
+
+    // 250ms rather than the onboarding fields' 120ms: each miss here is a
+    // billed Places call taking ~2s, and the instant pass above already
+    // covers the gap, so a shorter debounce would buy responsiveness the
+    // user can't perceive at roughly double the API spend.
+    _debounce = Timer(const Duration(milliseconds: 250), () async {
       final found = await _adkService.searchHotelNames(
           query: query, city: widget.city, limit: 6);
       if (!mounted) return;
       // Ignore a response the user has already typed past.
-      if (_controller.text.trim() != query) return;
+      if (_controller.text.trim().toLowerCase() != query) return;
       setState(() {
         // null = lookup failed. Keep whatever was already on screen rather
         // than blanking the list on a transient error.
-        if (found != null) _suggestions = found;
+        if (found != null) {
+          _hotelCache[query] = found;
+          // An empty result must not empty the list. The point of this sheet
+          // is to let the user tap their hotel instead of spelling it, so a
+          // query we can't match is exactly when they most need the city
+          // list back — showing nothing sends them back to typing.
+          _noMatch = found.isEmpty;
+          _suggestions = found.isNotEmpty ? found : _cityHotels;
+        }
         _lookingUp = false;
       });
     });
   }
 
+  /// Marks a suggestion as the user's choice. Deliberately does not save or
+  /// close: the list stays up with the selection ticked so they can change
+  /// their mind, and "Save to itinerary" is the only thing that commits.
   void _pick(String name) {
     _debounce?.cancel();
     _controller.text = name;
     _pickedFromPlaces = true;
     FocusScope.of(context).unfocus();
     setState(() {
-      _suggestions = [];
+      _selectedHotel = name;
       _lookingUp = false;
     });
   }
@@ -1087,7 +1209,39 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           // Real properties from Google Places. Tapping one replaces whatever
           // was typed, so a misspelling still ends up as the hotel's actual
           // name — when Places can find it.
+          // First load only — afterwards the field's own suffix spinner covers
+          // refinements, so the list doesn't jump while the user types.
+          if (!_isFlight && _lookingUp && _suggestions.isEmpty) ...[
+            const SizedBox(height: 12),
+            const Row(
+              children: [
+                SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 10),
+                Text('Finding hotels…', style: TextStyle(fontSize: 13)),
+              ],
+            ),
+          ],
           if (!_isFlight && _suggestions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              _selectedHotel != null
+                  ? 'Selected — tap "Save to itinerary" to add it'
+                  : _noMatch
+                      ? 'No match for that — other hotels in ${widget.city}'
+                      : _controller.text.trim().isEmpty
+                          ? 'Hotels in ${widget.city} — tap the one you booked'
+                          : 'Did you mean one of these?',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: _selectedHotel != null
+                    ? AppConfig.primaryColor
+                    : Colors.grey[700],
+              ),
+            ),
             const SizedBox(height: 8),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 220),
@@ -1096,13 +1250,22 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                   children: _suggestions.map((s) {
                     final name = s['name'] ?? '';
                     final address = s['address'] ?? '';
+                    final selected = _selectedHotel == name;
                     return Card(
                       margin: const EdgeInsets.only(bottom: 8),
                       elevation: 0,
+                      color: selected
+                          ? AppConfig.primaryColor.withValues(alpha: 0.08)
+                          : null,
                       shape: RoundedRectangleBorder(
                         borderRadius:
                             BorderRadius.circular(AppConfig.radiusSmall),
-                        side: BorderSide(color: Colors.grey.shade300),
+                        side: BorderSide(
+                          color: selected
+                              ? AppConfig.primaryColor
+                              : Colors.grey.shade300,
+                          width: selected ? 2 : 1,
+                        ),
                       ),
                       child: InkWell(
                         borderRadius:
@@ -1113,7 +1276,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                               horizontal: 12, vertical: 10),
                           child: Row(
                             children: [
-                              const Icon(Icons.hotel,
+                              Icon(selected ? Icons.check_circle : Icons.hotel,
                                   size: 20, color: AppConfig.primaryColor),
                               const SizedBox(width: 10),
                               Expanded(
@@ -1137,8 +1300,9 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                                   ],
                                 ),
                               ),
-                              Icon(Icons.chevron_right,
-                                  size: 18, color: Colors.grey[500]),
+                              if (!selected)
+                                Icon(Icons.chevron_right,
+                                    size: 18, color: Colors.grey[500]),
                             ],
                           ),
                         ),
@@ -1160,14 +1324,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               width: double.infinity,
               height: 48,
               child: ElevatedButton(
-                // Disabled with an empty field: "Save" implies saving
-                // something, and tapping it with nothing entered produced a
-                // booking with no flight or hotel on it at all. Someone who
-                // genuinely has no details uses "I don't have it yet", which
-                // says what it does.
-                onPressed: (_verifying || _controller.text.trim().isEmpty)
-                    ? null
-                    : _close,
+                onPressed: (_verifying || !_canSave) ? null : _close,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppConfig.primaryColor,
                   foregroundColor: Colors.white,
@@ -1190,7 +1347,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               ),
             ),
           TextButton(
-            onPressed: _verifying ? null : _close,
+            onPressed: _dismiss,
             child: const Text('I don\'t have it yet'),
           ),
         ],
