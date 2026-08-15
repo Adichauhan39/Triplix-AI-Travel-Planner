@@ -56,6 +56,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import pandas as pd
 import json
+import re
 import requests
 import random
 import base64
@@ -3740,19 +3741,45 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
             print(f"[SCHEDULE] Ungrounded reply for {origin}->{destination}; discarding")
             return {"status": "success", "flights": [], "reason": "ungrounded"}
 
+        # Even grounded, the model emits rows it cannot actually support:
+        # placeholder numbers like "6E XXXX" when it knows a departure exists
+        # but not its number, and the same number at conflicting times
+        # ("AI 603" at 13:05, 16:25 and 16:40 in one reply). Both are worse
+        # than a shorter list here — the user is picking the flight they
+        # actually took, so a row they can't verify is a trap, not a hint.
         flights = []
+        seen_numbers = set()
         for item in raw:
-            number = str(item.get("flight_number", "")).strip()
-            if not number:
+            number = re.sub(r"\s+", " ",
+                            str(item.get("flight_number", "")).strip().upper())
+            depart = str(item.get("departure_time", "")).strip()
+
+            # Real designator: two-character airline code then 1-4 digits.
+            if not re.fullmatch(r"[A-Z0-9]{2}\s?\d{1,4}", number):
+                print(f"[SCHEDULE] dropped bogus flight number {number!r}")
                 continue
+            if not re.fullmatch(r"\d{1,2}:\d{2}", depart):
+                print(f"[SCHEDULE] dropped bad time {depart!r} for {number}")
+                continue
+
+            # First occurrence wins. A repeated number with different times
+            # means the model is guessing at least twice; showing all of them
+            # invites the user to confirm a departure that doesn't exist.
+            compact = number.replace(" ", "")
+            if compact in seen_numbers:
+                print(f"[SCHEDULE] dropped duplicate {number} at {depart}")
+                continue
+            seen_numbers.add(compact)
+
             flights.append({
                 "airline": str(item.get("airline", "")).strip(),
                 "flight_number": number,
-                "departure_time": str(item.get("departure_time", "")).strip(),
+                "departure_time": depart,
                 "arrival_time": str(item.get("arrival_time", "")).strip(),
                 "stops": int(item.get("stops") or 0),
             })
 
+        flights.sort(key=lambda f: f["departure_time"])
         _flight_schedule_cache[key] = flights
         print(f"[SCHEDULE] {len(flights)} grounded flights {origin}->{destination}")
         return {"status": "success", "flights": flights, "source": "grounded"}
