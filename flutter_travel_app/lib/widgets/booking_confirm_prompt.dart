@@ -585,16 +585,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// number, the departure time, the airline code and the airline name, so any
   /// of them narrows the list. "6E", "18:40" and "indigo" all work, and an
   /// empty field shows everything.
-  List<Map<String, dynamic>> get _filteredFlights {
-    final q = _controller.text.trim().toLowerCase();
-    if (q.isEmpty) return _flightOptions;
-
+  List<Map<String, dynamic>> _flightsMatching(String query) {
     // Ignore spaces and colons so "6E 405" matches "6E405" and "1840"
     // matches "18:40" — people type these inconsistently.
     String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[\s:]'), '');
-    final nq = norm(q);
+    final nq = norm(query);
 
-    final matches = _flightOptions.where((f) {
+    return _flightOptions.where((f) {
       final code = (f['provider'] ?? '').toString();
       final number = norm((f['route_number'] ?? '').toString());
       final time = norm((f['departure_time'] ?? '').toString());
@@ -605,9 +602,24 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           airline.contains(nq) ||
           airlineName.contains(nq);
     }).toList();
+  }
 
-    // Never strand the user with nothing: a query that matches no flight
-    // leaves the full list visible so they can still pick.
+  /// True when the user typed something no flight matches — e.g. "SpiceJet" on
+  /// a route SpiceJet doesn't fly.
+  ///
+  /// The list still falls back to showing everything, because leaving the user
+  /// with nothing to tap is worse. But that fallback has to be labelled: an
+  /// unexplained list of IndiGo flights under the word "SpiceJet" reads as a
+  /// broken filter, which is exactly how it was reported.
+  bool get _flightNoMatch {
+    final q = _controller.text.trim();
+    return q.isNotEmpty && _flightsMatching(q).isEmpty;
+  }
+
+  List<Map<String, dynamic>> get _filteredFlights {
+    final q = _controller.text.trim();
+    if (q.isEmpty) return _flightOptions;
+    final matches = _flightsMatching(q);
     return matches.isEmpty ? _flightOptions : matches;
   }
 
@@ -1147,13 +1159,18 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             Text(
               _pickedFromPlaces
                   ? 'Selected — tap "Save to itinerary" to add it'
-                  : 'Tap the flight you took',
+                  : _flightNoMatch
+                      ? 'No flight matches "${_controller.text.trim()}" on this '
+                          'route — showing all flights that day'
+                      : 'Tap the flight you took',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
                 color: _pickedFromPlaces
                     ? AppConfig.primaryColor
-                    : Colors.grey[700],
+                    : _flightNoMatch
+                        ? Colors.orange[800]
+                        : Colors.grey[700],
               ),
             ),
             const SizedBox(height: 8),
