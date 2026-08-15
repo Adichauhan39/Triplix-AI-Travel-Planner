@@ -3649,6 +3649,18 @@ def replan_itinerary(request: AgentRequest):
 _flight_schedule_cache: Dict[str, Any] = {}
 
 
+# The carriers worth asking about individually on Indian routes. Air India
+# Express is listed separately from Air India because it files its own IX
+# flight numbers and was otherwise folded in and lost.
+_SCHEDULE_AIRLINES = [
+    "IndiGo",
+    "Air India",
+    "Air India Express",
+    "SpiceJet",
+    "Akasa Air",
+]
+
+
 @app.get("/api/flights/schedule")
 def flight_schedule(origin: str, destination: str, date: str = ""):
     """Scheduled flights on a route, for the "which flight did you book?" step.
@@ -3677,14 +3689,6 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
         return {"status": "success", "flights": [], "reason": "no_api_key"}
 
     when = f"on {date}" if date else ""
-    prompt = (
-        f"List scheduled passenger flights from {origin} to {destination} {when}. "
-        "Return ONLY a JSON array, no prose. Each item must have exactly these "
-        'keys: "airline" (name), "flight_number" (e.g. "6E 405"), '
-        '"departure_time" ("HH:MM", 24-hour, local), "arrival_time" ("HH:MM"), '
-        '"stops" (integer). Include only flights supported by your sources; '
-        "return fewer rather than guessing."
-    )
 
     try:
         from google import genai as genai_client
@@ -3692,8 +3696,32 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
 
         client = genai_client.Client(api_key=GOOGLE_API_KEY)
 
-        def _call():
-            return client.models.generate_content(
+        def _ask(airline: str):
+            """One grounded query, scoped to a single airline.
+
+            Asking for the whole route at once badly under-reports the
+            high-frequency carriers: BOM-GOI returned a single IndiGo
+            departure, on a route IndiGo flies several times a day, because
+            the model spreads one search across every airline. Asked about
+            IndiGo alone it returned 6E 6361 / 6E 230 / 6E 5241 / 6E 5106 —
+            four real departures matching published timetables exactly.
+
+            Prompting the combined query harder was tried first and made
+            things worse: it invented placeholder rows ("6E XXXX") rather
+            than finding more real flights.
+            """
+            prompt = (
+                f"List every {airline} nonstop flight from {origin} to "
+                f"{destination} {when}, with its flight number and departure "
+                "time. Return ONLY a JSON array, no prose. Each item must "
+                'have exactly these keys: "airline" (name), "flight_number" '
+                '(e.g. "6E 6361"), "departure_time" ("HH:MM", 24-hour, '
+                'local), "arrival_time" ("HH:MM"), "stops" (integer). '
+                "Never use a placeholder such as XXXX — omit any flight "
+                f"whose number you cannot verify. If {airline} does not fly "
+                "this route, return an empty array."
+            )
+            response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
@@ -3708,38 +3736,45 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
                 ),
             )
 
-        # Grounded search is slow and highly variable — measured between 6s and
-        # 37s on the same route. The client prefetches this while the user is
-        # away on the partner site, so the wait is usually hidden; the cap only
-        # stops a pathological call from hanging a worker.
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            response = executor.submit(_call).result(timeout=45)
+            text = (response.text or "").strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
 
-        text = (response.text or "").strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
+            start, end = text.find("["), text.rfind("]")
+            if start == -1 or end == -1:
+                return []
 
-        start, end = text.find("["), text.rfind("]")
-        if start == -1 or end == -1:
-            return {"status": "success", "flights": [], "reason": "unparseable"}
+            # Grounding is reported inconsistently: sometimes as source
+            # chunks, sometimes only as the queries the model ran. Either
+            # proves it went to the web rather than answering from memory.
+            meta = (response.candidates[0].grounding_metadata
+                    if response.candidates else None)
+            grounded = bool(meta and (getattr(meta, 'grounding_chunks', None)
+                                      or getattr(meta, 'web_search_queries',
+                                                 None)))
+            # Ungrounded output is exactly the fabrication case this endpoint
+            # exists to avoid, so it's discarded rather than returned.
+            if not grounded:
+                print(f"[SCHEDULE] Ungrounded {airline} reply; discarding")
+                return []
+            return json.loads(text[start:end + 1])
 
-        raw = json.loads(text[start:end + 1])
-        # Grounding is reported inconsistently: sometimes as source chunks,
-        # sometimes only as the queries the model ran. Either proves it went
-        # to the web rather than answering from memory.
-        meta = (response.candidates[0].grounding_metadata
-                if response.candidates else None)
-        grounded = bool(meta and (getattr(meta, 'grounding_chunks', None)
-                                  or getattr(meta, 'web_search_queries', None)))
-
-        # Ungrounded output is exactly the fabrication case this endpoint
-        # exists to avoid, so it's discarded rather than returned.
-        if not grounded:
-            print(f"[SCHEDULE] Ungrounded reply for {origin}->{destination}; discarding")
-            return {"status": "success", "flights": [], "reason": "ungrounded"}
+        # Queried in parallel, so the wall clock stays close to one call
+        # (~3-5s each) rather than the sum. The whole result is cached per
+        # route and date, and only runs when a user is confirming a booking
+        # they've already made, so the extra calls are bounded.
+        raw = []
+        with ThreadPoolExecutor(max_workers=len(_SCHEDULE_AIRLINES)) as pool:
+            futures = {pool.submit(_ask, a): a for a in _SCHEDULE_AIRLINES}
+            for future, airline in futures.items():
+                try:
+                    raw.extend(future.result(timeout=45))
+                except Exception as e:
+                    # One airline failing shouldn't lose the other four.
+                    print(f"[SCHEDULE] {airline} lookup failed: {e}")
 
         # Even grounded, the model emits rows it cannot actually support:
         # placeholder numbers like "6E XXXX" when it knows a departure exists
