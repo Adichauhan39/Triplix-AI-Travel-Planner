@@ -4594,6 +4594,33 @@ def search_hotel_names(query: str, city: str = "", limit: int = 6):
         return {"status": "error", "message": str(e), "hotels": []}
 
 
+@app.get("/api/airport/resolve")
+def resolve_airport(city: str):
+    """The bookable airport for a city, substituting the nearest one when the
+    city has none of its own.
+
+    Exists because the app's own city-to-IATA map only covers the 37 cities in
+    its picker, so anywhere else — Bilaspur, or a village chosen during
+    onboarding — produced no code and sent the user to the Aviasales homepage
+    with nothing filled in. The server already resolves these for its own
+    flight search (see _resolve_airport); this just exposes it.
+
+    `substituted` and `distance_km` are returned so the app can say which
+    airport it picked and how far away it is. A user searching from Bilaspur
+    should be told the flights are from Raipur, 108km away, rather than
+    discovering it at the airport.
+    """
+    try:
+        info = _resolve_airport(city)
+        if not info:
+            return {"status": "success", "resolved": False}
+        return {"status": "success", "resolved": True, **info}
+    except Exception as e:
+        print(f"[AIRPORTS] resolve failed for {city!r}: {e}")
+        # Callers fall back to their built-in map, so this stays non-fatal.
+        return {"status": "error", "message": str(e), "resolved": False}
+
+
 @app.post("/api/places/details")
 def get_place_details(request: dict):
     """Get real Google Places details: photos, reviews, ratings, location (New API)"""

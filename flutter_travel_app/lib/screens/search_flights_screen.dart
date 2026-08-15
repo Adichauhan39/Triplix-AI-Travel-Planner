@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../models/confirmed_booking.dart';
 import '../services/affiliate_links.dart';
+import '../services/python_adk_service.dart';
 import '../providers/user_preferences_provider.dart';
 import '../widgets/booking_confirm_prompt.dart';
 
@@ -33,6 +34,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
   int _passengers = 1;
 
   static final DateFormat _displayDate = DateFormat('dd MMM yyyy');
+  final PythonADKService _adkService = PythonADKService();
 
   @override
   void initState() {
@@ -57,6 +59,10 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
       _returnDate = prefs.checkOutDate;
       _roundTrip = true;
     }
+
+    // Onboarding cities are free text and often aren't in the built-in map,
+    // which is exactly the case this resolves.
+    _resolveAirports();
   }
 
   /// Normalises a free-text onboarding city (e.g. "Gownipalli, Karnataka,
@@ -88,13 +94,53 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     return options;
   }
 
+  /// Airport codes for cities the built-in map doesn't cover, resolved by the
+  /// server — which also substitutes the nearest airport when a city has none
+  /// of its own, so Bilaspur searches from Raipur rather than nowhere.
+  AirportResolution? _originAirport;
+  AirportResolution? _destinationAirport;
+  bool _resolvingAirports = false;
+
+  String? _iataFor(String? city, AirportResolution? resolved) {
+    if (city == null) return null;
+    return AffiliateLinks.iataCodeFor(city) ?? resolved?.iata;
+  }
+
+  /// Looks up whichever of the two cities the built-in map can't handle.
+  /// Cheap and cached server-side, so it just re-runs whenever a city changes.
+  Future<void> _resolveAirports() async {
+    setState(() => _resolvingAirports = true);
+    final results = await Future.wait([
+      (_origin != null && AffiliateLinks.iataCodeFor(_origin!) == null)
+          ? _adkService.resolveAirport(_origin!)
+          : Future<AirportResolution?>.value(null),
+      (_destination != null &&
+              AffiliateLinks.iataCodeFor(_destination!) == null)
+          ? _adkService.resolveAirport(_destination!)
+          : Future<AirportResolution?>.value(null),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _originAirport = results[0];
+      _destinationAirport = results[1];
+      _resolvingAirports = false;
+    });
+  }
+
   /// True when both cities map to an IATA code, i.e. the redirect lands on a
   /// prefilled route search rather than the Aviasales homepage.
   bool get _willPrefillRoute =>
-      _origin != null &&
-      _destination != null &&
-      AffiliateLinks.iataCodeFor(_origin!) != null &&
-      AffiliateLinks.iataCodeFor(_destination!) != null;
+      _iataFor(_origin, _originAirport) != null &&
+      _iataFor(_destination, _destinationAirport) != null;
+
+  /// Airports we substituted, so the user is told before booking rather than
+  /// finding out on the day of travel.
+  List<(String, AirportResolution)> get _substitutions => [
+        if (_origin != null && (_originAirport?.substituted ?? false))
+          (_origin!, _originAirport!),
+        if (_destination != null && (_destinationAirport?.substituted ?? false))
+          (_destination!, _destinationAirport!),
+      ];
 
   Future<void> _pickDepartDate() async {
     final picked = await showDatePicker(
@@ -149,6 +195,8 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
         departDate: _departDate,
         returnDate: _roundTrip ? _returnDate : null,
         passengers: _passengers,
+        originIataOverride: _originAirport?.iata,
+        destinationIataOverride: _destinationAirport?.iata,
       )),
       kind: BookingKind.flight,
       title: '$_origin → $_destination',
@@ -158,6 +206,8 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
       // can tap the flight they took instead of recalling its number.
       flightOrigin: _origin!,
       flightDestination: _destination!,
+      flightOriginIata: _iataFor(_origin, _originAirport) ?? '',
+      flightDestinationIata: _iataFor(_destination, _destinationAirport) ?? '',
     );
   }
 
@@ -185,7 +235,10 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
               items: _cityOptions
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
-              onChanged: (value) => setState(() => _origin = value),
+              onChanged: (value) {
+                setState(() => _origin = value);
+                _resolveAirports();
+              },
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
@@ -200,7 +253,10 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
               items: _cityOptions
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
-              onChanged: (value) => setState(() => _destination = value),
+              onChanged: (value) {
+                setState(() => _destination = value);
+                _resolveAirports();
+              },
             ),
             const SizedBox(height: 20),
             const Text('When?',
@@ -304,10 +360,34 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
+            // A city with no airport of its own flies from somewhere else.
+            // Said here, before booking, rather than left for the user to
+            // discover on the day of travel.
+            if (_resolvingAirports)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Checking nearest airports…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              )
+            else
+              for (final (city, airport) in _substitutions)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '$city has no airport — flying from ${airport.airportName} '
+                    '(${airport.iata}), ${airport.distanceKm} km away.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.blue[800]),
+                  ),
+                ),
             // Cities without an IATA mapping can't be encoded into an Aviasales
             // route URL, so the link lands on their homepage instead. Say so
             // rather than letting the user discover it after tapping.
-            if (_origin != null && _destination != null && !_willPrefillRoute)
+            if (_origin != null &&
+                _destination != null &&
+                !_resolvingAirports &&
+                !_willPrefillRoute)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(

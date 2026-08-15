@@ -57,6 +57,8 @@ class BookingConfirmPrompt {
     String city = '',
     String flightOrigin = '',
     String flightDestination = '',
+    String flightOriginIata = '',
+    String flightDestinationIata = '',
   }) async {
     await launch();
 
@@ -74,6 +76,8 @@ class BookingConfirmPrompt {
       city: city,
       flightOrigin: flightOrigin,
       flightDestination: flightDestination,
+      flightOriginIata: flightOriginIata,
+      flightDestinationIata: flightDestinationIata,
     );
   }
 
@@ -89,6 +93,8 @@ class BookingConfirmPrompt {
     String city = '',
     String flightOrigin = '',
     String flightDestination = '',
+    String flightOriginIata = '',
+    String flightDestinationIata = '',
   }) async {
     final noun = kind == BookingKind.flight ? 'flight' : 'stay';
 
@@ -180,6 +186,8 @@ class BookingConfirmPrompt {
       // never loads and the user only gets a bare number field.
       flightOrigin: flightOrigin,
       flightDestination: flightDestination,
+      flightOriginIata: flightOriginIata,
+      flightDestinationIata: flightDestinationIata,
     );
   }
 
@@ -196,6 +204,8 @@ class BookingConfirmPrompt {
     String city = '',
     String flightOrigin = '',
     String flightDestination = '',
+    String flightOriginIata = '',
+    String flightDestinationIata = '',
   }) async {
     final result = await showModalBottomSheet<_DetailResult>(
       context: context,
@@ -209,6 +219,8 @@ class BookingConfirmPrompt {
         city: city,
         flightOrigin: flightOrigin,
         flightDestination: flightDestination,
+        flightOriginIata: flightOriginIata,
+        flightDestinationIata: flightDestinationIata,
         flightDate: startDate,
       ),
     );
@@ -317,6 +329,8 @@ class _BookingDetailSheet extends StatefulWidget {
     required this.city,
     this.flightOrigin = '',
     this.flightDestination = '',
+    this.flightOriginIata = '',
+    this.flightDestinationIata = '',
     this.flightDate,
   });
 
@@ -329,6 +343,12 @@ class _BookingDetailSheet extends StatefulWidget {
   /// flight-number field.
   final String flightOrigin;
   final String flightDestination;
+
+  /// Airport codes resolved by the server, which substitutes the nearest
+  /// airport for a city that has none. Empty when the caller didn't resolve
+  /// them, in which case the built-in map is used as before.
+  final String flightOriginIata;
+  final String flightDestinationIata;
   final DateTime? flightDate;
 
   @override
@@ -481,10 +501,18 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
 
     // IATA codes, not city names: the server caches on the exact strings it
     // was given, so "Bangalore" and "BLR" would be different entries.
-    final originIata =
-        AffiliateLinks.iataCodeFor(widget.flightOrigin) ?? widget.flightOrigin;
-    final destIata = AffiliateLinks.iataCodeFor(widget.flightDestination) ??
-        widget.flightDestination;
+    // Server-resolved code first: it covers cities the built-in map doesn't,
+    // and substitutes the nearest airport for a city with none. Without it a
+    // Bilaspur trip asked the schedule lookup for flights from "Bilaspur",
+    // which is not an airport and cannot return anything useful.
+    final originIata = widget.flightOriginIata.isNotEmpty
+        ? widget.flightOriginIata
+        : AffiliateLinks.iataCodeFor(widget.flightOrigin) ??
+            widget.flightOrigin;
+    final destIata = widget.flightDestinationIata.isNotEmpty
+        ? widget.flightDestinationIata
+        : AffiliateLinks.iataCodeFor(widget.flightDestination) ??
+            widget.flightDestination;
 
     if (mounted) setState(() => _loadingFlights = true);
     final schedule = await _adkService.flightSchedule(

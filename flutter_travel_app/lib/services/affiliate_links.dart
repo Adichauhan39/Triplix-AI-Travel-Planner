@@ -243,15 +243,23 @@ class AffiliateLinks {
   /// iataCodeFor) — falls back to the plain (still-tracked) Aviasales
   /// homepage if either city isn't mapped, since Aviasales' search URL
   /// requires airport codes rather than free-text city names.
+  /// [originIataOverride]/[destinationIataOverride] take precedence over the
+  /// built-in map, which only covers the 37 cities in the app's own picker.
+  /// The server resolves anywhere else — including substituting the nearest
+  /// airport for a city that has none — so a trip from Bilaspur can still
+  /// produce a real Raipur search instead of falling back to the homepage.
   static Uri aviasalesFlightSearch({
     required String originCity,
     required String destinationCity,
     required DateTime departDate,
     DateTime? returnDate,
     int passengers = 1,
+    String? originIataOverride,
+    String? destinationIataOverride,
   }) {
-    final originIata = iataCodeFor(originCity);
-    final destinationIata = iataCodeFor(destinationCity);
+    final originIata = originIataOverride ?? iataCodeFor(originCity);
+    final destinationIata =
+        destinationIataOverride ?? iataCodeFor(destinationCity);
 
     if (originIata == null || destinationIata == null) {
       return _travelpayoutsWrap(

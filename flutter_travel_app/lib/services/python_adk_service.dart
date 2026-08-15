@@ -462,6 +462,40 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// The bookable airport for [city], substituting the nearest one when the
+  /// city has no airport of its own — Bilaspur resolves to Raipur, 108km away.
+  ///
+  /// Needed because AffiliateLinks.iataCodeFor only knows the 37 cities in the
+  /// app's own picker, so anywhere else produced no code and sent the user to
+  /// the Aviasales homepage with an empty search. The server has the full
+  /// airport dataset, so it answers this properly.
+  ///
+  /// Returns null if the lookup fails and an empty-IATA result if the city
+  /// can't be resolved at all; callers fall back to their built-in map.
+  Future<AirportResolution?> resolveAirport(String city) async {
+    if (city.trim().isEmpty) return null;
+    try {
+      final uri = Uri.parse('$_baseUrl/api/airport/resolve')
+          .replace(queryParameters: {'city': city});
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        debugPrint('resolveAirport: HTTP ${response.statusCode} for $uri');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['resolved'] != true) return null;
+      return AirportResolution(
+        iata: (data['iata'] ?? '').toString(),
+        airportName: (data['airport_name'] ?? '').toString(),
+        substituted: data['substituted'] == true,
+        distanceKm: (data['distance_km'] as num?)?.round() ?? 0,
+      );
+    } catch (e) {
+      debugPrint('resolveAirport failed: $e');
+      return null;
+    }
+  }
+
   Future<List<Map<String, String>>?> searchHotelNames({
     required String query,
     String city = '',
@@ -902,4 +936,23 @@ class PythonADKService {
       };
     }
   }
+}
+
+/// Which airport a city's flights actually depart from.
+///
+/// [substituted] is the part that matters to the user: when true the city has
+/// no airport of its own and [iata] belongs to one [distanceKm] away, which
+/// they should be told before they book rather than discover on the day.
+class AirportResolution {
+  const AirportResolution({
+    required this.iata,
+    required this.airportName,
+    required this.substituted,
+    required this.distanceKm,
+  });
+
+  final String iata;
+  final String airportName;
+  final bool substituted;
+  final int distanceKm;
 }
