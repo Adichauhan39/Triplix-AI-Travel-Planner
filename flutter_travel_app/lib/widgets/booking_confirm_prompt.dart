@@ -359,6 +359,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// actually commits it.
   String? _selectedHotel;
 
+  /// Set when a lookup succeeded but matched nothing, so the city list shown
+  /// in its place can be labelled honestly rather than looking like results.
+  bool _noMatch = false;
+
   /// True while the final "did you mean?" check runs on save.
   bool _verifying = false;
 
@@ -930,6 +934,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     // Editing after picking makes it free text again.
     _pickedFromPlaces = false;
     _selectedHotel = null;
+    _noMatch = false;
 
     final query = value.trim().toLowerCase();
     // Below the useful-query threshold, fall back to the city list rather than
@@ -968,7 +973,12 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         // than blanking the list on a transient error.
         if (found != null) {
           _hotelCache[query] = found;
-          _suggestions = found;
+          // An empty result must not empty the list. The point of this sheet
+          // is to let the user tap their hotel instead of spelling it, so a
+          // query we can't match is exactly when they most need the city
+          // list back — showing nothing sends them back to typing.
+          _noMatch = found.isEmpty;
+          _suggestions = found.isNotEmpty ? found : _cityHotels;
         }
         _lookingUp = false;
       });
@@ -1192,9 +1202,11 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             Text(
               _selectedHotel != null
                   ? 'Selected — tap "Save to itinerary" to add it'
-                  : _controller.text.trim().isEmpty
-                      ? 'Hotels in ${widget.city} — tap the one you booked'
-                      : 'Did you mean one of these?',
+                  : _noMatch
+                      ? 'No match for that — other hotels in ${widget.city}'
+                      : _controller.text.trim().isEmpty
+                          ? 'Hotels in ${widget.city} — tap the one you booked'
+                          : 'Did you mean one of these?',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
