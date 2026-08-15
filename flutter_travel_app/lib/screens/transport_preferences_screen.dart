@@ -17,10 +17,50 @@ class _TransportPreferencesScreenState
     extends State<TransportPreferencesScreen> {
   final TextEditingController _transportController = TextEditingController();
 
+  /// Chips that name how the user travels. Only one can apply to a trip, so
+  /// picking one replaces any other — unlike the remaining chips ("Scenic
+  /// routes", "Overnight travel OK"), which are attributes and stack freely.
+  static const Set<String> _transportModes = {
+    'Prefer flights',
+    'Train lover',
+    'Budget bus',
+    'Self-drive',
+    'Cab/Auto',
+  };
+
   @override
   void dispose() {
     _transportController.dispose();
     super.dispose();
+  }
+
+  /// The field is free text the user can also edit by hand, so selection is
+  /// derived from its contents rather than tracked separately — that way a
+  /// manual edit and a chip tap can't disagree.
+  List<String> get _currentParts => _transportController.text
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
+
+  bool _chipSelected(String label) =>
+      _currentParts.any((p) => p.toLowerCase() == label.toLowerCase());
+
+  void _toggleChip(String label, {required bool isMode}) {
+    final parts = _currentParts;
+    final alreadyOn =
+        parts.any((p) => p.toLowerCase() == label.toLowerCase());
+
+    parts.removeWhere((p) => p.toLowerCase() == label.toLowerCase());
+    if (!alreadyOn) {
+      // Selecting a mode clears whichever mode was set before.
+      if (isMode) {
+        parts.removeWhere((p) => _transportModes
+            .any((m) => m.toLowerCase() == p.toLowerCase()));
+      }
+      parts.add(label);
+    }
+    _transportController.text = parts.join(', ');
   }
 
   @override
@@ -151,23 +191,21 @@ class _TransportPreferencesScreenState
                                 'No motion sickness',
                                 'Overnight travel OK',
                               ].map((label) {
-                                return ActionChip(
+                                final isMode = _transportModes.contains(label);
+                                final selected = _chipSelected(label);
+                                return FilterChip(
                                   label: Text(label,
                                       style: const TextStyle(fontSize: 12)),
+                                  selected: selected,
                                   backgroundColor: Colors.grey[100],
+                                  selectedColor: AppConfig.primaryColor
+                                      .withValues(alpha: 0.15),
+                                  showCheckmark: false,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(20),
                                   ),
-                                  onPressed: () {
-                                    final current =
-                                        _transportController.text.trim();
-                                    if (current.isEmpty) {
-                                      _transportController.text = label;
-                                    } else {
-                                      _transportController.text =
-                                          '$current, $label';
-                                    }
-                                  },
+                                  onSelected: (_) => setState(
+                                      () => _toggleChip(label, isMode: isMode)),
                                 );
                               }).toList(),
                             ),

@@ -1,14 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../config/app_config.dart';
+import '../models/confirmed_booking.dart';
 import '../services/affiliate_links.dart';
 import '../providers/user_preferences_provider.dart';
+import '../widgets/booking_confirm_prompt.dart';
 
-/// Flight search entry point. Unlike hotels, this has no in-app results
-/// list — it just collects enough to build an Aviasales deep link, then
-/// redirects out. See AffiliateLinks.aviasalesFlightSearch.
+/// Flight search entry point. There is no in-app results list: Aviasales owns
+/// search, pricing and booking, and its live search shows far more than the
+/// affiliate price cache can (full schedules, baggage, seats remaining), so
+/// redirecting gives the user a better result than mirroring a partial copy.
+///
+/// The redirect never reports back, so on return we ask the user whether they
+/// booked — that answer is what the itinerary is built from.
 class SearchFlightsScreen extends StatefulWidget {
   const SearchFlightsScreen({super.key});
 
@@ -31,8 +39,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     super.initState();
     // Default from onboarding's trip basics (origin/destination/dates), same
     // source of truth the hotel search screen prefills from, so a flight and
-    // a hotel for the same trip don't end up with mismatched dates. The user
-    // can still change any of these — this only sets the starting point.
+    // a hotel for the same trip don't end up with mismatched dates.
     final prefs = Provider.of<UserPreferencesProvider>(
       context,
       listen: false,
@@ -52,19 +59,42 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     }
   }
 
-  /// Matches a free-text onboarding city (e.g. "Mumbai, India") against
-  /// AffiliateLinks.flightCities (case-insensitive). Unlike the hotel
-  /// screen's city dropdown, this can't fall back to adding an unmatched
-  /// city — Aviasales deep links need a known IATA code, so an unmapped
-  /// city just leaves the dropdown on its placeholder instead.
+  /// Normalises a free-text onboarding city (e.g. "Gownipalli, Karnataka,
+  /// India"), preferring the canonical spelling from flightCities when it
+  /// matches. Unmatched cities are kept rather than discarded so the trip
+  /// entered during onboarding always carries over — see [_cityOptions].
   String? _matchFlightCity(String? rawCity) {
-    if (rawCity == null || rawCity.isEmpty) return null;
-    final city = rawCity.split(',').first.trim().toLowerCase();
+    if (rawCity == null || rawCity.trim().isEmpty) return null;
+    final city = rawCity.split(',').first.trim();
+    if (city.isEmpty) return null;
     for (final candidate in AffiliateLinks.flightCities) {
-      if (candidate.toLowerCase() == city) return candidate;
+      if (candidate.toLowerCase() == city.toLowerCase()) return candidate;
     }
-    return null;
+    return city;
   }
+
+  /// Known flight cities plus whatever came from onboarding if it isn't among
+  /// them. Without this a prefilled value outside the list would throw, since
+  /// DropdownButtonFormField requires its value to match exactly one item.
+  List<String> get _cityOptions {
+    final options = [...AffiliateLinks.flightCities];
+    for (final extra in [_origin, _destination]) {
+      if (extra != null &&
+          extra.isNotEmpty &&
+          !options.any((c) => c.toLowerCase() == extra.toLowerCase())) {
+        options.insert(0, extra);
+      }
+    }
+    return options;
+  }
+
+  /// True when both cities map to an IATA code, i.e. the redirect lands on a
+  /// prefilled route search rather than the Aviasales homepage.
+  bool get _willPrefillRoute =>
+      _origin != null &&
+      _destination != null &&
+      AffiliateLinks.iataCodeFor(_origin!) != null &&
+      AffiliateLinks.iataCodeFor(_destination!) != null;
 
   Future<void> _pickDepartDate() async {
     final picked = await showDatePicker(
@@ -93,7 +123,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     setState(() => _returnDate = picked);
   }
 
-  void _search() {
+  Future<void> _search() async {
     if (_origin == null || _destination == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select origin and destination')),
@@ -107,13 +137,28 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
       return;
     }
 
-    AffiliateLinks.open(AffiliateLinks.aviasalesFlightSearch(
-      originCity: _origin!,
-      destinationCity: _destination!,
-      departDate: _departDate,
-      returnDate: _roundTrip ? _returnDate : null,
-      passengers: _passengers,
-    ));
+    // No schedule prefetch here on purpose. It was a web-grounded model call
+    // on every search — slow and billable — and most searches never end in a
+    // booking. The confirmation sheet offers it as a button instead, so it
+    // only runs for someone who actually wants help identifying their flight.
+    await BookingConfirmPrompt.launchAndConfirm(
+      context,
+      launch: () => AffiliateLinks.open(AffiliateLinks.aviasalesFlightSearch(
+        originCity: _origin!,
+        destinationCity: _destination!,
+        departDate: _departDate,
+        returnDate: _roundTrip ? _returnDate : null,
+        passengers: _passengers,
+      )),
+      kind: BookingKind.flight,
+      title: '$_origin → $_destination',
+      startDate: _departDate,
+      endDate: _roundTrip ? _returnDate : null,
+      // Lets the prompt list the real departures on this route so the user
+      // can tap the flight they took instead of recalling its number.
+      flightOrigin: _origin!,
+      flightDestination: _destination!,
+    );
   }
 
   @override
@@ -137,7 +182,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
                   borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
                 ),
               ),
-              items: AffiliateLinks.flightCities
+              items: _cityOptions
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
               onChanged: (value) => setState(() => _origin = value),
@@ -152,7 +197,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
                   borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
                 ),
               ),
-              items: AffiliateLinks.flightCities
+              items: _cityOptions
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
               onChanged: (value) => setState(() => _destination = value),
@@ -254,10 +299,24 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Opens Aviasales in your browser to complete the search and booking.',
+              'Opens Aviasales in your browser to complete the search and '
+              'booking. We\'ll ask if you booked so we can add it to your trip.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
+            // Cities without an IATA mapping can't be encoded into an Aviasales
+            // route URL, so the link lands on their homepage instead. Say so
+            // rather than letting the user discover it after tapping.
+            if (_origin != null && _destination != null && !_willPrefillRoute)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Aviasales will open on its search page — this route isn\'t '
+                  'prefilled, so you\'ll need to enter the cities there.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              ),
           ],
         ),
       ),

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 
@@ -14,6 +15,10 @@ class PythonADKService {
   static const String _replanEndpoint = '/api/itinerary/replan';
   static const String _hotelEndpoint = '/api/hotel/search';
   static const String _flightEndpoint = '/api/flight/search';
+
+  /// Aviasales-backed flight search. Note the plural path — distinct from
+  /// _flightEndpoint above, which points at an agent-style route.
+  static const String _flightFaresEndpoint = '/api/flights/search';
   static const String _travelEndpoint = '/api/travel/search';
   static const String _destinationEndpoint = '/api/destination/info';
 
@@ -407,6 +412,168 @@ class PythonADKService {
       return {
         'success': false,
         'error': 'Error: ${e.toString()}',
+      };
+    }
+  }
+
+  /// Scheduled flights on a route, for identifying a flight already booked.
+  ///
+  /// Backed by Gemini with Google Search grounding, so the flight numbers come
+  /// from booking sites rather than the model's memory — ungrounded replies are
+  /// discarded server-side. Used only when Aviasales has no cached fares for
+  /// the date, which on regional Indian routes is most of the time.
+  ///
+  /// These are recognition aids, not availability: never show them as bookable
+  /// or priced. Returns [] on any failure.
+  Future<List<Map<String, dynamic>>> flightSchedule({
+    required String originIata,
+    required String destinationIata,
+    required String isoDate,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/flights/schedule').replace(
+        queryParameters: {
+          'origin': originIata,
+          'destination': destinationIata,
+          'date': isoDate,
+        },
+      );
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 50));
+      if (response.statusCode != 200) return const [];
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      return ((data['flights'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Real hotel names matching a partial (and possibly misspelled) query,
+  /// for the "which hotel did you book?" confirmation.
+  ///
+  /// Backed by Google Places, not a language model — every suggestion has to
+  /// be a property that actually exists, and Places' fuzzy matching already
+  /// handles typos ("hotal citi lite" finds "Hotel City Lite").
+  ///
+  /// Returns `null` when the lookup itself failed (server down, timeout, bad
+  /// status) and an empty list when it succeeded but matched nothing. Callers
+  /// must keep these apart: telling someone to "check the spelling" because
+  /// our own request failed is worse than saying nothing.
+  Future<List<Map<String, String>>?> searchHotelNames({
+    required String query,
+    String city = '',
+    int limit = 6,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/places/hotels').replace(
+        queryParameters: {
+          'query': query,
+          if (city.isNotEmpty) 'city': city,
+          'limit': '$limit',
+        },
+      );
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        debugPrint('searchHotelNames: HTTP ${response.statusCode} for $uri');
+        return null;
+      }
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      return ((data['hotels'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map((h) => {
+                'name': (h['name'] ?? '').toString(),
+                'address': (h['address'] ?? '').toString(),
+              })
+          .where((h) => h['name']!.isNotEmpty)
+          .toList();
+    } catch (e) {
+      // Logged rather than swallowed — this failing silently is what made a
+      // broken lookup look like a spelling mistake.
+      debugPrint('searchHotelNames failed: $e');
+      return null;
+    }
+  }
+
+  /// Real bookable fares from Aviasales, via the backend's Travelpayouts
+  /// integration.
+  ///
+  /// The backend serves Aviasales results only — it will not substitute CSV
+  /// or AI-generated flights — so an empty list genuinely means "no fare
+  /// available for this route and date", not "the search failed". Callers
+  /// should show an empty state rather than retrying against another source.
+  ///
+  /// Returns `{success, flights, message}`. Each flight carries a
+  /// `booking_url` deep link to that specific fare on Aviasales.
+  Future<Map<String, dynamic>> searchFlightFares({
+    required String from,
+    required String to,
+    required DateTime departureDate,
+    DateTime? returnDate,
+    int passengers = 1,
+    String travelClass = 'economy',
+  }) async {
+    String iso(DateTime d) =>
+        '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl$_flightFaresEndpoint'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'from_city': from,
+              'to_city': to,
+              'departure_date': iso(departureDate),
+              if (returnDate != null) 'return_date': iso(returnDate),
+              'passengers': passengers,
+              'flight_class': travelClass,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        return {
+          'success': false,
+          'flights': <Map<String, dynamic>>[],
+          'message': 'Search failed (${response.statusCode}). Please try again.',
+        };
+      }
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final results = (data['results'] as List?) ?? const [];
+      final flights = results.cast<Map<String, dynamic>>();
+
+      // Which airport each city resolved to. Present on the top-level response
+      // when there are no fares, and on each result when there are — read both
+      // so the caller can explain a substituted airport either way.
+      Map<String, dynamic>? airportInfo(String key) {
+        final top = data[key];
+        if (top is Map<String, dynamic>) return top;
+        if (flights.isNotEmpty && flights.first[key] is Map<String, dynamic>) {
+          return flights.first[key] as Map<String, dynamic>;
+        }
+        return null;
+      }
+
+      return {
+        'success': true,
+        'flights': flights,
+        'message': data['message'] ?? '',
+        'originAirport': airportInfo('origin_airport_info'),
+        'destinationAirport': airportInfo('destination_airport_info'),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'flights': <Map<String, dynamic>>[],
+        'message': 'Could not reach the flight service. Check your connection.',
       };
     }
   }

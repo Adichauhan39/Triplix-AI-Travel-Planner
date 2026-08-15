@@ -6,9 +6,15 @@ class AppConfig {
   // Default points to local backend on port 8001 for development.
   // Override for production builds with:
   //   --dart-define=API_BASE_URL=https://triplix-server-lzmvxvmz5q-uc.a.run.app
+  //
+  // 127.0.0.1, NOT localhost. On Windows "localhost" resolves to the IPv6
+  // ::1 first, while uvicorn binds IPv4 0.0.0.0 — so every single request
+  // waited ~2s for the IPv6 attempt to fail before retrying over IPv4.
+  // Measured: localhost 2.07s vs 127.0.0.1 0.015s for the same endpoint.
+  // (Android emulators need 10.0.2.2 instead; pass it via --dart-define.)
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:8001',
+    defaultValue: 'http://127.0.0.1:8001',
   );
   static const String apiVersion = 'v1';
 

@@ -3,8 +3,10 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../models/hotel.dart';
+import '../models/confirmed_booking.dart';
 import '../services/affiliate_links.dart';
 import '../providers/hotel_shortlist_provider.dart';
+import '../widgets/booking_confirm_prompt.dart';
 import 'hotel_shortlist_screen.dart';
 
 class HotelResultsScreen extends StatelessWidget {
@@ -329,8 +331,19 @@ class _HotelResultCard extends StatelessWidget {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          onPressed: () => AffiliateLinks.open(
-                            AffiliateLinks.aviasalesHotelSearch(hotel: hotel),
+                          // Booking happens on Aviasales, which never tells us
+                          // the outcome — asking once the user returns is the
+                          // only way this reaches the itinerary.
+                          onPressed: () => BookingConfirmPrompt.launchAndConfirm(
+                            context,
+                            launch: () => AffiliateLinks.open(
+                              AffiliateLinks.aviasalesHotelSearch(hotel: hotel),
+                            ),
+                            kind: BookingKind.hotel,
+                            title: hotel.name,
+                            startDate: DateTime.now(),
+                            knownHotelName: hotel.name,
+                            city: hotel.city,
                           ),
                           icon: const Icon(Icons.open_in_new, size: 16),
                           label: const Text('Book on Aviasales'),

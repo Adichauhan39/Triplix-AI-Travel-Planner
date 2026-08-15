@@ -31,6 +31,7 @@ import 'models/hotel.dart';
 import 'providers/app_provider.dart';
 import 'providers/user_preferences_provider.dart';
 import 'providers/hotel_shortlist_provider.dart';
+import 'providers/booked_trip_provider.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
 
@@ -94,6 +95,9 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => UserPreferencesProvider()),
         // Hotels saved for comparison before booking.
         ChangeNotifierProvider(create: (_) => HotelShortlistProvider()),
+        // What the user says they've booked on partner sites — the only
+        // signal we get, since the redirect never reports back.
+        ChangeNotifierProvider(create: (_) => BookedTripProvider()),
       ],
       child: GetMaterialApp(
         title: AppConfig.appName,

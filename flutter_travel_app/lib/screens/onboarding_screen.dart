@@ -30,6 +30,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // Indices of currently-expanded sections. First one is open by default.
   final Set<int> _expanded = {};
 
+  // Section 0 ("Where to next?") is opened programmatically by the Explore
+  // button. ExpansionTile.initiallyExpanded is only read when the tile is
+  // first created, so flipping _expanded afterwards does NOT open an
+  // already-built tile — the controller is what actually opens it.
+  final ExpansibleController _section0Controller = ExpansibleController();
+
+  // Anchor for scrolling section 0 into view once Explore opens it.
+  final GlobalKey _section0Key = GlobalKey();
+
   // ---------------------------------------------------------------------------
   // Step 1: Destination & activities
   // ---------------------------------------------------------------------------
@@ -395,6 +404,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     _selectedCurrencyCode = 'INR';
+    // The FROM/TO fields gate the bottom "Complete" button via
+    // _tripBasicsComplete, but the onChanged handlers only setState for
+    // queries under 2 characters (they debounce instead). Without these
+    // listeners the button would stay disabled while the user types a valid
+    // city, until some unrelated rebuild happened to run.
+    _originController.addListener(_onTripBasicsChanged);
+    _destTopController.addListener(_onTripBasicsChanged);
+  }
+
+  bool _lastTripBasicsComplete = false;
+
+  /// Red used for required-field markers and validation highlights. Darker
+  /// than Colors.red so it keeps contrast against the white field background.
+  static const Color _errorColor = Color(0xFFD32F2F);
+
+  /// Whether to highlight blank required fields in red. Stays false until the
+  /// user actually tries to proceed — colouring every field red the instant
+  /// the screen opens (when nothing is filled yet) reads as failure rather
+  /// than guidance.
+  bool _showTripBasicsErrors = false;
+
+  /// Rebuilds when the required-fields gate flips. While errors are on screen
+  /// it rebuilds per keystroke instead, so a field's red clears as soon as the
+  /// user types into it rather than lingering.
+  void _onTripBasicsChanged() {
+    final complete = _tripBasicsComplete;
+    if (complete == _lastTripBasicsComplete && !_showTripBasicsErrors) return;
+    _lastTripBasicsComplete = complete;
+    if (mounted) setState(() {});
   }
 
   @override
@@ -425,8 +463,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _destTopOverlayEntry?.remove();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _originController.removeListener(_onTripBasicsChanged);
     _originController.dispose();
     _originFocusNode.dispose();
+    _destTopController.removeListener(_onTripBasicsChanged);
     _destTopController.dispose();
     _destTopFocusNode.dispose();
     _budgetController.dispose();
@@ -471,8 +511,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return _isSectionComplete(index - 1);
   }
 
+  // Trip basics (FROM / TO / dates) at the top of onboarding. Required —
+  // every downstream step depends on them: flight links need both cities to
+  // resolve an IATA pair, and hotel/activity results are priced and filtered
+  // by the travel dates.
+  bool get _tripBasicsComplete =>
+      _originController.text.trim().isNotEmpty &&
+      _destTopController.text.trim().isNotEmpty &&
+      _tripFromDate != null &&
+      _tripToDate != null;
+
+  /// Which required trip basics are still blank, in the order they appear on
+  /// screen. Empty when [_tripBasicsComplete].
+  List<String> get _missingTripBasics => [
+        if (_originController.text.trim().isEmpty) 'where you\'re travelling from',
+        if (_destTopController.text.trim().isEmpty) 'your destination',
+        if (_tripFromDate == null || _tripToDate == null) 'your trip dates',
+      ];
+
+  /// Joins items into a readable phrase: "a", "a and b", "a, b and c".
+  static String _readableList(List<String> items) {
+    if (items.length == 1) return items.first;
+    return '${items.sublist(0, items.length - 1).join(', ')} and ${items.last}';
+  }
+
   bool get _allComplete =>
-      _isSectionComplete(0) && _isSectionComplete(1) && _isSectionComplete(2);
+      _tripBasicsComplete &&
+      _isSectionComplete(0) &&
+      _isSectionComplete(1) &&
+      _isSectionComplete(2);
 
   // Persists every field collected across all four steps into
   // UserPreferencesProvider in one shot, then navigates to /home.
@@ -721,10 +788,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         .toList();
     if (activities.isEmpty) return;
 
-    final images =
-        await _adkService.getActivityImages(city: city, activities: activities);
-    if (!mounted || images.isEmpty) return;
-    setState(() => _activityImages = {..._activityImages, ...images});
+    // Kept as one request: splitting this into parallel batches was measured
+    // and made no difference (every batch still landed together at ~7s). The
+    // cost is upstream — two Google round trips per activity — so the wait is
+    // the same however it's sliced. Chips render as text immediately and
+    // images fade in when this returns.
+    try {
+      final images = await _adkService.getActivityImages(
+          city: city, activities: activities);
+      if (!mounted || images.isEmpty) return;
+      setState(() => _activityImages = {..._activityImages, ...images});
+    } catch (_) {
+      // Images are decorative — a failure here leaves the text chips intact.
+    }
   }
 
   // Generic interest categories shown when the ADK service can't return
@@ -1469,6 +1545,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required LayerLink layerLink,
     required GlobalKey fieldKey,
     VoidCallback? onEditingComplete,
+    bool hasError = false,
   }) {
     return CompositedTransformTarget(
       link: layerLink,
@@ -1476,24 +1553,41 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         key: fieldKey,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.black12),
+          border: Border.all(
+            color: hasError ? _errorColor : Colors.black12,
+            width: hasError ? 1.5 : 1,
+          ),
           borderRadius: BorderRadius.circular(10),
-          color: Colors.white,
+          color: hasError ? _errorColor.withValues(alpha: 0.04) : Colors.white,
         ),
         child: Row(
           children: [
-            Icon(icon, size: 16, color: iconColor),
+            Icon(icon, size: 16, color: hasError ? _errorColor : iconColor),
             const SizedBox(width: 6),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Colors.black54,
-                      fontWeight: FontWeight.w700,
+                  // Required fields carry a red asterisk at all times, so the
+                  // user can see what's mandatory before they try to proceed.
+                  Text.rich(
+                    TextSpan(
+                      text: label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: hasError ? _errorColor : Colors.black54,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      children: const [
+                        TextSpan(
+                          text: ' *',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: _errorColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   SizedBox(
@@ -1645,6 +1739,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       focusNode: _originFocusNode,
                       layerLink: _originLayerLink,
                       fieldKey: _originFieldKey,
+                      hasError: _showTripBasicsErrors &&
+                          _originController.text.trim().isEmpty,
                       onChanged: _updateOriginSuggestions,
                       onEditingComplete: () {
                         final txt = _originController.text.trim();
@@ -1667,6 +1763,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       focusNode: _destTopFocusNode,
                       layerLink: _destTopLayerLink,
                       fieldKey: _destTopFieldKey,
+                      hasError: _showTripBasicsErrors &&
+                          _destTopController.text.trim().isEmpty,
                       onChanged: _updateDestTopSuggestions,
                       onEditingComplete: () {
                         final txt = _destTopController.text.trim();
@@ -1684,64 +1782,83 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               const SizedBox(height: 10),
 
               // Trip dates (single date range picker)
-              Material(
-                color: const Color(0xFF4F46E5).withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  onTap: _pickTripDates,
+              Builder(builder: (context) {
+                final datesMissing =
+                    _tripFromDate == null || _tripToDate == null;
+                final dateError = _showTripBasicsErrors && datesMissing;
+                final accent =
+                    dateError ? _errorColor : const Color(0xFF4F46E5);
+                return Material(
+                  color: accent.withValues(alpha: dateError ? 0.04 : 0.07),
                   borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 11),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: const Color(0xFF4F46E5).withValues(alpha: 0.35),
+                  child: InkWell(
+                    onTap: _pickTripDates,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 11),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: accent.withValues(alpha: dateError ? 1 : 0.35),
+                          width: dateError ? 1.5 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.calendar_month, size: 18, color: accent),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text.rich(
+                                  TextSpan(
+                                    text: 'TRIP DATES',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: accent,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    children: const [
+                                      TextSpan(
+                                        text: ' *',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: _errorColor,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  datesMissing
+                                      ? 'Select travel dates'
+                                      : '${_formatTripDate(_tripFromDate)}  -  ${_formatTripDate(_tripToDate)}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: dateError
+                                        ? _errorColor
+                                        : datesMissing
+                                            ? const Color(0xFF4F46E5)
+                                                .withValues(alpha: 0.55)
+                                            : const Color(0xFF3730A3),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(Icons.chevron_right, color: accent),
+                        ],
                       ),
                     ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.calendar_month,
-                            size: 18, color: Color(0xFF4F46E5)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text(
-                                'TRIP DATES',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: Color(0xFF4F46E5),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                (_tripFromDate == null || _tripToDate == null)
-                                    ? 'Select travel dates'
-                                    : '${_formatTripDate(_tripFromDate)}  -  ${_formatTripDate(_tripToDate)}',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: (_tripFromDate == null ||
-                                          _tripToDate == null)
-                                      ? const Color(0xFF4F46E5)
-                                          .withValues(alpha: 0.55)
-                                      : const Color(0xFF3730A3),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            color: Color(0xFF4F46E5)),
-                      ],
-                    ),
                   ),
-                ),
-              ),
+                );
+              }),
 
               const SizedBox(height: 12),
 
@@ -1785,11 +1902,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _onExploreTripBasics() async {
+    // FROM, TO and the trip dates are all required before exploring — see
+    // _tripBasicsComplete for why.
+    final missing = _missingTripBasics;
+    if (missing.isNotEmpty) {
+      setState(() => _showTripBasicsErrors = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please enter ${_readableList(missing)}.')),
+      );
+      return;
+    }
+    if (_showTripBasicsErrors) {
+      setState(() => _showTripBasicsErrors = false);
+    }
+
     final destText = _destTopController.text.trim();
-    if (destText.isEmpty) {
+    final originText = _originController.text.trim();
+
+    if (!_tripToDate!.isAfter(_tripFromDate!)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please enter your destination (TO) first.'),
+          content: Text('Your return date must be after your departure date.'),
         ),
       );
       return;
@@ -1797,20 +1930,44 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     final provider =
         Provider.of<UserPreferencesProvider>(context, listen: false);
-    final originText = _originController.text.trim();
-    if (originText.isNotEmpty) provider.updateOrigin(originText);
+    provider.updateOrigin(originText);
     provider.updateDestination(destText);
-    if (_tripFromDate != null && _tripToDate != null) {
-      provider.updateDates(_tripFromDate!, _tripToDate!);
-    }
+    provider.updateDates(_tripFromDate!, _tripToDate!);
     provider.updateNumberOfPeople(_numberOfPeople);
 
     setState(() {
       _searchController.text = destText;
-      _expanded.add(0);
+      _expanded
+        ..clear()
+        ..add(0);
     });
 
+    // Open "Where to next?" and bring it into view BEFORE fetching, so the
+    // tap has an immediate visible effect. Interests can take several seconds
+    // to come back; opening first means the user watches the section load
+    // rather than staring at an unchanged screen.
+    if (!_section0Controller.isExpanded) {
+      _section0Controller.expand();
+    }
+    await _scrollSectionIntoView(_section0Key);
+
     await _fetchCityInterests();
+  }
+
+  /// Scrolls [key]'s widget to the top of the accordion viewport. Waits a
+  /// frame first so the freshly expanded section has been laid out at its
+  /// final height — measuring before that lands the scroll short.
+  Future<void> _scrollSectionIntoView(GlobalKey key) async {
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final sectionContext = key.currentContext;
+    if (sectionContext == null || !sectionContext.mounted) return;
+    await Scrollable.ensureVisible(
+      sectionContext,
+      alignment: 0.05,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOut,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1915,16 +2072,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       child: Column(
                         children: [
                           _buildTripBasicsCard(),
-                          _buildAccordionSection(
-                            index: 0,
-                            title: 'Where to next?',
-                            subtitle: _loadedCity.isEmpty
-                                ? 'Choose your destination & activities'
-                                : _loadedCity,
-                            icon: Icons.explore,
-                            isComplete: _isSectionComplete(0),
-                            isUnlocked: _isSectionUnlocked(0),
-                            body: _buildDestinationStep(),
+                          KeyedSubtree(
+                            key: _section0Key,
+                            child: _buildAccordionSection(
+                              controller: _section0Controller,
+                              index: 0,
+                              title: 'Where to next?',
+                              subtitle: _loadedCity.isEmpty
+                                  ? 'Choose your destination & activities'
+                                  : _loadedCity,
+                              icon: Icons.explore,
+                              isComplete: _isSectionComplete(0),
+                              isUnlocked: _isSectionUnlocked(0),
+                              body: _buildDestinationStep(),
+                            ),
                           ),
                           const SizedBox(height: 12),
                           _buildAccordionSection(
@@ -1987,7 +2148,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           child: Text(
                             _allComplete
                                 ? 'Complete Profile & Start Discovery'
-                                : 'Fill all sections to continue',
+                                : _tripBasicsComplete
+                                    ? 'Fill all sections to continue'
+                                    : 'Add ${_readableList(_missingTripBasics)} to continue',
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 16,
@@ -2021,6 +2184,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required bool isComplete,
     required bool isUnlocked,
     required Widget body,
+    ExpansibleController? controller,
   }) {
     if (!isUnlocked) {
       return _buildLockedSection(title: title, icon: icon);
@@ -2049,6 +2213,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           child: ExpansionTile(
             key: ValueKey('onboarding_section_$index'),
+            controller: controller,
             initiallyExpanded: _expanded.contains(index),
             maintainState: true,
             onExpansionChanged: (open) {
@@ -2360,12 +2525,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  // Selectable activity tile: shows a real photo (see _loadActivityImages)
-  // once one's arrived for this activity, otherwise falls back to a plain
-  // text chip so the grid doesn't look broken while images are loading.
+  // Selectable activity tile.
+  //
+  // Always the same 104x84 card, whether or not its photo has arrived. It used
+  // to fall back to a FilterChip while loading, which meant every tile changed
+  // width AND height when images landed — inside a Wrap that re-flowed the
+  // whole grid and read as the section loading twice. Only the image layer
+  // differs now, so the layout is computed once and never moves.
   Widget _buildActivityCard(String activity, Color color) {
     final isSelected = _selectedActivities.contains(activity);
     final imageUrl = _activityImages[activity];
+    final hasImage = imageUrl != null;
 
     void toggle() {
       setState(() {
@@ -2377,32 +2547,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       });
     }
 
-    if (imageUrl == null) {
-      return FilterChip(
-        label: Text(
-          activity,
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.black87,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-            fontSize: 12,
-          ),
-        ),
-        selected: isSelected,
-        onSelected: (_) => toggle(),
-        backgroundColor: Colors.grey[100],
-        selectedColor: color,
-        checkmarkColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      );
-    }
-
-    return InkWell(
-      onTap: toggle,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        width: 104,
-        height: 84,
-        clipBehavior: Clip.antiAlias,
+    // Excluded from text selection.
+    //
+    // Every route is wrapped in SelectionArea (see main.dart), which registers
+    // each Text as selectable and sorts them by screen position. Labels inside
+    // an animating tile can be in the tree before they're laid out, and the
+    // sort then reads paintBounds on an unlaid-out RenderParagraph:
+    //   "RenderBox was not laid out: RenderParagraph ... NEEDS-LAYOUT"
+    // These labels are chrome on a tappable tile, not prose worth selecting,
+    // so keeping them out of the selection tree costs nothing.
+    return SelectionContainer.disabled(
+      child: InkWell(
+        onTap: toggle,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: 104,
+          height: 84,
+          clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
@@ -2413,44 +2574,54 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Image.network(
-              imageUrl,
-              fit: BoxFit.cover,
-              loadingBuilder: (context, child, progress) =>
-                  progress == null ? child : Container(color: Colors.grey[200]),
-              errorBuilder: (context, error, stackTrace) => Container(
-                color: Colors.grey[200],
-                alignment: Alignment.center,
-                child: Text(
-                  activity,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+            // Fades the photo in over the placeholder rather than popping.
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: hasImage
+                  ? Image.network(
+                      imageUrl,
+                      key: ValueKey(imageUrl),
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) =>
+                          progress == null
+                              ? child
+                              : Container(color: Colors.grey[200]),
+                      errorBuilder: (context, error, stackTrace) =>
+                          Container(color: Colors.grey[200]),
+                    )
+                  : Container(
+                      key: const ValueKey('placeholder'),
+                      color: Colors.grey[200],
+                    ),
+            ),
+            // Scrim only once there's a photo to darken; over the grey
+            // placeholder it would just muddy it.
+            if (hasImage)
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.65),
+                    ],
+                    stops: const [0.4, 1.0],
+                  ),
                 ),
               ),
-            ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.65),
-                  ],
-                  stops: const [0.4, 1.0],
-                ),
-              ),
-            ),
             Positioned(
               left: 6,
               right: 6,
               bottom: 6,
               child: Text(
                 activity,
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
+                // White reads against the scrim; without a photo behind it the
+                // label needs dark text to stay legible on grey.
+                style: TextStyle(
+                  color: hasImage ? Colors.white : Colors.black87,
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2469,7 +2640,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   child: const Icon(Icons.check, color: Colors.white, size: 12),
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2689,23 +2861,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
               return InkWell(
                 onTap: () {
-                  final current = _transportController.text.trim();
-                  final parts = current
-                      .split(',')
-                      .map((e) => e.trim())
-                      .where((e) => e.isNotEmpty)
-                      .toList();
-                  final alreadySelected =
-                      parts.any((p) => p.toLowerCase() == value.toLowerCase());
-
-                  if (alreadySelected) {
-                    parts.removeWhere(
-                        (p) => p.toLowerCase() == value.toLowerCase());
-                  } else {
-                    parts.add(value);
-                  }
-                  _transportController.text = parts.join(', ');
-                  setState(() {});
+                  // Single choice: picking a mode replaces whatever was
+                  // selected before, and tapping the current one clears it.
+                  // A trip is planned around one primary mode — allowing
+                  // "flight, train, bus" together produced a preference the
+                  // downstream search couldn't act on.
+                  setState(() {
+                    _transportController.text = selected ? '' : value;
+                  });
                 },
                 borderRadius: BorderRadius.circular(14),
                 child: Container(

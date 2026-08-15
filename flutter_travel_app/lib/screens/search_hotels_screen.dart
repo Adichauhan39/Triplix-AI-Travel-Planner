@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:animate_do/animate_do.dart';
@@ -5,11 +7,13 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../services/affiliate_links.dart';
-import '../services/api_service.dart';
-import '../services/mock_data_service.dart';
+import '../services/python_adk_service.dart';
+import '../services/google_places_service.dart';
 import '../models/hotel.dart';
+import '../models/confirmed_booking.dart';
 import '../providers/user_preferences_provider.dart';
 import '../providers/hotel_shortlist_provider.dart';
+import '../widgets/booking_confirm_prompt.dart';
 import 'hotel_shortlist_screen.dart';
 
 class SearchHotelsScreen extends StatefulWidget {
@@ -20,54 +24,69 @@ class SearchHotelsScreen extends StatefulWidget {
 }
 
 class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
-  final ApiService _api = ApiService();
-  final MockDataService _mockData = MockDataService();
-  final List<String> _cities = [
-    'Mumbai',
-    'Delhi',
-    'Goa',
-    'Bangalore',
-    'Jaipur',
-    'Kolkata',
-    'Chennai',
-    'Hyderabad'
-  ];
-  final List<String> _hotelTypes = [
-    'All',
-    'Resort',
-    'Hotel',
-    'Boutique',
-    'Hostel'
-  ];
-  final List<String> _amenities = [
-    'WiFi',
-    'Pool',
-    'Gym',
-    'Parking',
-    'Restaurant',
-    'Bar',
-    'Spa',
-    'Beach Access'
-  ];
+  final PythonADKService _adkService = PythonADKService();
+  final GooglePlacesService _placesService = GooglePlacesService();
 
+  // City autocomplete. Mirrors the onboarding field: Google Places is called
+  // straight from the app (fast) with the Python backend only as a fallback,
+  // and cached/local matches are painted immediately so the list never looks
+  // frozen while a request is in flight.
+  /// Red used for the required-field marker and the empty-city highlight.
+  /// Darker than Colors.red so it holds contrast against the white field.
+  static const Color _errorColor = Color(0xFFD32F2F);
+
+  /// Highlights the city field in red. Stays false until the user actually
+  /// tries to search — painting the form red on open, before they've typed
+  /// anything, reads as failure rather than guidance.
+  bool _showCityError = false;
+
+  /// The picked city including its region ("Bilaspur, Himachal Pradesh,
+  /// India"), kept alongside the short display name.
+  ///
+  /// [_selectedCity] stays short because the hotel search and screen titles
+  /// want a plain name, but the Aviasales handoff needs the region — two
+  /// Indian cities share the name Bilaspur, and a bare one always resolves to
+  /// the Chhattisgarh one. Null when the user typed freely rather than
+  /// choosing a suggestion, since then we have no region to offer.
+  String? _selectedCityQualified;
+
+  final TextEditingController _cityController = TextEditingController();
+  final Map<String, List<Map<String, String>>> _citySuggestionCache = {};
+  List<Map<String, String>> _citySuggestions = [];
+  Timer? _cityDebounce;
+  bool _loadingCities = false;
+  String _lastCityQuery = '';
+
+  /// Shown instantly when nothing is cached yet, so the very first keystrokes
+  /// still produce a list. Replaced as soon as a real lookup returns.
+  static const List<String> _localCityFallback = [
+    'Bengaluru, India',
+    'Mumbai, India',
+    'Delhi, India',
+    'Hyderabad, India',
+    'Chennai, India',
+    'Pune, India',
+    'Kolkata, India',
+    'Ahmedabad, India',
+    'Jaipur, India',
+    'Goa, India',
+    'Kochi, India',
+    'Lucknow, India',
+    'Indore, India',
+    'Surat, India',
+    'Nagpur, India',
+  ];
   String? _selectedCity;
   DateTime _checkIn = DateTime.now();
   DateTime _checkOut = DateTime.now().add(const Duration(days: 1));
   int _guests = 2;
-  int _rooms = 0;
-  String _specialRequest = '';
-  RangeValues _priceRange = const RangeValues(0, 5000000);
-  String _selectedType = 'All';
-  final Set<String> _selectedAmenities = {};
+
 
   // Hotel preferences from home screen
-  double _hotelBudget = 5000;
   String? _roomType;
   List<String> _foodTypes = [];
   String? _ambiance;
   List<String> _extras = [];
-  Map<String, dynamic>? _aiCriteria; // AI-enhanced search criteria
-  bool _aiPowered = false;
 
   List<Hotel> _searchResults = [];
   bool _loading = false;
@@ -76,6 +95,10 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
   @override
   void initState() {
     super.initState();
+    // Get DNS + TLS to the hotel partner out of the way now, so tapping
+    // "Book" later doesn't pay for connection setup on top of the redirect
+    // chain. Fire-and-forget; failure changes nothing.
+    AffiliateLinks.prewarmHotelPartner();
     // Get parameters passed from home screen
     final arguments = Get.arguments;
     if (arguments != null && arguments is Map<String, dynamic>) {
@@ -88,29 +111,21 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
         _checkOut = arguments['checkOut'] as DateTime? ??
             DateTime.now().add(const Duration(days: 1));
         _guests = arguments['guests'] as int? ?? 2;
-        _rooms = arguments['rooms'] as int? ?? 0;
-        _specialRequest = arguments['specialRequest'] as String? ?? '';
 
         // Get hotel preferences
-        _hotelBudget = arguments['hotelBudget'] as double? ?? 5000;
         _roomType = arguments['roomType'] as String?;
         _foodTypes =
             (arguments['foodTypes'] as List<dynamic>?)?.cast<String>() ?? [];
         _ambiance = arguments['ambiance'] as String?;
         _extras = (arguments['extras'] as List<dynamic>?)?.cast<String>() ?? [];
-
-        // Get AI criteria
-        _aiCriteria = arguments['aiCriteria'] as Map<String, dynamic>?;
-        _aiPowered = arguments['aiPowered'] as bool? ?? false;
-
-        // Update price range based on budget
-        _priceRange = RangeValues(0, _hotelBudget);
       });
-      // Auto-search if city is provided and matches
-      if (_selectedCity != null && _cities.contains(_selectedCity)) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _searchHotels();
-        });
+      // Prefill only. The screen deliberately does NOT search on open: hotel
+      // search takes seconds, so an automatic run left the form locked behind
+      // a spinner before the user had chosen anything, and any failure fired
+      // side effects (snackbars, handoffs) they never asked for. Searching is
+      // now always an explicit action.
+      if (_selectedCity != null) {
+        _cityController.text = _selectedCity!;
       }
     } else {
       // No GetX arguments (e.g. opened via the Home quick-access card, which
@@ -129,354 +144,222 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
           if (prefs.checkOutDate != null) _checkOut = prefs.checkOutDate!;
           // Guests intentionally starts at 0 regardless of the trip's
           // traveler count — the two are tracked independently.
-          _priceRange = RangeValues(0, _hotelBudget);
         });
 
-        if (_cities.contains(_selectedCity)) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _searchHotels();
-          });
-        }
+        // Prefill only — see the note on the arguments branch above.
+        _cityController.text = _selectedCity!;
       }
     }
   }
 
-  /// Matches [rawCity] against the fixed dropdown list (case-insensitive).
-  /// If there's no match — e.g. an onboarding destination like "Bhiwandi"
-  /// that isn't one of the 8 preset cities — adds it to the list instead of
-  /// dropping it, since DropdownButtonFormField asserts if its value isn't
-  /// exactly one of its items. Keeps whatever the user picked in onboarding
-  /// visible rather than silently clearing it.
-  String _resolveCity(String rawCity) {
-    final trimmed = rawCity.trim();
-    final matches =
-        _cities.where((city) => city.toLowerCase() == trimmed.toLowerCase());
-    if (matches.isNotEmpty) return matches.first;
-    _cities.add(trimmed);
-    return trimmed;
+  /// Kept only to strip any country/state suffix ("Raipur, Chhattisgarh,
+  /// India" -> "Raipur"). The old version also had to force the value into a
+  /// fixed dropdown list; with a free-text field that's no longer needed.
+  String _resolveCity(String rawCity) => rawCity.split(',').first.trim();
+
+  @override
+  void dispose() {
+    _cityDebounce?.cancel();
+    _cityController.dispose();
+    super.dispose();
   }
 
+  /// Debounced so a fast typist doesn't fire a request per keystroke.
+  void _updateCitySuggestions(String query) {
+    final normalized = query.trim();
+    // Typing invalidates any previous pick — otherwise a stale _selectedCity
+    // could be searched while the field shows something else entirely, and a
+    // previously-picked region could end up attached to a different city.
+    _selectedCity = normalized.isEmpty ? null : normalized;
+    _selectedCityQualified = null;
+
+    // Clear the red as soon as they start fixing it, rather than making them
+    // search again to find out it's satisfied.
+    if (_showCityError && normalized.isNotEmpty) {
+      setState(() => _showCityError = false);
+    }
+
+    _cityDebounce?.cancel();
+    if (normalized.length < 2) {
+      setState(() {
+        _citySuggestions = [];
+        _loadingCities = false;
+      });
+      return;
+    }
+    if (normalized.toLowerCase() == _lastCityQuery) return;
+
+    setState(() => _loadingCities = true);
+    // 150ms, matching the onboarding field. Long enough to skip most
+    // intermediate keystrokes, short enough that the list feels live.
+    _cityDebounce = Timer(
+      const Duration(milliseconds: 150),
+      () => _loadCitySuggestions(normalized),
+    );
+  }
+
+  /// Label used to de-duplicate suggestions arriving from different sources.
+  String _labelFor(Map<String, String> s) {
+    final city = (s['city'] ?? '').trim();
+    final country = (s['country'] ?? '').trim();
+    return (country.isEmpty ? city : '$city, $country').toLowerCase();
+  }
+
+  /// Reuses the results of the longest cached prefix of [qLower], filtered to
+  /// what still matches. Typing "raip" after "rai" can answer from memory
+  /// instead of waiting on the network.
+  List<Map<String, String>> _prefixCached(String qLower) {
+    String? bestKey;
+    for (final key in _citySuggestionCache.keys) {
+      if (qLower.startsWith(key) &&
+          (bestKey == null || key.length > bestKey.length)) {
+        bestKey = key;
+      }
+    }
+    if (bestKey == null) return const [];
+    return (_citySuggestionCache[bestKey] ?? const [])
+        .where((s) => _labelFor(s).contains(qLower))
+        .take(6)
+        .toList();
+  }
+
+  List<Map<String, String>> _quickLocalMatches(String qLower) {
+    return _localCityFallback
+        .where((c) => c.toLowerCase().contains(qLower))
+        .take(6)
+        .map((c) {
+      final parts = c.split(',').map((p) => p.trim()).toList();
+      return {
+        'city': parts.first,
+        'country': parts.length > 1 ? parts.sublist(1).join(', ') : '',
+        'description': '',
+      };
+    }).toList();
+  }
+
+  Future<void> _loadCitySuggestions(String query) async {
+    final qLower = query.toLowerCase();
+    _lastCityQuery = qLower;
+
+    // Paint something immediately — a cached prefix if we have one, otherwise
+    // local matches — so the list never sits empty while the network works.
+    final immediate = _prefixCached(qLower).isNotEmpty
+        ? _prefixCached(qLower)
+        : _quickLocalMatches(qLower);
+    if (immediate.isNotEmpty && mounted) {
+      setState(() => _citySuggestions = immediate);
+    }
+
+    // Google Places direct from the app first: it answers in ~0.5s, where the
+    // backend adds a hop. The backend is the fallback, not the primary.
+    var results = await _placesService
+        .autocompleteCity(query)
+        .timeout(const Duration(milliseconds: 900), onTimeout: () => const []);
+
+    if (results.isEmpty) {
+      results = await _adkService
+          .getDestinationSuggestions(query: query, limit: 6)
+          .timeout(const Duration(milliseconds: 1500),
+              onTimeout: () => const []);
+    }
+
+    // Drop the response if the field has moved on since the request went out.
+    if (!mounted || _cityController.text.trim().toLowerCase() != _lastCityQuery) {
+      return;
+    }
+
+    if (results.isNotEmpty) {
+      _citySuggestionCache[qLower] = results.take(6).toList();
+    }
+    setState(() {
+      if (results.isNotEmpty) _citySuggestions = results.take(6).toList();
+      _loadingCities = false;
+    });
+  }
+
+  /// [region] is the suggestion's description — "Himachal Pradesh, India" —
+  /// which is what distinguishes two cities sharing a name. Stored so the
+  /// Aviasales handoff can pass it on; the field itself keeps the short name.
+  void _selectCitySuggestion(String city, {String region = ''}) {
+    _cityDebounce?.cancel();
+    FocusScope.of(context).unfocus();
+
+    // Some entries already carry the region in the name ("Bilaspur (Himachal
+    // Pradesh)") — drop that so it isn't repeated once the region is appended.
+    final shortName = city.split('(').first.trim();
+    final qualified = region.trim().isEmpty
+        ? null
+        : (region.toLowerCase().startsWith(shortName.toLowerCase())
+            ? region.trim()
+            : '$shortName, ${region.trim()}');
+
+    setState(() {
+      _selectedCity = shortName;
+      _selectedCityQualified = qualified;
+      _cityController.text = shortName;
+      _citySuggestions = [];
+      _loadingCities = false;
+      _lastCityQuery = shortName.toLowerCase();
+    });
+  }
+
+  /// Hands off to Aviasales for the current city and dates, then asks whether
+  /// the user booked — the redirect never reports back, so this is the only
+  /// way a stay reaches the itinerary.
+  Future<void> _openAviasalesHotels() async {
+    if (_selectedCity == null) return;
+    await BookingConfirmPrompt.launchAndConfirm(
+      context,
+      launch: () => AffiliateLinks.open(
+        AffiliateLinks.aviasalesHotelSearchByCity(
+          // Region-qualified when the user picked a suggestion, so a
+          // same-named city can't send them to the wrong state.
+          city: _selectedCityQualified ?? _selectedCity!,
+          checkIn: _checkIn,
+          checkOut: _checkOut,
+          guests: _guests,
+        ),
+      ),
+      kind: BookingKind.hotel,
+      title: 'Stay in $_selectedCity',
+      startDate: _checkIn,
+      endDate: _checkOut,
+      city: _selectedCity ?? '',
+    );
+  }
+
+  /// Only ever called from an explicit user action — the screen no longer
+  /// searches on open, so anything here is safe to treat as intentional,
+  /// including handing off to Aviasales when the search fails.
+  /// Validates the form, then hands straight off to Aviasales.
+  ///
+  /// There is no in-app hotel list any more. The old flow called the backend
+  /// first, which answered from a 65-row CSV covering 15 cities with invented
+  /// prices — so it was empty for most destinations and wrong for the rest,
+  /// and every search paid for a round trip before redirecting anyway.
+  /// Aviasales has the real inventory, so the search goes straight there.
   Future<void> _searchHotels() async {
-    if (_selectedCity == null) {
+    if (_selectedCity == null || _selectedCity!.trim().isEmpty) {
+      setState(() => _showCityError = true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a city')),
+        const SnackBar(content: Text('Please enter a destination city')),
+      );
+      return;
+    }
+    if (_showCityError) setState(() => _showCityError = false);
+
+    if (!_checkOut.isAfter(_checkIn)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Check-out must be after check-in.'),
+        ),
       );
       return;
     }
 
-    setState(() => _loading = true);
-
-    List<Hotel> results = [];
-    bool usedMockData = false;
-
-    try {
-      // If AI-powered search is available, use it
-      if (_aiPowered && _aiCriteria != null) {
-        // Use AI-powered search
-        results = await _mockData.searchHotelsWithAI(
-          city: _selectedCity!,
-          minPrice: _priceRange.start,
-          maxPrice: _priceRange.end,
-          aiCriteria: _aiCriteria,
-        );
-        usedMockData = true;
-
-        // Show AI-powered message
-        if (mounted && _aiCriteria!['intent'] != null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.auto_awesome, color: Colors.white, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                        '✨ AI found ${results.length} hotels: ${_aiCriteria!['intent']}'),
-                  ),
-                ],
-              ),
-              duration: const Duration(seconds: 4),
-              backgroundColor: Colors.deepPurple,
-            ),
-          );
-        }
-      } else {
-        // Regular search flow
-        // If special request is provided, send to AI first
-        if (_specialRequest.isNotEmpty) {
-          try {
-            final aiResponse = await _api.sendMessage(
-              'I am looking for hotels in $_selectedCity. Special request: $_specialRequest. '
-              'Check-in: ${_checkIn.toString().split(' ')[0]}, Check-out: ${_checkOut.toString().split(' ')[0]}, '
-              'Guests: $_guests, Rooms: $_rooms',
-            );
-
-            // Show AI response
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                      'AI: ${aiResponse['response'] ?? 'Searching hotels...'}'),
-                  duration: const Duration(seconds: 3),
-                  backgroundColor: AppConfig.accentColor,
-                ),
-              );
-            }
-          } catch (aiError) {
-            print('AI request failed: $aiError');
-            // Continue with search even if AI fails
-          }
-        }
-
-        // Try backend API first
-        try {
-          results = await _api.getHotels(
-            city: _selectedCity!,
-            minPrice: _priceRange.start,
-            maxPrice: _priceRange.end,
-            type: _selectedType == 'All' ? null : _selectedType,
-            amenities: _selectedAmenities.toList(),
-          );
-        } catch (apiError) {
-          print('Backend API failed, using mock data: $apiError');
-          // Fallback to mock data with AI prompt support
-          results = await _mockData.searchHotels(
-            city: _selectedCity!,
-            minPrice: _priceRange.start,
-            maxPrice: _priceRange.end,
-            type: _selectedType == 'All' ? null : _selectedType,
-            amenities: _selectedAmenities.toList(),
-            aiPrompt: _specialRequest.isNotEmpty ? _specialRequest : null,
-          );
-          usedMockData = true;
-
-          // Generate smart AI response for mock data
-          if (_specialRequest.isNotEmpty && mounted) {
-            final aiMessage =
-                _mockData.generateAIResponse(_specialRequest, results.length);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('AI: $aiMessage'),
-                duration: const Duration(seconds: 3),
-                backgroundColor: Colors.blue,
-              ),
-            );
-          }
-        }
-      }
-
-      // Auto-navigate to dedicated results screen if we have results
-      // IMPORTANT: Navigate BEFORE setState to avoid rendering issues on web
-      if (mounted && results.isNotEmpty) {
-        print('Navigating to results screen with ${results.length} hotels.');
-        // Convert List<Hotel> to List<Map<String, dynamic>> for safe web navigation
-        final hotelsAsJson = results.map((h) => h.toJson()).toList();
-        Get.toNamed('/hotel-results', arguments: {
-          'hotels': hotelsAsJson,
-          'criteria': {
-            'city': _selectedCity,
-            'price':
-                '₹${_priceRange.start.toInt()} - ₹${_priceRange.end.toInt()}',
-            'type': _selectedType,
-            if (_selectedAmenities.isNotEmpty)
-              'amenities': _selectedAmenities.toList(),
-            if (_roomType != null) 'room_type': _roomType,
-            if (_ambiance != null) 'ambiance': _ambiance,
-            if (_extras.isNotEmpty) 'extras': _extras,
-            if (_specialRequest.isNotEmpty) 'special_request': _specialRequest,
-          },
-        });
-        // Set loading to false after navigation starts
-        setState(() => _loading = false);
-        return; // Exit early to prevent inline rendering
-      }
-
-      if (mounted) {
-        setState(() {
-          _searchResults = results;
-          _searched = true;
-          _loading = false;
-        });
-
-        // Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              usedMockData
-                  ? 'Found ${results.length} hotels in $_selectedCity (Using offline data)'
-                  : 'Found ${results.length} hotels in $_selectedCity',
-            ),
-            backgroundColor: usedMockData ? Colors.orange : Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      print('Search error: $e');
-      setState(() => _loading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error searching hotels: ${e.toString()}'),
-            duration: const Duration(seconds: 5),
-            backgroundColor: Colors.red,
-            action: SnackBarAction(
-              label: 'Retry',
-              textColor: Colors.white,
-              onPressed: _searchHotels,
-            ),
-          ),
-        );
-      }
-    }
+    await _openAviasalesHotels();
   }
 
-  Future<void> _searchHotelsWithAI() async {
-    if (_selectedCity == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a city')),
-      );
-      return;
-    }
-
-    setState(() => _loading = true);
-
-    try {
-      // Build AI search message from preferences
-      String message = _specialRequest.isNotEmpty ? _specialRequest : '';
-
-      // Add preferences to message if no special request
-      if (message.isEmpty) {
-        List<String> criteria = [];
-        if (_roomType != null) criteria.add('$_roomType room');
-        if (_ambiance != null) criteria.add('$_ambiance ambiance');
-        if (_foodTypes.isNotEmpty) {
-          criteria.add('${_foodTypes.join(", ")} food');
-        }
-        if (_extras.isNotEmpty) criteria.add(_extras.join(', '));
-        if (_selectedAmenities.isNotEmpty) {
-          criteria.add(_selectedAmenities.join(', '));
-        }
-
-        message = criteria.isNotEmpty
-            ? 'Find hotel with ${criteria.join(", ")}'
-            : 'Find best hotels, $_rooms ${_rooms == 1 ? 'room' : 'rooms'}';
-      }
-
-      // Call AI-powered search
-      final result = await _api.searchHotelsWithAI(
-        message: message,
-        city: _selectedCity!,
-        budget: _priceRange.end,
-        roomType: _roomType,
-        foodTypes: _foodTypes,
-        ambiance: _ambiance,
-        extras: _extras,
-      );
-
-      final aiHotels = result['hotels'] as List<Hotel>;
-
-      // Auto-navigate to results screen for AI search
-      // IMPORTANT: Navigate BEFORE setState to avoid rendering issues on web
-      if (mounted && aiHotels.isNotEmpty) {
-        print(
-            'Navigating to AI results screen with ${aiHotels.length} hotels.');
-        // Convert List<Hotel> to List<Map<String, dynamic>> for safe web navigation
-        final hotelsAsJson = aiHotels.map((h) => h.toJson()).toList();
-        Get.toNamed('/hotel-results', arguments: {
-          'hotels': hotelsAsJson,
-          'criteria': {
-            'city': _selectedCity,
-            'budget': 'Up to ₹${_priceRange.end.toInt()}',
-            if (_roomType != null) 'room_type': _roomType,
-            if (_ambiance != null) 'ambiance': _ambiance,
-            if (_foodTypes.isNotEmpty) 'food': _foodTypes,
-            if (_selectedAmenities.isNotEmpty)
-              'amenities': _selectedAmenities.toList(),
-            if (_extras.isNotEmpty) 'extras': _extras,
-            if (_specialRequest.isNotEmpty) 'special_request': _specialRequest,
-            'ai': true,
-          },
-        });
-        // Set loading to false after navigation starts
-        setState(() => _loading = false);
-        return; // Exit early to prevent inline rendering
-      }
-
-      if (mounted) {
-        setState(() {
-          _searchResults = aiHotels;
-          _searched = true;
-          _loading = false;
-        });
-
-        // Show AI success message with overall advice
-        final advice = result['overall_advice'] ?? result['ai_advice'] ?? '';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.auto_awesome,
-                        color: Colors.white, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '✨ AI found ${_searchResults.length} perfect matches!',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-                if (advice.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    advice,
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ],
-              ],
-            ),
-            duration: const Duration(seconds: 5),
-            backgroundColor: Colors.deepPurple,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      print('AI Search error: $e');
-      setState(() => _loading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                    'AI Search unavailable. Make sure server is running!'),
-                const SizedBox(height: 4),
-                Text(
-                  'Error: ${e.toString()}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 7),
-            backgroundColor: Colors.orange,
-            action: SnackBarAction(
-              label: 'Use Regular Search',
-              textColor: Colors.white,
-              onPressed: _searchHotels,
-            ),
-          ),
-        );
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -525,30 +408,97 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // City Dropdown
+                  // City search — free text with live suggestions, rather than
+                  // a fixed dropdown, so any destination works and not just
+                  // the handful that used to be hardcoded here.
                   FadeInDown(
-                    child: _buildSectionTitle('Where?'),
+                    child: _buildSectionTitle('Where?', required: true),
                   ),
                   const SizedBox(height: 8),
                   FadeInDown(
                     delay: const Duration(milliseconds: 50),
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _selectedCity,
+                    child: TextField(
+                      controller: _cityController,
+                      onChanged: _updateCitySuggestions,
+                      textInputAction: TextInputAction.search,
                       decoration: InputDecoration(
-                        hintText: 'Select city',
-                        prefixIcon: const Icon(Icons.location_city),
+                        hintText: 'Search any city',
+                        errorText: _showCityError
+                            ? 'Please enter a destination to search'
+                            : null,
+                        prefixIcon: Icon(
+                          Icons.location_city,
+                          color: _showCityError ? _errorColor : null,
+                        ),
+                        suffixIcon: _loadingCities
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                ),
+                              )
+                            : (_cityController.text.isEmpty
+                                ? null
+                                : IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _cityDebounce?.cancel();
+                                      setState(() {
+                                        _cityController.clear();
+                                        _selectedCity = null;
+                                        _citySuggestions = [];
+                                      });
+                                    },
+                                  )),
                         border: OutlineInputBorder(
                           borderRadius:
                               BorderRadius.circular(AppConfig.radiusMedium),
                         ),
                       ),
-                      items: _cities.map((city) {
-                        return DropdownMenuItem(value: city, child: Text(city));
-                      }).toList(),
-                      onChanged: (value) =>
-                          setState(() => _selectedCity = value),
                     ),
                   ),
+                  if (_citySuggestions.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius:
+                            BorderRadius.circular(AppConfig.radiusMedium),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Column(
+                        children: _citySuggestions.map((s) {
+                          final city = s['city'] ?? '';
+                          final country = s['country'] ?? '';
+                          final subtitle = (s['famous_for']?.isNotEmpty == true)
+                              ? s['famous_for']!
+                              : (s['description'] ?? '');
+                          return ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.location_on,
+                                size: 18, color: AppConfig.primaryColor),
+                            title: Text(
+                              country.isEmpty ? city : '$city, $country',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                            subtitle: subtitle.isEmpty
+                                ? null
+                                : Text(subtitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12)),
+                            onTap: () => _selectCitySuggestion(
+                              city,
+                              region: s['description'] ?? '',
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ],
 
                   const SizedBox(height: 20),
 
@@ -582,115 +532,6 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                   ),
 
                   const SizedBox(height: 20),
-
-                  // Rooms
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 200),
-                    child: _buildSectionTitle('Rooms'),
-                  ),
-                  const SizedBox(height: 8),
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 250),
-                    child: Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => setState(
-                              () => _rooms = (_rooms - 1).clamp(0, 10)),
-                          icon: const Icon(Icons.remove_circle_outline),
-                        ),
-                        Expanded(
-                          child: Center(
-                            child: Text(
-                              '$_rooms ${_rooms == 1 ? 'Room' : 'Rooms'}',
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => setState(
-                              () => _rooms = (_rooms + 1).clamp(0, 10)),
-                          icon: const Icon(Icons.add_circle_outline),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Price Range
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 300),
-                    child: _buildSectionTitle(
-                        'Price Range (₹${_priceRange.start.toInt()} - ₹${_priceRange.end.toInt()})'),
-                  ),
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 350),
-                    child: RangeSlider(
-                      values: _priceRange,
-                      min: 0,
-                      max: 5000000,
-                      divisions: 100,
-                      labels: RangeLabels('₹${_priceRange.start.toInt()}',
-                          '₹${_priceRange.end.toInt()}'),
-                      onChanged: (values) =>
-                          setState(() => _priceRange = values),
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Hotel Type
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 400),
-                    child: _buildSectionTitle('Hotel Type'),
-                  ),
-                  const SizedBox(height: 8),
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 450),
-                    child: Wrap(
-                      spacing: 8,
-                      children: _hotelTypes.map((type) {
-                        return ChoiceChip(
-                          label: Text(type),
-                          selected: _selectedType == type,
-                          onSelected: (selected) {
-                            if (selected) setState(() => _selectedType = type);
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Amenities
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 500),
-                    child: _buildSectionTitle('Amenities'),
-                  ),
-                  const SizedBox(height: 8),
-                  FadeInDown(
-                    delay: const Duration(milliseconds: 550),
-                    child: Wrap(
-                      spacing: 8,
-                      children: _amenities.map((amenity) {
-                        return FilterChip(
-                          label: Text(amenity),
-                          selected: _selectedAmenities.contains(amenity),
-                          onSelected: (selected) {
-                            setState(() {
-                              if (selected) {
-                                _selectedAmenities.add(amenity);
-                              } else {
-                                _selectedAmenities.remove(amenity);
-                              }
-                            });
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  ),
 
                   // Display Hotel Preferences if provided
                   if (_roomType != null ||
@@ -765,45 +606,30 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
-                        child: _loading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
+                        // The label stays put while loading — replacing it
+                        // with a bare spinner made the button look absent for
+                        // as long as the search took (up to ~30s), which read
+                        // as the screen not having finished rendering.
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (_loading) ...[
+                              const SizedBox(
+                                height: 16,
+                                width: 16,
                                 child:
                                     CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Text('Search Hotels',
-                                style: TextStyle(fontSize: 16)),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // AI-Powered Search Button
-                  FadeInUp(
-                    delay: const Duration(milliseconds: 100),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _loading ? null : _searchHotelsWithAI,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          side: BorderSide(
-                            color: Colors.deepPurple.withValues(alpha: 0.5),
-                            width: 2,
-                          ),
-                        ),
-                        icon: const Icon(Icons.auto_awesome,
-                            color: Colors.deepPurple),
-                        label: const Text(
-                          '✨ AI-Powered Search (Gemini 2.0)',
-                          style:
-                              TextStyle(fontSize: 16, color: Colors.deepPurple),
+                              ),
+                              const SizedBox(width: 10),
+                            ],
+                            Text(_loading ? 'Searching…' : 'Search Hotels',
+                                style: const TextStyle(fontSize: 16)),
+                          ],
                         ),
                       ),
                     ),
                   ),
+
                 ],
               ),
             ),
@@ -838,10 +664,30 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+  /// [required] adds a red asterisk so the field is visibly mandatory before
+  /// the user tries to search, rather than only on rejection.
+  Widget _buildSectionTitle(String title, {bool required = false}) {
+    if (!required) {
+      return Text(
+        title,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      );
+    }
+    return Text.rich(
+      TextSpan(
+        text: title,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        children: const [
+          TextSpan(
+            text: ' *',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: _errorColor,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1225,13 +1071,24 @@ class _HotelCard extends StatelessWidget {
                       child: SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          onPressed: () => AffiliateLinks.open(
-                            AffiliateLinks.aviasalesHotelSearch(
-                              hotel: hotel,
-                              checkIn: checkIn,
-                              checkOut: checkOut,
-                              guests: guests,
+                          // The redirect never reports back, so ask once the
+                          // user returns — see launchAndConfirm.
+                          onPressed: () => BookingConfirmPrompt.launchAndConfirm(
+                            context,
+                            launch: () => AffiliateLinks.open(
+                              AffiliateLinks.aviasalesHotelSearch(
+                                hotel: hotel,
+                                checkIn: checkIn,
+                                checkOut: checkOut,
+                                guests: guests,
+                              ),
                             ),
+                            kind: BookingKind.hotel,
+                            title: hotel.name,
+                            startDate: checkIn,
+                            endDate: checkOut,
+                            knownHotelName: hotel.name,
+                            city: hotel.city,
                           ),
                           icon: const Icon(Icons.open_in_new, size: 16),
                           label: const Text('Book on Aviasales'),

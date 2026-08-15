@@ -60,17 +60,14 @@ import requests
 import random
 import base64
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-# ── MongoDB Integration ─────────────────────────────────────────────────
-# Import MongoDB layer (graceful fallback to CSV if MongoDB unavailable)
-_mongodb_available = False
-try:
-    import mongodb_layer as mdb
-    _mongodb_available = True
-    print("[OK] MongoDB layer loaded")
-except ImportError:
-    print("[WARNING] MongoDB layer not available — using CSV only")
+# MongoDB was removed: the cluster it pointed at no longer exists, and every
+# hotel search paid ~21s of DNS retries before falling through to the CSV data
+# it actually served. Hotels come from CSV, and anything not covered there is
+# handed off to Aviasales, so there was nothing left for a database to do.
+# mongodb_layer.py is still on disk if it's ever wanted back.
 
 # Configure
 GOOGLE_PLACES_API_KEY = os.getenv('GOOGLE_PLACES_API_KEY', os.getenv('GOOGLE_API_KEY', ''))
@@ -133,24 +130,14 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize MongoDB connection on startup."""
-    if _mongodb_available:
-        import asyncio
-        try:
-            connected = await asyncio.wait_for(mdb.check_connection(), timeout=5.0)
-            if connected:
-                print("[OK] MongoDB Atlas connected successfully")
-            else:
-                print("[WARNING] MongoDB not reachable — falling back to CSV data")
-        except (Exception, asyncio.TimeoutError) as e:
-            print(f"[WARNING] MongoDB connection error: {e} — falling back to CSV data")
+    """Warm the on-disk photo cache."""
+    _load_photo_cache()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Close MongoDB connections on shutdown."""
-    if _mongodb_available:
-        await mdb.close_connections()
+    """Persist the photo cache on shutdown."""
+    _save_photo_cache()
 
 # Helper: Headers for new Google APIs (Places API New)
 def _google_headers(field_mask: str) -> dict:
@@ -652,8 +639,388 @@ def _city_to_iata(city: str) -> Optional[str]:
         'kochi': 'COK',
         'cochin': 'COK',
         'lucknow': 'LKO',
+        'raipur': 'RPR',
+        'indore': 'IDR',
+        'bhopal': 'BHO',
+        'nagpur': 'NAG',
+        'surat': 'STV',
+        'varanasi': 'VNS',
+        'amritsar': 'ATQ',
+        'udaipur': 'UDR',
+        'jodhpur': 'JDH',
+        'patna': 'PAT',
+        'guwahati': 'GAU',
+        'bhubaneswar': 'BBI',
+        'coimbatore': 'CJB',
+        'trivandrum': 'TRV',
+        'thiruvananthapuram': 'TRV',
+        'srinagar': 'SXR',
+        'dehradun': 'DED',
+        'chandigarh': 'IXC',
+        'ranchi': 'IXR',
+        'vadodara': 'BDQ',
+        'visakhapatnam': 'VTZ',
+        'madurai': 'IXM',
+        'mangalore': 'IXE',
+        'leh': 'IXL',
+        'port blair': 'IXZ',
     }
-    return mapping.get(str(city).strip().lower())
+    # Tolerate "Raipur, Chhattisgarh, India" as well as "Raipur" — the app's
+    # destination picker returns fully-qualified labels.
+    key = str(city).split(',')[0].strip().lower()
+    return mapping.get(key)
+
+TRAVELPAYOUTS_API_TOKEN = os.getenv('TRAVELPAYOUTS_API_TOKEN', '')
+TRAVELPAYOUTS_MARKER = os.getenv('TRAVELPAYOUTS_MARKER', '')
+
+# Off by default: flights must come from Aviasales so every result shown is
+# genuinely bookable at the price displayed. Set FLIGHTS_ALLOW_SYNTHETIC=1
+# only for an offline demo, and never in production — it re-enables the CSV
+# and Gemini paths, which invent flight numbers and fares.
+FLIGHTS_ALLOW_SYNTHETIC = os.getenv('FLIGHTS_ALLOW_SYNTHETIC', '').strip().lower() in ('1', 'true', 'yes')
+
+# Same rule for hotels: only real inventory. Off by default — see the note at
+# the Gemini hotel path for why (unbookable results, and ~45s to produce them).
+HOTELS_ALLOW_AI_GENERATED = os.getenv('HOTELS_ALLOW_AI_GENERATED', '').strip().lower() in ('1', 'true', 'yes')
+
+
+# Set by _fetch_aviasales_flights when the requested trip shape had no fares
+# but the opposite one did, keyed by (origin, destination). Read by the search
+# endpoint to build a hint for the empty state.
+_alternate_shape_hint = {}
+
+
+def _fetch_aviasales_flights(from_city, to_city, departure_date, return_date,
+                             passengers, travel_class):
+    """Real Aviasales fares for a route, via the Travelpayouts data API.
+
+    IMPORTANT — this is a price *cache*, not a live availability search. The
+    API returns fares that recent searches happened to record, so a route can
+    come back with one offer or none even when flights obviously exist. Treat
+    an empty result as "no cached fare", not "no flights", and fall through to
+    the next source rather than telling the user the route doesn't exist.
+
+    Returns [] on any failure so the caller falls back to CSV/AI.
+    """
+    if not TRAVELPAYOUTS_API_TOKEN:
+        return []
+
+    origin_info = _resolve_airport(from_city)
+    dest_info = _resolve_airport(to_city)
+    if not origin_info or not dest_info:
+        print(f"[AVIASALES] Could not resolve airports for {from_city!r} -> {to_city!r}")
+        return []
+
+    origin = origin_info['iata']
+    destination = dest_info['iata']
+    if origin == destination:
+        print(f"[AVIASALES] {from_city!r} and {to_city!r} share airport {origin}")
+        return []
+
+    base = {
+        'origin': origin,
+        'destination': destination,
+        'currency': 'inr',
+        'sorting': 'price',
+        'limit': 30,
+        'one_way': 'false' if return_date else 'true',
+    }
+
+    def fetch(params):
+        try:
+            resp = requests.get(
+                'https://api.travelpayouts.com/aviasales/v3/prices_for_dates',
+                params=params,
+                headers={'X-Access-Token': TRAVELPAYOUTS_API_TOKEN},
+                timeout=12,
+            )
+            if resp.status_code != 200:
+                print(f"[AVIASALES] HTTP {resp.status_code} for {origin}->{destination}")
+                return []
+            return resp.json().get('data') or []
+        except Exception as e:
+            print(f"[AVIASALES] Request failed: {e}")
+            return []
+
+    requested_day = str(departure_date)[:10] if departure_date else ''
+    return_day = str(return_date)[:10] if return_date else ''
+    wants_round_trip = bool(return_day)
+
+    # The trip shape is never substituted. A one-way and a round-trip fare are
+    # different products at different prices (BLR-RPR on 11 Aug: 0 one-way
+    # fares but 12 round trips from Rs13,608) and quoting a return fare as a
+    # one-way price would understate the trip by roughly half. Only the DATE
+    # is widened, and the client is told when that happened.
+    shape = 'false' if wants_round_trip else 'true'
+    attempts = []
+    if requested_day:
+        primary = dict(base, departure_at=requested_day, one_way=shape)
+        if return_day:
+            primary['return_at'] = return_day
+        attempts.append(('exact', primary))
+        attempts.append(('widened',
+                         dict(base, departure_at=requested_day[:7], one_way=shape)))
+    attempts.append(('widened', dict(base, one_way=shape)))
+
+    offers, exact_date = [], True
+    for level, params in attempts:
+        offers = fetch(params)
+        if offers:
+            exact_date = level == 'exact'
+            break
+
+    if not offers:
+        # Nothing in the shape asked for. Check whether the OTHER shape has
+        # fares so the client can say "no one-way fares, but round trips from
+        # Rs X" — a useful hint, kept out of the results list so its price can
+        # never be mistaken for the one the user searched.
+        probe = dict(base, one_way='true' if wants_round_trip else 'false')
+        if requested_day:
+            probe['departure_at'] = requested_day
+            if not wants_round_trip:
+                probe['return_at'] = (
+                    datetime.fromisoformat(requested_day) + timedelta(days=3)
+                ).strftime('%Y-%m-%d')
+        alt_offers = fetch(probe) or fetch(
+            dict(base, one_way='true' if wants_round_trip else 'false'))
+        if alt_offers:
+            cheapest = min(x.get('price', 0) for x in alt_offers if x.get('price'))
+            _alternate_shape_hint[(origin, destination)] = {
+                'shape': 'one_way' if wants_round_trip else 'round_trip',
+                'from_price': cheapest,
+                'count': len(alt_offers),
+            }
+        return []
+
+    results = []
+    for offer in offers:
+        try:
+            row = _create_aviasales_flight_result(
+                offer, from_city, to_city, passengers, travel_class,
+                departure_date, return_date,
+            )
+            # Tell the client when we flew from a different city's airport, so
+            # it can say so rather than implying the village has an airport.
+            row['origin_airport_info'] = origin_info
+            row['destination_airport_info'] = dest_info
+            # False when this fare is for a different day than the user asked
+            # for, so the UI can label it rather than implying it's available
+            # on the requested date.
+            row['exact_date'] = exact_date
+            row['requested_date'] = requested_day
+            results.append(row)
+        except Exception as e:
+            print(f"[AVIASALES] Skipped malformed offer: {e}")
+
+    print(f"[AVIASALES] {len(results)} cached fares for {origin}->{destination}")
+    return results
+
+
+def _create_aviasales_flight_result(offer, from_city, to_city, passengers,
+                                    travel_class, departure_date, return_date):
+    """Map one Aviasales offer onto the same result shape the app already
+    consumes from the CSV path, so no Flutter changes are needed."""
+    airline = offer.get('airline', '')
+    flight_number = str(offer.get('flight_number', ''))
+    stops = int(offer.get('transfers') or 0)
+    price = float(offer.get('price') or 0)
+
+    departure_at = str(offer.get('departure_at') or '')
+    departure_time = departure_at[11:16] if len(departure_at) >= 16 else ''
+
+    minutes = int(offer.get('duration') or 0)
+    duration = f"{minutes // 60}h {minutes % 60}m" if minutes else ''
+
+    # `link` is a path relative to the Aviasales host. Resolve it against the
+    # India storefront (aviasales.in + market=in) so fares render in INR — the
+    # .com domain infers the market from the visitor and can show an Indian
+    # user USD. Then attach the marker so the click is attributed.
+    link = offer.get('link') or ''
+    booking_url = f"https://aviasales.in{link}" if link.startswith('/') else link
+    if booking_url:
+        extra = {'market': 'in', 'currency': 'inr', 'locale': 'en'}
+        if TRAVELPAYOUTS_MARKER:
+            extra['marker'] = TRAVELPAYOUTS_MARKER
+        for key, value in extra.items():
+            if f'{key}=' in booking_url:
+                continue
+            booking_url += ('&' if '?' in booking_url else '?') + f'{key}={value}'
+
+    description = (
+        f"{airline} flight {flight_number} from {from_city.title()} to "
+        f"{to_city.title()}. "
+    )
+    description += ("Direct flight. " if stops == 0
+                    else f"Flight with {stops} stop(s). ")
+    description += "Fare and availability confirmed on Aviasales at booking."
+
+    recommendation = (
+        "Direct flight — fastest option on this route. " if stops == 0
+        else "Connecting flight. "
+    )
+    recommendation += f"Lowest fare recorded for this date: Rs{int(price)}."
+
+    return {
+        'id': f"aviasales_{airline}{flight_number}_{departure_at[:10]}",
+        'flight_date': departure_at[:10],
+        'provider': airline,
+        'route_number': f"{airline}{flight_number}",
+        'from_city': from_city.title(),
+        'to_city': to_city.title(),
+        'departure_time': departure_time,
+        'arrival_time': '',  # not supplied by this endpoint
+        'duration': duration,
+        'stops': stops,
+        'vehicle_type': 'Aircraft',
+        'price': price,
+        'class': (travel_class or 'economy').title(),
+        'amenities': [],
+        'description': description,
+        'why_recommended': recommendation,
+        'passengers': passengers,
+        'departure_date': departure_date,
+        'return_date': return_date,
+        'extras': [],
+        'accessibility': [],
+        'booking_url': booking_url,
+        'origin_airport': offer.get('origin_airport', ''),
+        'destination_airport': offer.get('destination_airport', ''),
+    }
+
+
+_AIRPORTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.airports.json')
+_AIRPORTS_URL = 'https://api.travelpayouts.com/data/en/airports.json'
+_airports_cache = None
+_airport_lookup_cache = {}
+
+
+def _load_airports():
+    """Travelpayouts' airport dataset (IATA code + coordinates), cached to disk.
+
+    Only 'flightable' airports are kept — the full file includes heliports and
+    disused strips that Aviasales can't sell tickets for, and offering someone
+    a flight to one of those is worse than offering nothing.
+    """
+    global _airports_cache
+    if _airports_cache is not None:
+        return _airports_cache
+
+    data = None
+    try:
+        if os.path.exists(_AIRPORTS_PATH):
+            with open(_AIRPORTS_PATH, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+    except Exception:
+        data = None
+
+    if data is None:
+        try:
+            print("[AIRPORTS] Downloading airport dataset…")
+            data = requests.get(_AIRPORTS_URL, timeout=45).json()
+            with open(_AIRPORTS_PATH, 'w', encoding='utf-8') as fh:
+                json.dump(data, fh)
+        except Exception as e:
+            print(f"[AIRPORTS] Could not load dataset: {e}")
+            _airports_cache = []
+            return _airports_cache
+
+    _airports_cache = [
+        a for a in data
+        if a.get('flightable') and a.get('code') and (a.get('coordinates') or {}).get('lat') is not None
+    ]
+    print(f"[AIRPORTS] {len(_airports_cache)} flightable airports available")
+    return _airports_cache
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    from math import radians, sin, cos, asin, sqrt
+    lat1, lon1, lat2, lon2 = map(radians, (lat1, lon1, lat2, lon2))
+    h = sin((lat2 - lat1) / 2) ** 2 + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(h))
+
+
+def _geocode_city(city: str):
+    """(lat, lon) for a free-text place via Google Places, or None."""
+    if not GOOGLE_PLACES_API_KEY:
+        return None
+    try:
+        resp = requests.post(
+            'https://places.googleapis.com/v1/places:searchText',
+            headers=_google_headers('places.location,places.displayName'),
+            json={'textQuery': city, 'maxResultCount': 1},
+            timeout=8,
+        ).json()
+        places = resp.get('places') or []
+        if not places:
+            return None
+        loc = places[0].get('location') or {}
+        if loc.get('latitude') is None:
+            return None
+        return (loc['latitude'], loc['longitude'])
+    except Exception as e:
+        print(f"[AIRPORTS] Geocode failed for {city!r}: {e}")
+        return None
+
+
+def _resolve_airport(city: str):
+    """Resolve a free-text city to a bookable airport.
+
+    Returns a dict with the IATA code plus, when the city has no airport of
+    its own, which airport was substituted and how far away it is — the caller
+    surfaces that so a user searching a village isn't silently shown flights
+    from a city 200km away.
+
+    Returns None when nothing usable is found.
+    """
+    if not city:
+        return None
+
+    key = str(city).strip().lower()
+    if key in _airport_lookup_cache:
+        return _airport_lookup_cache[key]
+
+    # Fast path: the hand-maintained map covers the big cities exactly.
+    exact = _city_to_iata(city)
+    if exact:
+        result = {'iata': exact, 'substituted': False,
+                  'airport_name': '', 'distance_km': 0, 'query': city}
+        _airport_lookup_cache[key] = result
+        return result
+
+    airports = _load_airports()
+    if not airports:
+        return None
+
+    coords = _geocode_city(city)
+    if not coords:
+        print(f"[AIRPORTS] Could not geocode {city!r}")
+        return None
+
+    lat, lon = coords
+    nearest, best = None, None
+    for a in airports:
+        c = a['coordinates']
+        d = _haversine_km(lat, lon, c['lat'], c['lon'])
+        if best is None or d < best:
+            best, nearest = d, a
+
+    if nearest is None:
+        return None
+
+    result = {
+        'iata': nearest['code'],
+        # Under ~30km the airport effectively serves that city, so don't
+        # bother the user with a "nearest airport" note.
+        'substituted': best > 30,
+        'airport_name': nearest.get('name', ''),
+        'distance_km': round(best),
+        'query': city,
+    }
+    _airport_lookup_cache[key] = result
+    print(f"[AIRPORTS] {city!r} -> {result['iata']} "
+          f"({result['airport_name']}, {result['distance_km']}km)")
+    return result
+
 
 def _amadeus_credentials_ready() -> bool:
     return bool(AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET)
@@ -928,17 +1295,78 @@ def _search_flights(from_city, to_city, departure_date, return_date, passengers,
                 'count': len(live_flights),
             }
 
+        # Real Aviasales fares. Sits above the CSV so anything we can show as
+        # genuinely bookable wins over invented data; empty results fall
+        # through, since this is a price cache and gaps are expected.
+        aviasales_flights = _fetch_aviasales_flights(
+            from_city=from_city,
+            to_city=to_city,
+            departure_date=departure_date,
+            return_date=return_date,
+            passengers=passengers,
+            travel_class=travel_class,
+        )
+        if aviasales_flights:
+            return {
+                'status': 'success',
+                'powered_by': 'Aviasales',
+                'ai_used': False,
+                'results': aviasales_flights,
+                'count': len(aviasales_flights),
+            }
+
+        # Aviasales is the only trusted flight source. The CSV rows and the
+        # Gemini path below both produce flights that look real but cannot be
+        # booked — fabricated flight numbers at invented prices. Showing those
+        # to a user who then can't book them is worse than showing nothing, so
+        # they're off unless explicitly enabled for an offline demo.
+        if not FLIGHTS_ALLOW_SYNTHETIC:
+            print("[FLIGHTS] No Aviasales fares; synthetic fallbacks disabled")
+            origin_info = _resolve_airport(from_city)
+            dest_info = _resolve_airport(to_city)
+            hint = None
+            if not origin_info or not dest_info:
+                message = ('We could not find an airport near '
+                           f'{from_city.title() if not origin_info else to_city.title()}.')
+            else:
+                message = 'No fares available for this route and date.'
+                hint = _alternate_shape_hint.pop(
+                    (origin_info['iata'], dest_info['iata']), None)
+                if hint:
+                    shape = ('one-way' if hint['shape'] == 'one_way'
+                             else 'return')
+                    message = (
+                        f"No {'return' if shape == 'one-way' else 'one-way'} "
+                        f"fares recorded for this route. {hint['count']} "
+                        f"{shape} fares are available from "
+                        f"Rs{int(hint['from_price'])}."
+                    )
+            return {
+                'status': 'success',
+                'powered_by': 'Aviasales',
+                'ai_used': False,
+                'results': [],
+                'count': 0,
+                'message': message,
+                'alternate_shape': hint,
+                'origin_airport_info': origin_info,
+                'destination_airport_info': dest_info,
+            }
+
         # Try CSV first
+        # NB: flights_india.csv names these columns 'from'/'to' (and
+        # price_economy/price_business/aircraft_type below) — not the
+        # from_city/to_city used by the train, bus, taxi and bike CSVs.
         filtered_flights = flights_df[
-            (flights_df['from_city'].str.lower() == from_city) &
-            (flights_df['to_city'].str.lower() == to_city)
+            (flights_df['from'].str.lower() == from_city) &
+            (flights_df['to'].str.lower() == to_city)
         ]
 
         # Filter by class availability
         if travel_class == 'economy':
-            filtered_flights = filtered_flights[filtered_flights['economy_price'] > 0]
+            filtered_flights = filtered_flights[filtered_flights['price_economy'] > 0]
         elif travel_class in ['business', 'first_class']:
-            filtered_flights = filtered_flights[filtered_flights['business_price'] > 0]
+            filtered_flights = filtered_flights[filtered_flights['price_business'] > 0]
 
         has_special = len(preferences) > 0 or len(extras) > 0 or len(accessibility) > 0 or travel_class != 'economy'
 
@@ -946,7 +1374,7 @@ def _search_flights(from_city, to_city, departure_date, return_date, passengers,
             print(f"[OK] CSV: {len(filtered_flights)} flights")
             results = []
             for _, f in filtered_flights.iterrows():
-                price = f['economy_price'] if travel_class == 'economy' else f['business_price']
+                price = f['price_economy'] if travel_class == 'economy' else f['price_business']
                 amenities = f['amenities'].split(', ') if pd.notna(f['amenities']) else []
 
                 results.append(_create_flight_result(f, price, travel_class, amenities, passengers, departure_date, return_date, extras, accessibility))
@@ -1219,14 +1647,14 @@ Format: {{"results": [{{"id": "FL001", "provider": "Air India", ...}}]}}"""
 
 def _create_flight_result(f, price, travel_class, amenities, passengers, departure_date, return_date, extras, accessibility):
     """Create standardized flight result"""
-    description = f"{f['airline']} flight {f['flight_number']} from {f['from_city']} to {f['to_city']}. "
+    description = f"{f['airline']} flight {f['flight_number']} from {f['from']} to {f['to']}. "
     if f['stops'] == 0:
         description += "Direct flight with excellent service. "
     else:
         description += f"Flight with {f['stops']} stop(s) for a comfortable journey. "
-    description += f"Modern {f['aircraft']} aircraft with premium amenities."
+    description += f"Modern {f['aircraft_type']} aircraft with premium amenities."
 
-    recommendation = f"Great choice for traveling from {f['from_city']} to {f['to_city']}. "
+    recommendation = f"Great choice for traveling from {f['from']} to {f['to']}. "
     if f['stops'] == 0:
         recommendation += "Direct flight saves time and reduces jet lag. "
     if 'WiFi' in amenities:
@@ -1238,13 +1666,13 @@ def _create_flight_result(f, price, travel_class, amenities, passengers, departu
         'id': f"{f['flight_number']}_{f['departure_time']}",
         'provider': f['airline'],
         'route_number': f['flight_number'],
-        'from_city': f['from_city'],
-        'to_city': f['to_city'],
+        'from_city': f['from'],
+        'to_city': f['to'],
         'departure_time': f['departure_time'],
         'arrival_time': f['arrival_time'],
         'duration': f['duration'],
         'stops': int(f['stops']),
-        'vehicle_type': f['aircraft'],
+        'vehicle_type': f['aircraft_type'],
         'price': float(price),
         'class': travel_class.title(),
         'amenities': amenities,
@@ -1370,6 +1798,37 @@ def _create_bike_result(b, travel_class, preferences, passengers, departure_date
         'accessibility': accessibility
     }
 
+def get_hotel_images_bulk(hotel_names, city):
+    """Resolve photos for several hotels at once: {name: url}.
+
+    Each get_hotel_image() call costs two sequential Google round trips, so
+    doing them in a loop made hotel search scale with the number of results —
+    a 6-hotel city took ~28s, right up against the client's 30s timeout. The
+    lookups are pure network waits, so a thread pool collapses that into
+    roughly the cost of one.
+    """
+    names = [n for n in dict.fromkeys(hotel_names) if n]
+    if not names:
+        return {}
+    if len(names) == 1:
+        return {names[0]: get_hotel_image(names[0], city)}
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(12, len(names))) as executor:
+        futures = {
+            executor.submit(get_hotel_image, name, city): name
+            for name in names
+        }
+        for future in futures:
+            name = futures[future]
+            try:
+                results[name] = future.result(timeout=20)
+            except Exception as e:
+                print(f"[IMAGE] Bulk lookup failed for {name!r}: {e}")
+                results[name] = ""
+    return results
+
+
 def get_hotel_image(hotel_name, city):
     """
     Get real hotel image URL using Google Places API (New)
@@ -1473,8 +1932,87 @@ def get_hotel_image(hotel_name, city):
         url = "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&h=600&fit=crop"
         return url
 
-# Photo cache to avoid repeated API calls
+# Photo cache to avoid repeated API calls.
+#
+# Backed by a JSON file so it survives restarts. Resolving photos for one
+# city's ~30 activities costs two Google round trips each — about 8s cold
+# versus ~2s warm — and an in-memory-only cache paid that 8s again after
+# every restart.
+#
+# Entries carry a fetch timestamp and expire after _PHOTO_CACHE_TTL. The
+# Places photo URLs stored here are signed googleusercontent links whose
+# exact lifetime Google doesn't document, so this deliberately errs short:
+# a stale entry means a broken image, which is worse than a slow one. Raise
+# the TTL if you observe the URLs outliving it.
+_PHOTO_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.photo_cache.json')
+_PHOTO_CACHE_TTL = 24 * 60 * 60  # seconds
 _photo_cache = {}
+_photo_cache_lock = threading.Lock()
+
+
+def _load_photo_cache():
+    """Restore non-expired cache entries from disk. Never fatal — a missing or
+    corrupt cache file just means starting cold."""
+    try:
+        if not os.path.exists(_PHOTO_CACHE_PATH):
+            return
+        with open(_PHOTO_CACHE_PATH, 'r', encoding='utf-8') as fh:
+            stored = json.load(fh)
+        now = time.time()
+        kept = {
+            key: entry['url']
+            for key, entry in stored.items()
+            if isinstance(entry, dict)
+            and entry.get('url')
+            and now - entry.get('at', 0) < _PHOTO_CACHE_TTL
+        }
+        _photo_cache.update(kept)
+        print(f"[CACHE] Loaded {len(kept)} photo URLs from disk "
+              f"({len(stored) - len(kept)} expired)")
+    except Exception as e:
+        print(f"[CACHE] Could not load photo cache: {e}")
+
+
+def _save_photo_cache():
+    """Merge this process's cache into the file on disk.
+
+    Merges rather than overwrites because uvicorn runs multiple worker
+    processes, each with its own _photo_cache — a blind write would drop
+    whatever the other worker had already resolved. Existing timestamps are
+    preserved so re-saving can't extend an entry's life indefinitely.
+    """
+    try:
+        with _photo_cache_lock:
+            snapshot = dict(_photo_cache)
+        if not snapshot:
+            return
+
+        existing = {}
+        try:
+            if os.path.exists(_PHOTO_CACHE_PATH):
+                with open(_PHOTO_CACHE_PATH, 'r', encoding='utf-8') as fh:
+                    existing = json.load(fh)
+        except Exception:
+            existing = {}
+
+        now = time.time()
+        payload = dict(existing) if isinstance(existing, dict) else {}
+        for key, url in snapshot.items():
+            prior = payload.get(key)
+            keep_at = prior.get('at', now) if isinstance(prior, dict) else now
+            payload[key] = {'url': url, 'at': keep_at}
+
+        payload = {
+            key: entry for key, entry in payload.items()
+            if isinstance(entry, dict) and now - entry.get('at', 0) < _PHOTO_CACHE_TTL
+        }
+
+        tmp = f"{_PHOTO_CACHE_PATH}.{os.getpid()}.tmp"
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, _PHOTO_CACHE_PATH)  # atomic, so a crash can't truncate it
+    except Exception as e:
+        print(f"[CACHE] Could not save photo cache: {e}")
 
 # Themed fallback pools (all IDs verified to resolve on images.unsplash.com),
 # keyed by rough activity topic. Used when Places API finds nothing for an
@@ -1672,7 +2210,11 @@ def get_activity_images(request: ActivityImagesRequest):
                 to_fetch.append(activity)
 
         if to_fetch:
-            with ThreadPoolExecutor(max_workers=8) as executor:
+            # These workers are idle on network I/O, not CPU-bound, so the pool
+            # can cover the whole activity list in one wave. At 8 workers a
+            # typical 30-item list took 4 sequential rounds (~10s cold); sizing
+            # to the work itself brings that down to roughly one round trip.
+            with ThreadPoolExecutor(max_workers=min(32, len(to_fetch))) as executor:
                 fetched = list(executor.map(
                     lambda activity: (
                         activity,
@@ -1681,6 +2223,10 @@ def get_activity_images(request: ActivityImagesRequest):
                     to_fetch,
                 ))
             results.update(dict(fetched))
+            # Checkpoint here rather than only on shutdown: the server is
+            # usually stopped with a kill, which never runs the shutdown hook,
+            # and this is the point where expensive new lookups exist.
+            _save_photo_cache()
 
         return {"status": "success", "city": request.city, "images": results}
     except Exception as e:
@@ -1729,29 +2275,20 @@ class TravelBookingRequest(BaseModel):
 def root():
     return {
         "status": "OK",
-        "mode": f"MongoDB + CSV + {_AI_MODE}",
+        "mode": f"CSV + {_AI_MODE}",
         "version": "2.0",
         "cors_enabled": True,
-        "mongodb": _mongodb_available,
         "ai_mode": _AI_MODE,
         "vertex_ai": USE_VERTEX_AI,
-        "powered_by": "Google Cloud + MongoDB Atlas",
+        "powered_by": "Google Cloud + Aviasales",
     }
 
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint with MongoDB and AI status."""
-    mongo_status = "not_configured"
-    if _mongodb_available:
-        try:
-            connected = await mdb.check_connection()
-            mongo_status = "connected" if connected else "disconnected"
-        except Exception:
-            mongo_status = "error"
+    """Health check endpoint with AI status."""
     return {
         "status": "healthy",
-        "mongodb": mongo_status,
         "ai_mode": _AI_MODE,
         "vertex_ai": USE_VERTEX_AI,
         "version": "2.0",
@@ -3108,6 +3645,148 @@ def replan_itinerary(request: AgentRequest):
             "response": "I hit an error while re-planning your itinerary."
         }
 
+_flight_schedule_cache: Dict[str, Any] = {}
+
+
+@app.get("/api/flights/schedule")
+def flight_schedule(origin: str, destination: str, date: str = ""):
+    """Scheduled flights on a route, for the "which flight did you book?" step.
+
+    Uses Gemini WITH Google Search grounding — not plain generation. That
+    distinction is the whole point: asked cold, the model invents plausible
+    flight numbers (it returned 6E 6541 / 6E 718 / QP 1361 for BLR-RPR, none
+    of which match reality). Grounded, it returns 6E-405 and 6E-978, which are
+    the same flights Aviasales' fare cache independently lists, cited to
+    easemytrip/makemytrip/cleartrip.
+
+    Exists because Aviasales' price cache is nearly empty on regional routes —
+    BLR-RPR has one cached fare across all dates — so it can't supply
+    candidates for a booking confirmation.
+
+    Results are suggestions to help someone recognise the flight they already
+    booked, NOT an availability or price source. Never present them as
+    bookable.
+    """
+    key = f"{origin}_{destination}_{date}".lower()
+    cached = _flight_schedule_cache.get(key)
+    if cached is not None:
+        return {"status": "success", "flights": cached, "source": "cache"}
+
+    if not GOOGLE_API_KEY:
+        return {"status": "success", "flights": [], "reason": "no_api_key"}
+
+    when = f"on {date}" if date else ""
+    prompt = (
+        f"List scheduled passenger flights from {origin} to {destination} {when}. "
+        "Return ONLY a JSON array, no prose. Each item must have exactly these "
+        'keys: "airline" (name), "flight_number" (e.g. "6E 405"), '
+        '"departure_time" ("HH:MM", 24-hour, local), "arrival_time" ("HH:MM"), '
+        '"stops" (integer). Include only flights supported by your sources; '
+        "return fewer rather than guessing."
+    )
+
+    try:
+        from google import genai as genai_client
+        from google.genai import types as genai_types
+
+        client = genai_client.Client(api_key=GOOGLE_API_KEY)
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    tools=[genai_types.Tool(
+                        google_search=genai_types.GoogleSearch())],
+                    # Reasoning off. This task is "read the search results and
+                    # format them as JSON" — there is nothing to reason about,
+                    # and it dominated the latency: 7-18s with thinking on
+                    # versus a steady ~2.8s off, still grounded either way.
+                    thinking_config=genai_types.ThinkingConfig(
+                        thinking_budget=0),
+                ),
+            )
+
+        # Grounded search is slow and highly variable — measured between 6s and
+        # 37s on the same route. The client prefetches this while the user is
+        # away on the partner site, so the wait is usually hidden; the cap only
+        # stops a pathological call from hanging a worker.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            response = executor.submit(_call).result(timeout=45)
+
+        text = (response.text or "").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        start, end = text.find("["), text.rfind("]")
+        if start == -1 or end == -1:
+            return {"status": "success", "flights": [], "reason": "unparseable"}
+
+        raw = json.loads(text[start:end + 1])
+        # Grounding is reported inconsistently: sometimes as source chunks,
+        # sometimes only as the queries the model ran. Either proves it went
+        # to the web rather than answering from memory.
+        meta = (response.candidates[0].grounding_metadata
+                if response.candidates else None)
+        grounded = bool(meta and (getattr(meta, 'grounding_chunks', None)
+                                  or getattr(meta, 'web_search_queries', None)))
+
+        # Ungrounded output is exactly the fabrication case this endpoint
+        # exists to avoid, so it's discarded rather than returned.
+        if not grounded:
+            print(f"[SCHEDULE] Ungrounded reply for {origin}->{destination}; discarding")
+            return {"status": "success", "flights": [], "reason": "ungrounded"}
+
+        flights = []
+        for item in raw:
+            number = str(item.get("flight_number", "")).strip()
+            if not number:
+                continue
+            flights.append({
+                "airline": str(item.get("airline", "")).strip(),
+                "flight_number": number,
+                "departure_time": str(item.get("departure_time", "")).strip(),
+                "arrival_time": str(item.get("arrival_time", "")).strip(),
+                "stops": int(item.get("stops") or 0),
+            })
+
+        _flight_schedule_cache[key] = flights
+        print(f"[SCHEDULE] {len(flights)} grounded flights {origin}->{destination}")
+        return {"status": "success", "flights": flights, "source": "grounded"}
+
+    except Exception as e:
+        print(f"[SCHEDULE] {type(e).__name__}: {e}")
+        return {"status": "success", "flights": [], "reason": "error"}
+
+
+@app.get("/hotels")
+async def get_hotels(
+    city: str = "",
+    min_price: float = 0,
+    max_price: float = 0,
+    type: str = "",
+    amenities: str = "",
+):
+    """Query-string hotel search, which is what the Flutter client calls.
+
+    ApiService.searchHotels issues GET /hotels?city=... — a route that never
+    existed here, so every call 404'd. The client treats that as a failure and
+    falls through to its Aviasales handoff, which made a plain bug look like a
+    slow redirect: the wait was a failed request, not the partner.
+
+    Delegates to the POST handler so both entry points return the same shape
+    and the same "no real hotels" semantics.
+    """
+    budget = max_price if max_price and max_price > 0 else 25000
+    return await search_hotels(HotelSearchRequest(
+        message=f"Find hotels in {city}" if city else "Find hotels",
+        context={"city": city or "Goa", "budget": budget},
+    ))
+
+
 @app.post("/api/hotel/search")
 async def search_hotels(request: HotelSearchRequest):
     try:
@@ -3150,79 +3829,51 @@ async def search_hotels(request: HotelSearchRequest):
                     'check_out_date': check_out,
                 }
 
-        # ── Try MongoDB first ──
-        if _mongodb_available and not has_special and not has_special_request:
-            try:
-                mongo_hotels = await mdb.search_hotels(city=city, max_price=budget, limit=10)
-                if mongo_hotels:
-                    print(f"[MONGODB SUCCESS] MongoDB: {len(mongo_hotels)} hotels")
-                    hotels = []
-                    for h in mongo_hotels:
-                        name = h.get('name', 'Hotel')
-                        amenities = h.get('amenities', [])
-                        if isinstance(amenities, str):
-                            amenities = amenities.split('|') if '|' in amenities else [amenities]
-                        rating = float(h.get('rating', 4.0))
-                        price = float(h.get('price_per_night', 5000))
-                        acc_type = h.get('accommodation_type', h.get('type', 'Hotel'))
-                        description = _create_hotel_description(name, acc_type, amenities, city, rating)
-                        why_rec = _create_recommendation(name, acc_type, amenities, city, price, rating)
-                        nearby = _get_nearby_attractions(city)
-                        image_url = get_hotel_image(name, city)
-                        hotels.append({
-                            'name': name, 'city': h.get('city', city),
-                            'price_per_night': price, 'type': acc_type,
-                            'rating': rating, 'amenities': amenities,
-                            'description': description, 'why_recommended': why_rec,
-                            'nearby_attractions': nearby, 'image_url': image_url,
-                            'image': image_url,
-                        })
-                    return {'status': 'success', 'powered_by': 'MongoDB Atlas', 'ai_used': False, 'hotels': hotels, 'count': len(hotels)}
-            except Exception as e:
-                print(f"[MONGODB FALLBACK] MongoDB error: {e} — trying CSV")
+        # No in-app hotel inventory.
+        #
+        # The CSV held 65 rows across 15 cities with invented prices, so it
+        # could only ever answer for a handful of destinations and the numbers
+        # never matched what the user saw on clicking through. Rather than
+        # serve that, hotel search returns nothing and the client hands off to
+        # Aviasales, where the inventory and prices are real.
+        #
+        # hotels_india.csv is still read at startup for the trip-planner
+        # endpoint (see the hotels_df use around line 2680); only hotel search
+        # stopped using it.
+        print(f"[HOTELS] Redirect-only: no in-app inventory for {city}")
+        return {
+            'status': 'success',
+            'powered_by': 'none',
+            'ai_used': False,
+            'hotels': [],
+            'count': 0,
+            'message': f'Hotels for {city} are booked on Aviasales.',
+        }
 
-        # ── Fallback: CSV ──
-        city_hotels = hotels_df[
-            (hotels_df['city'].str.lower() == city.lower()) &
-            (hotels_df['price_per_night'] <= budget)
-        ]
-        
-        if len(city_hotels) > 0 and not has_special and not has_special_request:
-            print(f"[CSV SUCCESS] CSV: {len(city_hotels)} hotels")
-            hotels = []
-            for _, h in city_hotels.iterrows():
-                try:
-                    amenities = h['extras'].split('|') if '|' in str(h['extras']) else [str(h['extras'])]
-                    
-                    price = float(h['price_per_night'])
-                    rating = float(h['rating'])
-                    
-                    # Create detailed description based on hotel type and amenities
-                    description = _create_hotel_description(h['name'], h['accommodation_type'], amenities, city, rating)
-                    why_recommended = _create_recommendation(h['name'], h['accommodation_type'], amenities, city, price, rating)
-                    nearby_attractions = _get_nearby_attractions(city)
-                    
-                    # Fetch real hotel image from Google Places
-                    image_url = get_hotel_image(h['name'], city)
-                    
-                    hotels.append({
-                        'name': h['name'],
-                        'city': h['city'],
-                        'price_per_night': price,
-                        'type': h['accommodation_type'],
-                        'rating': rating,
-                        'amenities': amenities,
-                        'description': description,
-                        'why_recommended': why_recommended,
-                        'nearby_attractions': nearby_attractions,
-                        'image_url': image_url,
-                        'image': image_url,
-                    })
-                except (ValueError, KeyError) as e:
-                    print(f"[CSV SKIP] Skipping malformed hotel row: {e}")
-                    continue
-            return {'status': 'success', 'powered_by': 'CSV', 'ai_used': False, 'hotels': hotels, 'count': len(hotels)}
-        
+        # Gemini invents hotels — names, prices, ratings, amenities — for any
+        # city missing from the CSV. Two reasons that's off by default:
+        #
+        #   1. Nothing it returns is bookable. The user is shown properties
+        #      that may not exist, at prices nobody will honour.
+        #   2. It is by far the slowest path in the app: 43-47s for Durg and
+        #      Raipur, against ~2s for a CSV city. Since the client falls back
+        #      to an Aviasales redirect when a search returns nothing, that
+        #      whole wait sits between the tap and the redirect.
+        #
+        # Returning empty instead hands the user straight to Aviasales, where
+        # the hotels are real and bookable. Set HOTELS_ALLOW_AI_GENERATED=1 to
+        # restore the old behaviour for an offline demo.
+        if not HOTELS_ALLOW_AI_GENERATED:
+            print(f"[HOTELS] No real hotels for {city}; AI generation disabled")
+            return {
+                'status': 'success',
+                'powered_by': 'none',
+                'ai_used': False,
+                'hotels': [],
+                'count': 0,
+                'message': f'No hotel data for {city}.',
+            }
+
         # Use Gemini
         print(f"[GEMINI] Using Gemini AI...")
         prompt = f"""Find 5-8 hotels in {city}, India under ₹{budget}/night. Request: {message}
@@ -3251,6 +3902,11 @@ Format: {{"hotels": [{{"name": "...", "type": "...", "price_per_night": 5000, "r
         result = json.loads(text.strip())
         hotels = result.get('hotels', [])
         
+        # Photos for every hotel in one parallel pass, rather than a blocking
+        # pair of Google calls inside the loop below.
+        ai_images = get_hotel_images_bulk(
+            [h.get('name', '') for h in hotels if 'image_url' not in h], city)
+
         # Ensure all required fields are present
         for hotel in hotels:
             if 'description' not in hotel:
@@ -3260,7 +3916,7 @@ Format: {{"hotels": [{{"name": "...", "type": "...", "price_per_night": 5000, "r
             if 'nearby_attractions' not in hotel:
                 hotel['nearby_attractions'] = _get_nearby_attractions(city)
             if 'image_url' not in hotel:
-                hotel['image_url'] = get_hotel_image(hotel['name'], city)
+                hotel['image_url'] = ai_images.get(hotel.get('name', '')) or ''
         
         print(f"[GEMINI SUCCESS] Gemini: {len(hotels)} hotels")
         
@@ -3891,6 +4547,52 @@ def search_flights_direct(request: FlightSearchRequest):
 # ============================================================
 # GOOGLE PLACES API (NEW) ENDPOINTS
 # ============================================================
+
+@app.get("/api/places/hotels")
+def search_hotel_names(query: str, city: str = "", limit: int = 6):
+    """Real hotel names matching a partial query, for the "which hotel did you
+    book?" confirmation.
+
+    Deliberately Google Places rather than an LLM: the user is naming a
+    property they have actually booked, so every suggestion must be a real
+    place. A model asked to complete "hotel cit" would happily invent
+    "Hotel Citadel Grand", and the user would tap it.
+
+    Tolerant of typos by design — Places does its own fuzzy matching, so
+    "hotal citi lite" still finds "Hotel City Lite".
+    """
+    try:
+        q = (query or "").strip()
+        if len(q) < 2 or not GOOGLE_PLACES_API_KEY:
+            return {"status": "success", "hotels": []}
+
+        text_query = f"{q} hotel in {city}" if city else f"{q} hotel"
+        field_mask = "places.displayName,places.formattedAddress,places.rating"
+        resp = requests.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            headers=_google_headers(field_mask),
+            json={"textQuery": text_query,
+                  "maxResultCount": max(1, min(limit, 10))},
+            timeout=4,
+        ).json()
+
+        hotels = []
+        for place in resp.get("places", []):
+            name = str(place.get("displayName", {}).get("text", "")).strip()
+            if not name:
+                continue
+            hotels.append({
+                "name": name,
+                "address": str(place.get("formattedAddress", "")).strip(),
+                "rating": place.get("rating"),
+            })
+
+        return {"status": "success", "hotels": hotels}
+    except Exception as e:
+        print(f"[PLACES HOTELS] {e}")
+        # Never fatal: the field stays free-text if lookup fails.
+        return {"status": "error", "message": str(e), "hotels": []}
+
 
 @app.post("/api/places/details")
 def get_place_details(request: dict):
@@ -4945,8 +5647,16 @@ def get_destination_suggestions(
             except Exception as places_error:
                 print(f"   [WARNING] Places autocomplete fallback to CSV: {places_error}")
 
-        # Fallback 1b: Google Places Text Search for queries that autocomplete may miss.
-        if GOOGLE_PLACES_API_KEY and len(suggestions) < safe_limit and len(normalized_query) >= 3:
+        # Fallback 1b: Google Places Text Search for queries that autocomplete
+        # genuinely misses.
+        #
+        # Deliberately NOT "< safe_limit": autocomplete reliably returns 5
+        # results, so a request for 6 always looked one short and always paid
+        # for a second network round trip — turning a ~0.5s lookup into ~2-3s
+        # on every keystroke, purely to chase one extra row. Only worth it
+        # when the first pass came back genuinely sparse.
+        if (GOOGLE_PLACES_API_KEY and len(suggestions) < 3
+                and len(normalized_query) >= 3):
             try:
                 field_mask = (
                     "places.displayName.text,"
@@ -5349,7 +6059,17 @@ async def get_bookings(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    worker_count = int(os.getenv("UVICORN_WORKERS", "2"))
+    # Single worker by default. Two reasons, both learned the hard way:
+    #   1. Each worker is its own process with its own _photo_cache, so
+    #      requests round-robin between a warm cache and a cold one — a
+    #      repeated activity-image lookup was still paying the full ~7s
+    #      about half the time.
+    #   2. On Windows the listening socket doesn't survive being handed to
+    #      spawned workers; startup intermittently died with
+    #      "OSError: [WinError 10022] An invalid argument was supplied"
+    #      and only recovered because the supervisor restarted the child.
+    # Set UVICORN_WORKERS=2+ on Linux if you actually need the concurrency.
+    worker_count = int(os.getenv("UVICORN_WORKERS", "1"))
     print("Starting Ultra-Simple Hotel Search Server...")
     print("Server will run on http://localhost:8001")
     print("Mode: CSV + Gemini AI + Google Places + Maps + Vision + Translate")

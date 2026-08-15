@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -10,26 +13,113 @@ import '../models/hotel.dart';
 class AffiliateLinks {
   AffiliateLinks._();
 
-  /// Aviasales hotels, via the TravelPayouts short link generated in the
-  /// TravelPayouts dashboard. The marker/attribution is already baked into
-  /// the short link itself, so nothing needs appending and nothing needs
-  /// reading from .env for this one.
+  static final DateFormat _isoDate = DateFormat('yyyy-MM-dd');
+
+  /// Aviasales' hotels search, carrying the destination city.
   ///
-  /// Aviasales forwards hotel bookings on to Booking.com itself (with its own
-  /// aid attached) — that downstream hop is Aviasales' business, not ours.
+  /// Aviasales forwards hotel bookings on to Booking.com with its own `aid`
+  /// and a TravelPayouts label, passing the city through as Booking.com's
+  /// `ss` parameter — so the city is the unit Aviasales works in here, not
+  /// the individual property. Sending the hotel name would not survive that
+  /// hop, so we send the city and the user picks the property there.
   ///
-  /// Trade-off: a short link is a fixed destination, so the hotel the user
-  /// tapped (and the dates/guests they picked) can't be carried through — they
-  /// land on the Aviasales hotels page and search again there. Swap this for a
-  /// full https://www.aviasales.com/hotels?... URL with your marker appended if
-  /// you want to preselect the hotel and dates.
+  /// Replaces an earlier fixed short link, which sent every hotel button to
+  /// the same unfiltered page.
+  ///
+  /// NOTE: `destination` is the assumed parameter name — /hotels is a client
+  /// -rendered page, so it can't be verified from the server side. If it's
+  /// wrong Aviasales ignores it and shows the plain hotels page, which is
+  /// exactly what the old short link did, so a bad guess costs nothing.
   static Uri aviasalesHotelSearch({
     required Hotel hotel,
     DateTime? checkIn,
     DateTime? checkOut,
     int guests = 2,
+  }) =>
+      aviasalesHotelSearchByCity(
+        city: hotel.city,
+        checkIn: checkIn,
+        checkOut: checkOut,
+        guests: guests,
+      );
+
+  /// Opens a throwaway connection to the hotel partner so DNS resolution and
+  /// the TLS handshake are already done before the user taps "Book".
+  ///
+  /// The handoff crosses three hosts (search.hotellook.com →
+  /// hotels-api.aviasales.ru → booking.com) and measured 5.4s cold against
+  /// 2.7s warm — that gap is almost entirely connection setup on the first
+  /// host. Call it when a screen that can redirect opens.
+  ///
+  /// Fire-and-forget: the response is irrelevant and every failure mode
+  /// (offline, CORS on web, timeout) is ignored. Warming happens as a side
+  /// effect of attempting the connection at all.
+  /// Uses package:http rather than dart:io HttpClient so it also runs on web,
+  /// where the request is blocked by CORS — but the browser still performs
+  /// the DNS lookup and TLS handshake first, which is the whole point.
+  static void prewarmHotelPartner() {
+    unawaited(
+      http
+          .head(Uri.https('search.hotellook.com', '/'))
+          .timeout(const Duration(seconds: 5))
+          .then((_) {}, onError: (_) {}),
+    );
+  }
+
+  /// Cities whose bare name resolves to the wrong place in Hotellook's fuzzy
+  /// matcher. "Goa" is a state rather than a city, and both "Goa" and "Goa,
+  /// India" land on Goiania, Brazil — so it's mapped to its capital, which
+  /// resolves correctly. Add entries here as bad matches are found.
+  static const Map<String, String> _hotelCityAliases = {
+    'goa': 'Panaji',
+    'north goa': 'Panaji',
+    'south goa': 'Margao',
+    'kerala': 'Kochi',
+  };
+
+  /// Hotel search keyed by city, for when there's no specific property to hand
+  /// off — the in-app search failed, or the user just wants to browse.
+  ///
+  /// Uses search.hotellook.com rather than aviasales.in/hotels: the Aviasales
+  /// hotels page ignores query parameters (it opened with every field blank),
+  /// whereas this one carries the destination and dates through to Booking.com
+  /// as `ss`/`checkin` and applies the TravelPayouts label automatically.
+  /// Same partner family, same attribution, but the search is actually
+  /// prefilled.
+  ///
+  /// The country is appended because bare city names match badly — "Bhilai"
+  /// alone resolves to Santiago, Chile.
+  static Uri aviasalesHotelSearchByCity({
+    required String city,
+    DateTime? checkIn,
+    DateTime? checkOut,
+    int guests = 2,
+    String country = 'India',
   }) {
-    return Uri.parse('https://aviasales.tpo.li/ntQoEoPm');
+    // A qualified name ("Bilaspur, Himachal Pradesh, India") is passed through
+    // untouched. Hotellook honours the region and it is the only thing that
+    // separates same-named cities: bare "Bilaspur" resolves to the
+    // Chhattisgarh one, so stripping the state would send anyone who picked
+    // the Himachal Pradesh one to the wrong end of the country.
+    final trimmed = city.trim();
+    final String destination;
+    if (trimmed.contains(',')) {
+      destination = trimmed;
+    } else {
+      final resolved = _hotelCityAliases[trimmed.toLowerCase()] ?? trimmed;
+      destination = resolved.isEmpty ? country : '$resolved, $country';
+    }
+
+    return Uri.https('search.hotellook.com', '/', {
+      'destination': destination,
+      'adults': '$guests',
+      'currency': 'inr',
+      'language': 'en',
+      if (checkIn != null) 'checkIn': _isoDate.format(checkIn),
+      if (checkOut != null) 'checkOut': _isoDate.format(checkOut),
+      if (AppConfig.travelpayoutsMarkerId.isNotEmpty)
+        'marker': AppConfig.travelpayoutsMarkerId,
+    });
   }
 
   // IATA airport codes for the cities this app's search UI offers. Aviasales
@@ -52,6 +142,27 @@ class AffiliateLinks {
     'indore': 'IDR',
     'surat': 'STV',
     'nagpur': 'NAG',
+    'raipur': 'RPR',
+    'bhopal': 'BHO',
+    'varanasi': 'VNS',
+    'amritsar': 'ATQ',
+    'udaipur': 'UDR',
+    'jodhpur': 'JDH',
+    'patna': 'PAT',
+    'guwahati': 'GAU',
+    'bhubaneswar': 'BBI',
+    'coimbatore': 'CJB',
+    'trivandrum': 'TRV',
+    'thiruvananthapuram': 'TRV',
+    'srinagar': 'SXR',
+    'dehradun': 'DED',
+    'chandigarh': 'IXC',
+    'ranchi': 'IXR',
+    'vadodara': 'BDQ',
+    'visakhapatnam': 'VTZ',
+    'madurai': 'IXM',
+    'mangalore': 'IXE',
+    'leh': 'IXL',
   };
 
   /// Looks up the IATA code for a city name from [_iataCodes] (case/
@@ -80,6 +191,26 @@ class AffiliateLinks {
     'Indore',
     'Surat',
     'Nagpur',
+    'Raipur',
+    'Bhopal',
+    'Varanasi',
+    'Amritsar',
+    'Udaipur',
+    'Jodhpur',
+    'Patna',
+    'Guwahati',
+    'Bhubaneswar',
+    'Coimbatore',
+    'Trivandrum',
+    'Srinagar',
+    'Dehradun',
+    'Chandigarh',
+    'Ranchi',
+    'Vadodara',
+    'Visakhapatnam',
+    'Madurai',
+    'Mangalore',
+    'Leh',
   ];
 
   /// Wraps [destination] in TravelPayouts' tracking redirect
@@ -96,6 +227,16 @@ class AffiliateLinks {
       'u': destination.toString(),
     });
   }
+
+  /// Aviasales' India storefront. Using the .in domain with market=in makes
+  /// fares render in INR by default; the .com domain infers the market from
+  /// the visitor and can land an Indian user on USD pricing.
+  static const String _aviasalesHost = 'aviasales.in';
+  static const Map<String, String> _indiaMarketParams = {
+    'market': 'in',
+    'currency': 'inr',
+    'locale': 'en',
+  };
 
   /// Aviasales flight search, wrapped in a TravelPayouts tracking link.
   /// [originCity]/[destinationCity] must resolve to a known IATA code (see
@@ -114,7 +255,7 @@ class AffiliateLinks {
 
     if (originIata == null || destinationIata == null) {
       return _travelpayoutsWrap(
-        Uri.parse('https://www.aviasales.com'),
+        Uri.https(_aviasalesHost, '/', _indiaMarketParams),
         programId: 4114,
       );
     }
@@ -126,7 +267,7 @@ class AffiliateLinks {
         '$originIata$departCode$destinationIata$returnCode$passengers';
 
     return _travelpayoutsWrap(
-      Uri.parse('https://www.aviasales.com/search/$route'),
+      Uri.https(_aviasalesHost, '/search/$route', _indiaMarketParams),
       programId: 4114,
     );
   }

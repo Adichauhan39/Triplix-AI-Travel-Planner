@@ -90,3 +90,8 @@ yarn-error.log*
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+# Generated photo-URL cache (see _PHOTO_CACHE_PATH in ultra_simple_server.py)
+7-multi-agent/.photo_cache.json
+
+# Cached Travelpayouts airport dataset (see _AIRPORTS_PATH)
+7-multi-agent/.airports.json
