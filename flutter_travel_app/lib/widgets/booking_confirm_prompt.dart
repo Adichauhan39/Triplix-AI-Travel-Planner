@@ -593,6 +593,21 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     return matches.isEmpty ? _flightOptions : matches;
   }
 
+  /// Whether "Save to itinerary" does anything yet.
+  ///
+  /// For a hotel this requires tapping a card, not merely typing. A typed name
+  /// is a guess at a property we have no record of, and saving it puts an
+  /// unverified hotel on the itinerary; the cards are right there, so choosing
+  /// one costs a tap. Someone whose hotel genuinely isn't listed uses "I don't
+  /// have it yet", which records the stay without inventing a name for it.
+  ///
+  /// Flights keep the typed path: tapping a flight already saves outright, so
+  /// gating this on a selection would leave the button permanently dead and
+  /// strand anyone who knows their flight number but isn't offered it.
+  bool get _canSave => _isFlight
+      ? _controller.text.trim().isNotEmpty
+      : _selectedHotel != null;
+
   /// Tapping a flight IS the confirmation — it closes the sheet and saves.
   ///
   /// There's nothing left to ask once a flight is chosen: the number and its
@@ -614,6 +629,18 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     _debounce?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Records the booking with no flight or hotel detail, and closes at once.
+  ///
+  /// Deliberately does not go through [_close]. That checks a typed name
+  /// against Places, which takes a couple of seconds — pointless here, since
+  /// the user has just said they don't have the detail, and it made the button
+  /// feel broken. Nothing typed is kept: it was rejected by the user, not
+  /// entered. Any pending lookup is cancelled on the way out.
+  void _dismiss() {
+    _debounce?.cancel();
+    Navigator.of(context).pop(const _DetailResult('', false));
   }
 
   /// Closes the sheet, but for a hotel name the user typed rather than picked,
@@ -1297,14 +1324,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               width: double.infinity,
               height: 48,
               child: ElevatedButton(
-                // Disabled with an empty field: "Save" implies saving
-                // something, and tapping it with nothing entered produced a
-                // booking with no flight or hotel on it at all. Someone who
-                // genuinely has no details uses "I don't have it yet", which
-                // says what it does.
-                onPressed: (_verifying || _controller.text.trim().isEmpty)
-                    ? null
-                    : _close,
+                onPressed: (_verifying || !_canSave) ? null : _close,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppConfig.primaryColor,
                   foregroundColor: Colors.white,
@@ -1327,7 +1347,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               ),
             ),
           TextButton(
-            onPressed: _verifying ? null : _close,
+            onPressed: _dismiss,
             child: const Text('I don\'t have it yet'),
           ),
         ],
