@@ -390,16 +390,6 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   static const String _editSentinel = '\u0000edit';
   static const String _keepSentinel = '\u0000keep';
 
-  /// True when the user has typed a flight that none of the listed ones match,
-  /// i.e. they're going the manual route and need a Save button.
-  bool get _hasUnmatchedInput {
-    final typed = _controller.text.trim();
-    if (typed.isEmpty) return false;
-    String plain(String s) => s.toLowerCase().replaceAll(RegExp(r'[\s-]'), '');
-    return !_flightOptions.any(
-        (f) => plain((f['route_number'] ?? '').toString()) == plain(typed));
-  }
-
   @override
   void initState() {
     super.initState();
@@ -601,27 +591,32 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// one costs a tap. Someone whose hotel genuinely isn't listed uses "I don't
   /// have it yet", which records the stay without inventing a name for it.
   ///
-  /// Flights keep the typed path: tapping a flight already saves outright, so
-  /// gating this on a selection would leave the button permanently dead and
-  /// strand anyone who knows their flight number but isn't offered it.
+  /// Flights work the same way once any are listed. The exception is a route
+  /// we found nothing for: with no cards to tap, requiring a tap would make
+  /// the sheet impossible to complete, so a typed number is accepted there.
   bool get _canSave => _isFlight
-      ? _controller.text.trim().isNotEmpty
+      ? (_flightOptions.isEmpty
+          ? _controller.text.trim().isNotEmpty
+          : _pickedFromPlaces)
       : _selectedHotel != null;
 
-  /// Tapping a flight IS the confirmation — it closes the sheet and saves.
+  /// Marks a flight as the user's choice, the same way tapping a hotel card
+  /// does. It does not save or close.
   ///
-  /// There's nothing left to ask once a flight is chosen: the number and its
-  /// departure time both come from the row. Making the user then hunt for a
-  /// Save button adds a step that can only go wrong.
+  /// Tapping used to confirm outright, which meant a mis-tap wrote a flight
+  /// straight onto the itinerary with no chance to look at it, and the card's
+  /// own selected styling could never be seen because the sheet was already
+  /// gone. Selecting and saving are now two steps in both flows.
   void _pickFlight(Map<String, dynamic> flight) {
     final number = (flight['route_number'] ?? '').toString();
     final time = (flight['departure_time'] ?? '').toString();
+    _debounce?.cancel();
+    _controller.text = number;
     FocusScope.of(context).unfocus();
-    Navigator.of(context).pop(_DetailResult(
-      number,
-      true,
-      departureTime: time.isEmpty ? null : time,
-    ));
+    setState(() {
+      _pickedFromPlaces = true;
+      _pickedDepartureTime = time.isEmpty ? null : time;
+    });
   }
 
   @override
@@ -1082,7 +1077,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             // setState on every change so the Save button's enabled state
             // tracks whether the field has anything in it.
             onChanged: _isFlight
-                ? (_) => setState(() => _pickedFromPlaces = false)
+                // Typing after tapping a flight drops the selection *and* its
+                // departure time — keeping the time would attach the tapped
+                // flight's departure to whatever number is now in the box.
+                ? (_) => setState(() {
+                      _pickedFromPlaces = false;
+                      _pickedDepartureTime = null;
+                    })
                 : (value) {
                     setState(() {});
                     _onQueryChanged(value);
@@ -1115,6 +1116,19 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           // either — they just recognise the flight they took.
           if (_isFlight && _flightOptions.isNotEmpty) ...[
             const SizedBox(height: 12),
+            Text(
+              _pickedFromPlaces
+                  ? 'Selected — tap "Save to itinerary" to add it'
+                  : 'Tap the flight you took',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: _pickedFromPlaces
+                    ? AppConfig.primaryColor
+                    : Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 8),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 260),
               child: SingleChildScrollView(
@@ -1315,12 +1329,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           ],
           const SizedBox(height: 20),
 
-          // With flights on screen, tapping one is the action — a Save button
-          // alongside them just invites saving without choosing. It reappears
-          // only for the manual path: no flights listed, or something typed
-          // that doesn't match any of them.
-          if (!_isFlight || _flightOptions.isEmpty || _hasUnmatchedInput)
-            SizedBox(
+          // Always shown now. It used to be hidden whenever flights were
+          // listed, because tapping one saved outright; now that tapping only
+          // selects, hiding the button would leave nothing to confirm with.
+          SizedBox(
               width: double.infinity,
               height: 48,
               child: ElevatedButton(
