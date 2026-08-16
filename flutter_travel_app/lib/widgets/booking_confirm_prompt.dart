@@ -628,6 +628,28 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     return matches.isEmpty ? _flightOptions : matches;
   }
 
+  /// Starts the route lookup if typing found no flights to filter.
+  ///
+  /// The list normally loads when the sheet opens, but that needs a route and
+  /// date, and the lookup can fail or return nothing. In those cases typing
+  /// used to do nothing at all — the user was filtering an empty list with no
+  /// sign anything was wrong. Typing a hotel name has always triggered a
+  /// search; this makes the flight field behave the same way.
+  ///
+  /// Cheap to call on every keystroke: it returns immediately unless the list
+  /// is genuinely empty and no lookup is in flight or already done.
+  void _ensureFlightsLoaded() {
+    if (_flightOptions.isNotEmpty || _loadingFlights || _searchedSchedule) {
+      return;
+    }
+    if (widget.flightDate == null ||
+        widget.flightOrigin.isEmpty ||
+        widget.flightDestination.isEmpty) {
+      return;
+    }
+    _findFlightsOnRoute();
+  }
+
   /// Whether "Save to itinerary" does anything yet.
   ///
   /// For a hotel this requires tapping a card, not merely typing. A typed name
@@ -1125,10 +1147,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 // Typing after tapping a flight drops the selection *and* its
                 // departure time — keeping the time would attach the tapped
                 // flight's departure to whatever number is now in the box.
-                ? (_) => setState(() {
+                ? (_) {
+                    setState(() {
                       _pickedFromPlaces = false;
                       _pickedDepartureTime = null;
-                    })
+                    });
+                    _ensureFlightsLoaded();
+                  }
                 : (value) {
                     setState(() {});
                     _onQueryChanged(value);
