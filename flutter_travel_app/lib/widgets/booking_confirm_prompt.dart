@@ -621,11 +621,32 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     return q.isNotEmpty && _flightsMatching(q).isEmpty;
   }
 
+  /// Direct flights first, then by departure time.
+  ///
+  /// Sorting purely by time buried them: BLR-RPR has no direct Air India
+  /// service, so its one-stop connections at 00:15, 02:15, 05:30 and 06:00
+  /// filled the top of the list and the direct flights were below the fold.
+  /// Someone recognising the flight they took looks for a direct one first,
+  /// and a screen full of connections reads as the wrong route entirely.
+  List<Map<String, dynamic>> _sortedForDisplay(
+      List<Map<String, dynamic>> rows) {
+    final out = [...rows];
+    out.sort((a, b) {
+      final sa = (a['stops'] as num?)?.toInt() ?? 0;
+      final sb = (b['stops'] as num?)?.toInt() ?? 0;
+      if (sa != sb) return sa.compareTo(sb);
+      return (a['departure_time'] ?? '')
+          .toString()
+          .compareTo((b['departure_time'] ?? '').toString());
+    });
+    return out;
+  }
+
   List<Map<String, dynamic>> get _filteredFlights {
     final q = _controller.text.trim();
-    if (q.isEmpty) return _flightOptions;
+    if (q.isEmpty) return _sortedForDisplay(_flightOptions);
     final matches = _flightsMatching(q);
-    return matches.isEmpty ? _flightOptions : matches;
+    return _sortedForDisplay(matches.isEmpty ? _flightOptions : matches);
   }
 
   /// Starts the route lookup if typing found no flights to filter.
@@ -1097,10 +1118,16 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      // Scrollable, because the content genuinely can't always fit: title,
+      // field, a list of flights, the hint and two buttons overflowed by 65px
+      // on a short browser window and the Save button was cut in half. The
+      // list below is separately capped, so this only has to absorb what's
+      // left over.
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
           Text(
               _isFlight
                   ? 'Which flight did you book?'
@@ -1205,7 +1232,12 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             ),
             const SizedBox(height: 8),
             ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 260),
+              // Proportional, not a fixed 260: on a short window that fixed
+              // height left no room for the Save button underneath it.
+              constraints: BoxConstraints(
+                maxHeight: (MediaQuery.of(context).size.height * 0.34)
+                    .clamp(140.0, 260.0),
+              ),
               child: SingleChildScrollView(
                 child: Column(
                   children: _filteredFlights.map((f) {
@@ -1468,7 +1500,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             onPressed: _dismiss,
             child: const Text('I don\'t have it yet'),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

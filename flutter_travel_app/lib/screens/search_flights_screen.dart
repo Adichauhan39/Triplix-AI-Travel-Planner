@@ -258,6 +258,47 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
                 _resolveAirports();
               },
             ),
+
+            // Directly under the cities, not at the foot of the page. This
+            // was previously the last thing on the screen, below the search
+            // button, where it sat off the bottom edge — so a Bhilai trip
+            // silently searched Raipur with nothing on screen saying so.
+            if (_resolvingAirports)
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: Text('Checking nearest airports…',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              )
+            else
+              for (final (city, airport) in _substitutions)
+                Container(
+                  margin: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius:
+                        BorderRadius.circular(AppConfig.radiusMedium),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline,
+                          size: 18, color: Colors.blue.shade800),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '$city has no airport. Flights use '
+                          '${airport.airportName} (${airport.iata}), '
+                          '${airport.distanceKm} km away.',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.blue.shade900),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             const SizedBox(height: 20),
             const Text('When?',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -360,27 +401,6 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
-            // A city with no airport of its own flies from somewhere else.
-            // Said here, before booking, rather than left for the user to
-            // discover on the day of travel.
-            if (_resolvingAirports)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text('Checking nearest airports…',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: Colors.grey)),
-              )
-            else
-              for (final (city, airport) in _substitutions)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    '$city has no airport — flying from ${airport.airportName} '
-                    '(${airport.iata}), ${airport.distanceKm} km away.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: Colors.blue[800]),
-                  ),
-                ),
             // Cities without an IATA mapping can't be encoded into an Aviasales
             // route URL, so the link lands on their homepage instead. Say so
             // rather than letting the user discover it after tapping.
