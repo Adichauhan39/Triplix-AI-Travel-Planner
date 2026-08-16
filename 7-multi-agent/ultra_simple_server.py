@@ -3649,6 +3649,42 @@ def replan_itinerary(request: AgentRequest):
 _flight_schedule_cache: Dict[str, Any] = {}
 
 
+def _airport_phrase(iata: str) -> str:
+    """Describe every airport serving the same city as [iata].
+
+    Indian metros increasingly have two: Mumbai is BOM and NMI (Navi Mumbai),
+    Goa is GOI (Dabolim) and GOX (Manohar/Mopa). Asking only about the code
+    the app happened to pick silently hid the rest — MakeMyTrip lists 21
+    IndiGo departures Mumbai to Goa, where a BOM-to-GOI-only question found
+    five, because the others leave from NMI or land at GOX.
+
+    The Travelpayouts dataset already groups these: both Mumbai airports
+    carry city_code BOM, both Goa airports city_code GOI.
+    """
+    code = (iata or "").strip().upper()
+    if not code:
+        return code
+    try:
+        airports = _load_airports()
+    except Exception:
+        return code
+
+    rec = next((a for a in airports if a.get("code") == code), None)
+    city = rec.get("city_code") if rec else None
+    if not city:
+        return code
+
+    siblings = [a for a in airports
+                if a.get("city_code") == city and a.get("flightable")]
+    if len(siblings) <= 1:
+        return code
+
+    # Requested code first, so the model treats it as the primary airport.
+    siblings.sort(key=lambda a: a.get("code") != code)
+    return " or ".join(
+        f"{a['code']} ({a.get('name', '').strip()})" for a in siblings)
+
+
 # The carriers worth asking about individually on Indian routes. Air India
 # Express is listed separately from Air India because it files its own IX
 # flight numbers and was otherwise folded in and lost.
@@ -3689,6 +3725,8 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
         return {"status": "success", "flights": [], "reason": "no_api_key"}
 
     when = f"on {date}" if date else ""
+    origin_phrase = _airport_phrase(origin)
+    destination_phrase = _airport_phrase(destination)
 
     try:
         from google import genai as genai_client
@@ -3711,17 +3749,21 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
             than finding more real flights.
             """
             prompt = (
-                f"List every {airline} flight from {origin} to {destination} "
-                f"{when}, with its flight number and departure time. Include "
-                "BOTH nonstop flights AND one-stop connecting itineraries "
-                "sold under a single booking. For a connection, give the "
-                "flight number of the first leg, its departure time from "
-                f"{origin}, the final arrival time at {destination}, and set "
-                '"stops" to the number of stops. '
+                f"List every {airline} flight from {origin_phrase} to "
+                f"{destination_phrase} {when}, with its flight number and "
+                "departure time. Cover EVERY airport listed on each side — "
+                "a city with two airports has flights from both, and "
+                "omitting one hides most of the schedule. Include BOTH "
+                "nonstop flights AND one-stop connecting itineraries sold "
+                "under a single booking. For a connection, give the flight "
+                "number of the first leg, its departure time, the final "
+                'arrival time, and set "stops" to the number of stops. '
                 "Return ONLY a JSON array, no prose. Each item must "
                 'have exactly these keys: "airline" (name), "flight_number" '
                 '(e.g. "6E 6361"), "departure_time" ("HH:MM", 24-hour, '
-                'local), "arrival_time" ("HH:MM"), "stops" (integer). '
+                'local), "arrival_time" ("HH:MM"), "stops" (integer), '
+                '"origin_airport" (the IATA code it actually departs from) '
+                'and "destination_airport" (the IATA code it arrives at). '
                 "Never use a placeholder such as XXXX — omit any flight "
                 f"whose number you cannot verify. If {airline} does not fly "
                 "this route, return an empty array."
@@ -3834,6 +3876,13 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
                 "departure_time": depart,
                 "arrival_time": str(item.get("arrival_time", "")).strip(),
                 "stops": int(item.get("stops") or 0),
+                # Which airport this actually uses. A Mumbai trip can leave
+                # from BOM or NMI and a Goa trip land at GOI or GOX, and
+                # those are an hour apart — the user needs to see which.
+                "origin_airport":
+                    str(item.get("origin_airport", "")).strip().upper(),
+                "destination_airport":
+                    str(item.get("destination_airport", "")).strip().upper(),
             })
 
         flights.sort(key=lambda f: f["departure_time"])

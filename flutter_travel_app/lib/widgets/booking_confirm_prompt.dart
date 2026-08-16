@@ -538,6 +538,11 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         'arrival_time': (f['arrival_time'] ?? '').toString(),
         'stops': f['stops'] ?? 0,
         'flight_date': wanted,
+        // Carried through so the card can show BOM vs NMI, or GOI vs GOX —
+        // without these the row looks identical to one from the other
+        // airport in the same city.
+        'origin_airport': (f['origin_airport'] ?? '').toString(),
+        'destination_airport': (f['destination_airport'] ?? '').toString(),
         // Marks the row as schedule-derived rather than a real fare, so the
         // UI can say where it came from.
         'from_schedule': true,
@@ -1182,6 +1187,11 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                     final number = (f['route_number'] ?? '').toString();
                     final time = (f['departure_time'] ?? '').toString();
                     final duration = (f['duration'] ?? '').toString();
+                    final fromApt = (f['origin_airport'] ?? '').toString();
+                    final toApt = (f['destination_airport'] ?? '').toString();
+                    final airportPair = (fromApt.isNotEmpty && toApt.isNotEmpty)
+                        ? '$fromApt → $toApt'
+                        : '';
                     final stops = (f['stops'] as num?)?.toInt() ?? 0;
                     final selected = _controller.text.trim() == number &&
                         _pickedDepartureTime == (time.isEmpty ? null : time);
@@ -1222,6 +1232,12 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                             if ((f['flight_date'] ?? '').toString().isNotEmpty)
                               _shortDay(f['flight_date'].toString()),
                             if (time.isNotEmpty) 'Departs $time',
+                            // Which airports, when the cities have more than
+                            // one. Mumbai flights leave from BOM or NMI and
+                            // Goa flights land at GOI or GOX; those are far
+                            // enough apart that picking the wrong row puts
+                            // the user at the wrong airport.
+                            if (airportPair.isNotEmpty) airportPair,
                             if (duration.isNotEmpty) duration,
                             stops == 0 ? 'Non-stop' : '$stops stop(s)',
                           ].join(' · '),
