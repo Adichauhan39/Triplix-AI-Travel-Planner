@@ -3711,9 +3711,14 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
             than finding more real flights.
             """
             prompt = (
-                f"List every {airline} nonstop flight from {origin} to "
-                f"{destination} {when}, with its flight number and departure "
-                "time. Return ONLY a JSON array, no prose. Each item must "
+                f"List every {airline} flight from {origin} to {destination} "
+                f"{when}, with its flight number and departure time. Include "
+                "BOTH nonstop flights AND one-stop connecting itineraries "
+                "sold under a single booking. For a connection, give the "
+                "flight number of the first leg, its departure time from "
+                f"{origin}, the final arrival time at {destination}, and set "
+                '"stops" to the number of stops. '
+                "Return ONLY a JSON array, no prose. Each item must "
                 'have exactly these keys: "airline" (name), "flight_number" '
                 '(e.g. "6E 6361"), "departure_time" ("HH:MM", 24-hour, '
                 'local), "arrival_time" ("HH:MM"), "stops" (integer). '
