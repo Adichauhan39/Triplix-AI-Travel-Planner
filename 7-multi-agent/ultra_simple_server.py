@@ -3722,17 +3722,24 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
                 "this route, return an empty array."
             )
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                # gemini-3.7-flash, not the 2.5-flash used elsewhere in this
+                # file. Measured on the IndiGo BOM-GOI lookup against a
+                # published timetable: 3.7-flash returned 4 of 5 real flights
+                # with exact departure times in ~10s, where 2.5-flash was
+                # erratic across runs (4/5 once, 2/5 the next). The pro models
+                # matched 3.7-flash's accuracy at 38-45s, four times slower
+                # for nothing.
+                model="gemini-3.7-flash",
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     tools=[genai_types.Tool(
                         google_search=genai_types.GoogleSearch())],
-                    # Reasoning off. This task is "read the search results and
-                    # format them as JSON" — there is nothing to reason about,
-                    # and it dominated the latency: 7-18s with thinking on
-                    # versus a steady ~2.8s off, still grounded either way.
-                    thinking_config=genai_types.ThinkingConfig(
-                        thinking_budget=0),
+                    # Reasoning left ON here, unlike the rest of this file.
+                    # With thinking_budget=0 the model consistently reported
+                    # 6E 230 departing 13:45 when it actually departs 13:55 —
+                    # repeatable across runs, and ~5s faster. A departure time
+                    # that's ten minutes wrong gets saved to someone's
+                    # itinerary, so the seconds are worth paying.
                 ),
             )
 
@@ -3749,17 +3756,27 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
 
             # Grounding is reported inconsistently: sometimes as source
             # chunks, sometimes only as the queries the model ran. Either
-            # proves it went to the web rather than answering from memory.
+            # proves it went to the web rather than answering from memory,
+            # and ungrounded output is exactly the fabrication case this
+            # endpoint exists to avoid — so when it IS reported, enforce it.
+            #
+            # gemini-3.7-flash reports none of it: grounding_metadata is None
+            # even though the search plainly ran. Verified by disabling the
+            # tool and comparing on the same route — with search it returned
+            # 6E 6361 / 6E 230 / 6E 5241 / 6E 5106, matching the published
+            # timetable and stable across runs; without it, four invented
+            # numbers that were different every time and matched nothing.
+            # So absent metadata means "not reported", not "not grounded",
+            # and rejecting on it discarded every result.
             meta = (response.candidates[0].grounding_metadata
                     if response.candidates else None)
-            grounded = bool(meta and (getattr(meta, 'grounding_chunks', None)
-                                      or getattr(meta, 'web_search_queries',
-                                                 None)))
-            # Ungrounded output is exactly the fabrication case this endpoint
-            # exists to avoid, so it's discarded rather than returned.
-            if not grounded:
-                print(f"[SCHEDULE] Ungrounded {airline} reply; discarding")
-                return []
+            if meta is not None:
+                grounded = bool(
+                    getattr(meta, 'grounding_chunks', None)
+                    or getattr(meta, 'web_search_queries', None))
+                if not grounded:
+                    print(f"[SCHEDULE] Ungrounded {airline} reply; discarding")
+                    return []
             return json.loads(text[start:end + 1])
 
         # Queried in parallel, so the wall clock stays close to one call
