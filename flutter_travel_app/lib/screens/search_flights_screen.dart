@@ -60,18 +60,17 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     }
   }
 
-  /// Normalises a free-text onboarding city (e.g. "Gownipalli, Karnataka,
-  /// India"), preferring the canonical spelling from flightCities when it
-  /// matches. Unmatched cities are kept rather than discarded so the trip
-  /// entered during onboarding always carries over — see [_cityOptions].
+  /// The onboarding city, kept exactly as entered — including the state.
+  ///
+  /// This used to cut "Bilaspur, Chhattisgarh, India" down to "Bilaspur",
+  /// which is the one detail that separates it from the Bilaspur in Himachal
+  /// Pradesh 1150km away. The airport lookup geocodes whatever it is given,
+  /// so dropping the state made a same-named city in another state a valid
+  /// answer. India has many of these — Bilaspur, Hyderabad, Aurangabad — so
+  /// the region travels with the name from here on.
   String? _matchFlightCity(String? rawCity) {
-    if (rawCity == null || rawCity.trim().isEmpty) return null;
-    final city = rawCity.split(',').first.trim();
-    if (city.isEmpty) return null;
-    for (final candidate in AffiliateLinks.flightCities) {
-      if (candidate.toLowerCase() == city.toLowerCase()) return candidate;
-    }
-    return city;
+    final city = rawCity?.trim();
+    return (city == null || city.isEmpty) ? null : city;
   }
 
   /// IATA codes for the chosen cities, set when a suggestion is tapped.

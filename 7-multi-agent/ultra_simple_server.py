@@ -4821,7 +4821,13 @@ def search_airports(q: str, country: str = "IN", limit: int = 8):
     "jai" would surface Rajahmundry before Jaipur.
     """
     try:
-        query = (q or "").strip().lower()
+        # A qualified label from onboarding — "Bilaspur, Chhattisgarh, India" —
+        # matches on its first part but geocodes on the whole string. The
+        # region is the only thing separating same-named cities, so throwing
+        # it away is what let the Himachal Bilaspur answer for the
+        # Chhattisgarh one.
+        full = (q or "").strip()
+        query = full.split(",")[0].strip().lower()
         if len(query) < 2:
             return {"status": "success", "airports": []}
 
@@ -4895,7 +4901,7 @@ def search_airports(q: str, country: str = "IN", limit: int = 8):
         # anywhere near it. One geocode per query, cached, and only for
         # queries long enough to be a place name rather than a code.
         if len(query) >= 4 and results:
-            here = _geocode_city(q.strip())
+            here = _geocode_city(full)
             if here:
                 lat, lon = here
                 near = []
