@@ -1415,6 +1415,20 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           ],
           const SizedBox(height: 20),
 
+          // Says why the button is dead. A greyed button with no explanation
+          // reads as broken; naming the missing step turns it into an
+          // instruction.
+          if (!_canSave && !_verifying) ...[
+            Text(
+              _isFlight
+                  ? 'Tap the flight you took to enable saving'
+                  : 'Tap the hotel you booked to enable saving',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 8),
+          ],
+
           // Always shown now. It used to be hidden whenever flights were
           // listed, because tapping one saved outright; now that tapping only
           // selects, hiding the button would leave nothing to confirm with.
@@ -1426,6 +1440,12 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppConfig.primaryColor,
                   foregroundColor: Colors.white,
+                  // Stated explicitly. With only backgroundColor set, the
+                  // disabled button kept enough of its colour to look
+                  // tappable, so "nothing selected" read as a broken button
+                  // rather than a deliberate state.
+                  disabledBackgroundColor: Colors.grey.shade300,
+                  disabledForegroundColor: Colors.grey.shade600,
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
