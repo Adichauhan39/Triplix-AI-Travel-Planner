@@ -1044,6 +1044,23 @@ def _resolve_airport(city: str):
     if not airports:
         return None
 
+    # An IATA code resolves to itself. Without this "rpr" was handed to the
+    # geocoder, which returned a point near Bangalore and produced a confident
+    # "RPR is BLR, 23km away" — a wrong airport presented as a certainty.
+    # Three-letter inputs are overwhelmingly codes, not place names.
+    upper = key.upper()
+    if len(upper) == 3:
+        exact = next((a for a in airports if a.get('code') == upper), None)
+        if exact is None:
+            exact = next(
+                (a for a in airports if a.get('city_code') == upper), None)
+        if exact is not None:
+            result = {'iata': exact['code'], 'substituted': False,
+                      'airport_name': str(exact.get('name') or '').strip(),
+                      'distance_km': 0, 'query': city}
+            _airport_lookup_cache[key] = result
+            return result
+
     coords = _geocode_city(city)
     if not coords:
         print(f"[AIRPORTS] Could not geocode {city!r}")

@@ -416,7 +416,22 @@ class _AirportFieldState extends State<_AirportField> {
     final found = await _adk.searchAirports(query);
     if (!mounted || _controller.text.trim() != query) return;
 
-    if (found != null && found.isNotEmpty) {
+    // null means the lookup itself failed — server down, or running a build
+    // without this endpoint. Falling through to the nearest-airport guess
+    // here is how "rpr" became "rpr (BLR)": the search never ran, and the
+    // geocoder happily placed the string near Bangalore. Say so instead.
+    if (found == null) {
+      setState(() {
+        _options = [];
+        _searching = false;
+        _fallbackOption = null;
+        _fallbackNote = "Couldn't reach the airport list. Check the server "
+            'is running, then try again.';
+      });
+      return;
+    }
+
+    if (found.isNotEmpty) {
       setState(() {
         _options = found;
         _searching = false;
@@ -432,7 +447,12 @@ class _AirportFieldState extends State<_AirportField> {
     setState(() {
       _options = [];
       _searching = false;
-      if (resolved == null || resolved.iata.isEmpty) {
+      // Only a genuine substitution is offered. A result claiming the typed
+      // place has its own airport contradicts the search that just found
+      // nothing, and that combination is exactly what produced "rpr (BLR)" —
+      // a geocode of the string "rpr" landing near Bangalore and reporting
+      // itself as an exact match. Treat it as no match.
+      if (resolved == null || resolved.iata.isEmpty || !resolved.substituted) {
         _fallbackNote = 'No airport found for "$query".';
       } else {
         _fallbackOption = AirportOption(
@@ -440,10 +460,9 @@ class _AirportFieldState extends State<_AirportField> {
           name: resolved.airportName,
           city: query,
         );
-        _fallbackNote = resolved.substituted
-            ? '$query has no airport. Nearest is ${resolved.airportName} '
-                '(${resolved.iata}), ${resolved.distanceKm} km away.'
-            : null;
+        _fallbackNote = '$query has no airport. Nearest is '
+            '${resolved.airportName} (${resolved.iata}), '
+            '${resolved.distanceKm} km away.';
       }
     });
   }
