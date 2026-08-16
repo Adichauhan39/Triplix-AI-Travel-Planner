@@ -39,6 +39,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // Anchor for scrolling section 0 into view once Explore opens it.
   final GlobalKey _section0Key = GlobalKey();
 
+  /// Whether Explore has been tapped with valid trip basics.
+  ///
+  /// "Where to next?" stays locked until then. Opening it earlier showed an
+  /// empty destination step with nothing to choose from — its activities and
+  /// suggestions are all loaded by Explore — so the section could be expanded
+  /// into a dead end before the trip had a destination or dates.
+  bool _exploreTapped = false;
+
   // ---------------------------------------------------------------------------
   // Step 1: Destination & activities
   // ---------------------------------------------------------------------------
@@ -507,7 +515,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   // A section is unlocked iff every previous section is complete.
   bool _isSectionUnlocked(int index) {
-    if (index == 0) return true;
+    if (index == 0) return _exploreTapped;
     return _isSectionComplete(index - 1);
   }
 
@@ -1936,6 +1944,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     provider.updateNumberOfPeople(_numberOfPeople);
 
     setState(() {
+      // Unlocks "Where to next?". Set only after validation passes, so the
+      // section stays locked when Explore is tapped with fields missing.
+      _exploreTapped = true;
       _searchController.text = destText;
       _expanded
         ..clear()
@@ -2084,6 +2095,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               icon: Icons.explore,
                               isComplete: _isSectionComplete(0),
                               isUnlocked: _isSectionUnlocked(0),
+                              lockedHint:
+                                  'Fill in Trip basics above and tap Explore',
                               body: _buildDestinationStep(),
                             ),
                           ),
@@ -2185,9 +2198,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required bool isUnlocked,
     required Widget body,
     ExpansibleController? controller,
+    String? lockedHint,
   }) {
     if (!isUnlocked) {
-      return _buildLockedSection(title: title, icon: icon);
+      return _buildLockedSection(
+        title: title,
+        icon: icon,
+        hint: lockedHint ?? 'Finish the previous section to unlock',
+      );
     }
     return Material(
       color: Colors.white,
@@ -2304,7 +2322,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   /// (the previous section) has not been completed yet.
   // Greyed-out, non-interactive stand-in shown for a step whose predecessor
   // isn't complete yet (see _isSectionUnlocked).
-  Widget _buildLockedSection({required String title, required IconData icon}) {
+  Widget _buildLockedSection({
+    required String title,
+    required IconData icon,
+    // Section 0 isn't waiting on a previous section — it's waiting on the
+    // Explore button — so the default hint would be actively misleading.
+    String hint = 'Finish the previous section to unlock',
+  }) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.6),
@@ -2338,7 +2362,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Finish the previous section to unlock',
+                  hint,
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.grey.shade500,
