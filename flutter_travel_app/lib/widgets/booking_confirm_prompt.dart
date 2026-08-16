@@ -268,8 +268,19 @@ class BookingConfirmPrompt {
         (booking.hotelName ?? '').isNotEmpty &&
         !booking.hotelNameIsRealPlace;
 
+    // "I don't have it yet" saves the leg without identifying it, which is
+    // right — the user did book something — but announcing "Flight added"
+    // claims we recorded a flight we know nothing about.
+    final noDetail = booking.kind == BookingKind.flight
+        ? (booking.flightNumber ?? '').isEmpty
+        : (booking.hotelName ?? '').isEmpty;
+
     final String message;
-    if (booking.kind == BookingKind.flight) {
+    if (noDetail) {
+      message = booking.kind == BookingKind.flight
+          ? 'Saved without a flight number — add it any time'
+          : 'Saved without a hotel name — add it any time';
+    } else if (booking.kind == BookingKind.flight) {
       message = 'Flight added to your itinerary';
     } else if (lookupFailed) {
       // Our lookup broke, not their spelling. Saying "check the spelling"

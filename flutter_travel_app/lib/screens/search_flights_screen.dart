@@ -122,6 +122,17 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
       );
       return;
     }
+    // Text in the box isn't a chosen airport. A city carried over from
+    // onboarding shows in the field but has no code behind it until it's
+    // picked, and searching anyway sent the user to the Aviasales homepage
+    // with nothing filled in — which looked like the search had worked.
+    if (_originIata == null || _destinationIata == null) {
+      final which = _originIata == null ? 'From' : 'To';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Pick an airport from the $which list')),
+      );
+      return;
+    }
     if (_origin == _destination) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Origin and destination must differ')),
@@ -382,6 +393,18 @@ class _AirportFieldState extends State<_AirportField> {
   /// airport we'd use instead, or saying we found nothing at all.
   String? _fallbackNote;
   AirportOption? _fallbackOption;
+
+  @override
+  void initState() {
+    super.initState();
+    // A city carried over from onboarding starts as plain text with no
+    // airport behind it. Looking it up straight away turns it into a
+    // tappable card — including the nearest-airport card for somewhere like
+    // Bilaspur — instead of leaving it looking already chosen when it isn't.
+    if (widget.initialText.trim().length >= 2) {
+      _search(widget.initialText);
+    }
+  }
 
   @override
   void dispose() {
