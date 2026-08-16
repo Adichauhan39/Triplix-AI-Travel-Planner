@@ -992,10 +992,22 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     return 2 * 6371.0 * asin(sqrt(h))
 
 
+_geocode_cache = {}
+
+
 def _geocode_city(city: str):
     """(lat, lon) for a free-text place via Google Places, or None."""
     if not GOOGLE_PLACES_API_KEY:
         return None
+    key = str(city).strip().lower()
+    if key in _geocode_cache:
+        return _geocode_cache[key]
+    result = _geocode_city_uncached(city)
+    _geocode_cache[key] = result
+    return result
+
+
+def _geocode_city_uncached(city: str):
     try:
         resp = requests.post(
             'https://places.googleapis.com/v1/places:searchText',
@@ -4872,8 +4884,42 @@ def search_airports(q: str, country: str = "IN", limit: int = 8):
             }))
 
         scored.sort(key=lambda t: (t[0], t[1], t[2]))
-        return {"status": "success",
-                "airports": [s[3] for s in scored[:max(1, min(limit, 20))]]}
+        results = [s[3] for s in scored[:max(1, min(limit, 20))]]
+
+        # Same name, wrong place. The dataset has an airport literally called
+        # "Bilaspur" (PAB) sitting at 31.3N in Himachal Pradesh, so typing the
+        # Chhattisgarh Bilaspur — 1300km away, near Raipur — offered it as an
+        # exact match. Anyone picking it would search a route they cannot fly.
+        #
+        # So when the query names a real place, drop candidates that aren't
+        # anywhere near it. One geocode per query, cached, and only for
+        # queries long enough to be a place name rather than a code.
+        if len(query) >= 4 and results:
+            here = _geocode_city(q.strip())
+            if here:
+                lat, lon = here
+                near = []
+                for r in results:
+                    rec = next((a for a in airports
+                                if a.get("code") == r["code"]), None)
+                    if not rec:
+                        continue
+                    c = rec.get("coordinates") or {}
+                    km = _haversine_km(lat, lon, c.get("lat"), c.get("lon"))
+                    if km <= 200:
+                        near.append(r)
+                    else:
+                        print(f"[AIRPORTS] dropped {r['code']} for {q!r}: "
+                              f"{int(km)}km from the place searched")
+                # Kept even when empty. An earlier version fell back to the
+                # unfiltered list here, which defeated the whole check in the
+                # one case that matters: Bilaspur's only match was the wrong
+                # one, so "keep the originals if nothing survived" handed PAB
+                # straight back. An empty list is the correct answer — the
+                # caller then asks for the nearest airport and gets RPR.
+                results = near
+
+        return {"status": "success", "airports": results}
     except Exception as e:
         print(f"[AIRPORTS] search failed for {q!r}: {e}")
         return {"status": "error", "message": str(e), "airports": []}
