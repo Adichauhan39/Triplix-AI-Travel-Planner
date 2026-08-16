@@ -475,6 +475,38 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// Airports whose city, name or code matches [query].
+  ///
+  /// Backed by the cached airport dataset rather than a model or Places, so it
+  /// is a local lookup on the server and fast enough for every keystroke.
+  /// Returns null on failure so the caller can tell a broken lookup from a
+  /// city that genuinely has no airport.
+  Future<List<AirportOption>?> searchAirports(String query) async {
+    if (query.trim().length < 2) return const [];
+    try {
+      final uri = Uri.parse('$_baseUrl/api/airport/search')
+          .replace(queryParameters: {'q': query.trim(), 'limit': '6'});
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        debugPrint('searchAirports: HTTP ${response.statusCode} for $uri');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      return ((data['airports'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map((a) => AirportOption(
+                code: (a['code'] ?? '').toString(),
+                name: (a['name'] ?? '').toString(),
+                city: (a['city'] ?? '').toString(),
+              ))
+          .where((a) => a.code.isNotEmpty)
+          .toList();
+    } catch (e) {
+      debugPrint('searchAirports failed: $e');
+      return null;
+    }
+  }
+
   /// The bookable airport for [city], substituting the nearest one when the
   /// city has no airport of its own — Bilaspur resolves to Raipur, 108km away.
   ///
@@ -968,4 +1000,23 @@ class AirportResolution {
   final String airportName;
   final bool substituted;
   final int distanceKm;
+}
+
+/// One airport offered in the From/To pickers.
+///
+/// [city] is what the user is looking for; [name] and [code] disambiguate the
+/// cities that have two, like Mumbai's BOM and NMI.
+class AirportOption {
+  const AirportOption({
+    required this.code,
+    required this.name,
+    required this.city,
+  });
+
+  final String code;
+  final String name;
+  final String city;
+
+  /// What goes in the field once picked, e.g. "Mumbai (BOM)".
+  String get label => city.isEmpty ? code : '$city ($code)';
 }

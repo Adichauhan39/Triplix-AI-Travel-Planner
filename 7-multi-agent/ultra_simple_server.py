@@ -621,55 +621,61 @@ def _parse_iso_date(date_input: Any) -> Optional[str]:
             continue
     return None
 
+# Spellings Indian users actually type, mapped to IATA. Module level so the
+# airport search can use it too: the Travelpayouts dataset stores official
+# names, so "bangalore" misses Bengaluru and "trivandrum" misses
+# Thiruvananthapuram without these aliases.
+_CITY_IATA = {
+    'delhi': 'DEL',
+    'new delhi': 'DEL',
+    'mumbai': 'BOM',
+    'bengaluru': 'BLR',
+    'bangalore': 'BLR',
+    'goa': 'GOI',
+    'jaipur': 'JAI',
+    'agra': 'AGR',
+    'hyderabad': 'HYD',
+    'pune': 'PNQ',
+    'kolkata': 'CCU',
+    'chennai': 'MAA',
+    'ahmedabad': 'AMD',
+    'kochi': 'COK',
+    'cochin': 'COK',
+    'lucknow': 'LKO',
+    'raipur': 'RPR',
+    'indore': 'IDR',
+    'bhopal': 'BHO',
+    'nagpur': 'NAG',
+    'surat': 'STV',
+    'varanasi': 'VNS',
+    'amritsar': 'ATQ',
+    'udaipur': 'UDR',
+    'jodhpur': 'JDH',
+    'patna': 'PAT',
+    'guwahati': 'GAU',
+    'bhubaneswar': 'BBI',
+    'coimbatore': 'CJB',
+    'trivandrum': 'TRV',
+    'thiruvananthapuram': 'TRV',
+    'srinagar': 'SXR',
+    'dehradun': 'DED',
+    'chandigarh': 'IXC',
+    'ranchi': 'IXR',
+    'vadodara': 'BDQ',
+    'visakhapatnam': 'VTZ',
+    'madurai': 'IXM',
+    'mangalore': 'IXE',
+    'leh': 'IXL',
+    'port blair': 'IXZ',
+}
+
+
 def _city_to_iata(city: str) -> Optional[str]:
-    """Convert supported Indian cities to IATA city/airport codes for Amadeus."""
-    mapping = {
-        'delhi': 'DEL',
-        'new delhi': 'DEL',
-        'mumbai': 'BOM',
-        'bengaluru': 'BLR',
-        'bangalore': 'BLR',
-        'goa': 'GOI',
-        'jaipur': 'JAI',
-        'agra': 'AGR',
-        'hyderabad': 'HYD',
-        'pune': 'PNQ',
-        'kolkata': 'CCU',
-        'chennai': 'MAA',
-        'ahmedabad': 'AMD',
-        'kochi': 'COK',
-        'cochin': 'COK',
-        'lucknow': 'LKO',
-        'raipur': 'RPR',
-        'indore': 'IDR',
-        'bhopal': 'BHO',
-        'nagpur': 'NAG',
-        'surat': 'STV',
-        'varanasi': 'VNS',
-        'amritsar': 'ATQ',
-        'udaipur': 'UDR',
-        'jodhpur': 'JDH',
-        'patna': 'PAT',
-        'guwahati': 'GAU',
-        'bhubaneswar': 'BBI',
-        'coimbatore': 'CJB',
-        'trivandrum': 'TRV',
-        'thiruvananthapuram': 'TRV',
-        'srinagar': 'SXR',
-        'dehradun': 'DED',
-        'chandigarh': 'IXC',
-        'ranchi': 'IXR',
-        'vadodara': 'BDQ',
-        'visakhapatnam': 'VTZ',
-        'madurai': 'IXM',
-        'mangalore': 'IXE',
-        'leh': 'IXL',
-        'port blair': 'IXZ',
-    }
+    """Convert supported Indian cities to IATA city/airport codes."""
     # Tolerate "Raipur, Chhattisgarh, India" as well as "Raipur" — the app's
     # destination picker returns fully-qualified labels.
     key = str(city).split(',')[0].strip().lower()
-    return mapping.get(key)
+    return _CITY_IATA.get(key)
 
 TRAVELPAYOUTS_API_TOKEN = os.getenv('TRAVELPAYOUTS_API_TOKEN', '')
 TRAVELPAYOUTS_MARKER = os.getenv('TRAVELPAYOUTS_MARKER', '')
@@ -892,6 +898,52 @@ def _create_aviasales_flight_result(offer, from_city, to_city, passengers,
 _AIRPORTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.airports.json')
 _AIRPORTS_URL = 'https://api.travelpayouts.com/data/en/airports.json'
 _airports_cache = None
+
+# Cities, keyed by the same city_code the airport records carry. Needed
+# because Indian airports are usually named after people rather than places:
+# Raipur's is "Swami Vivekananda", Goa's are "Dabolim" and "Manohar", Mumbai's
+# is "Chhatrapati Shivaji". Searching airport names alone found none of them.
+_CITIES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '.cities.json')
+_CITIES_URL = 'https://api.travelpayouts.com/data/en/cities.json'
+_cities_cache = None
+
+
+def _load_cities():
+    """Travelpayouts' city dataset (code + name), cached to disk like airports."""
+    global _cities_cache
+    if _cities_cache is not None:
+        return _cities_cache
+
+    data = None
+    try:
+        if os.path.exists(_CITIES_PATH):
+            with open(_CITIES_PATH, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+    except Exception:
+        data = None
+
+    if data is None:
+        try:
+            print("[AIRPORTS] Downloading city dataset…")
+            data = requests.get(_CITIES_URL, timeout=45).json()
+            with open(_CITIES_PATH, 'w', encoding='utf-8') as fh:
+                json.dump(data, fh)
+        except Exception as e:
+            # Non-fatal: search falls back to matching airport names only.
+            print(f"[AIRPORTS] Could not load cities: {e}")
+            _cities_cache = {}
+            return _cities_cache
+
+    _cities_cache = {
+        c['code']: {
+            'name': str(c.get('name') or '').strip(),
+            'country_code': c.get('country_code'),
+        }
+        for c in data if c.get('code')
+    }
+    print(f"[AIRPORTS] {len(_cities_cache)} cities available")
+    return _cities_cache
 _airport_lookup_cache = {}
 
 
@@ -4725,6 +4777,89 @@ def search_hotel_names(query: str, city: str = "", limit: int = 6):
         print(f"[PLACES HOTELS] {e}")
         # Never fatal: the field stays free-text if lookup fails.
         return {"status": "error", "message": str(e), "hotels": []}
+
+
+@app.get("/api/airport/search")
+def search_airports(q: str, country: str = "IN", limit: int = 8):
+    """Airports matching a partial name or code, for the From/To fields.
+
+    Local lookup over the cached Travelpayouts dataset — no network, no model,
+    so it answers in milliseconds and can run on every keystroke. The picker
+    it replaces was a hardcoded list of 37 cities, which is why anywhere else
+    had to be typed blind.
+
+    Ranked so a prefix match beats a match buried mid-name, otherwise
+    "jai" would surface Rajahmundry before Jaipur.
+    """
+    try:
+        query = (q or "").strip().lower()
+        if len(query) < 2:
+            return {"status": "success", "airports": []}
+
+        airports = _load_airports()
+        cities = _load_cities()
+        wanted_country = (country or "").strip().upper()
+
+        scored = []
+        for a in airports:
+            if wanted_country and a.get("country_code") != wanted_country:
+                continue
+            name = str(a.get("name") or "").strip()
+            code = str(a.get("code") or "").strip()
+            city = str(
+                (cities.get(a.get("city_code")) or {}).get("name") or "").strip()
+
+            # City name is checked first and ranked highest: people type where
+            # they're going, not what the airport is called.
+            city_l, name_l, code_l = city.lower(), name.lower(), code.lower()
+            if query == code_l:
+                score = 0
+            elif city_l.startswith(query):
+                score = 1
+            elif name_l.startswith(query):
+                score = 2
+            elif query in city_l:
+                score = 3
+            elif query in name_l:
+                score = 4
+            elif code_l.startswith(query):
+                score = 5
+            else:
+                continue
+            # The city's main airport first: BOM before NMI, GOI before GOX.
+            # A record whose own code equals its city_code is the primary one.
+            primary = 0 if code == (a.get("city_code") or code) else 1
+            scored.append((score, primary, len(city or name), {
+                "code": code,
+                "name": name,
+                "city": city or name,
+                "city_code": a.get("city_code") or code,
+            }))
+
+        # The dataset uses official names, so "bang" misses Bengaluru and
+        # "trivandrum" misses Thiruvananthapuram. _city_to_iata already holds
+        # the spellings Indian users actually type, so it fills those in.
+        matched_codes = {s[3]["code"] for s in scored}
+        for alias, alias_code in _CITY_IATA.items():
+            if not alias.startswith(query) or alias_code in matched_codes:
+                continue
+            rec = next((x for x in airports if x.get("code") == alias_code),
+                       None)
+            if not rec:
+                continue
+            scored.append((1, 0, len(alias), {
+                "code": alias_code,
+                "name": str(rec.get("name") or "").strip(),
+                "city": alias.title(),
+                "city_code": rec.get("city_code") or alias_code,
+            }))
+
+        scored.sort(key=lambda t: (t[0], t[1], t[2]))
+        return {"status": "success",
+                "airports": [s[3] for s in scored[:max(1, min(limit, 20))]]}
+    except Exception as e:
+        print(f"[AIRPORTS] search failed for {q!r}: {e}")
+        return {"status": "error", "message": str(e), "airports": []}
 
 
 @app.get("/api/airport/resolve")
