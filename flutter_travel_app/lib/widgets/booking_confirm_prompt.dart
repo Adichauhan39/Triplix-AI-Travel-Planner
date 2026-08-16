@@ -414,11 +414,12 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   void initState() {
     super.initState();
     if (_isFlight) {
-      if (widget.flightOrigin.isNotEmpty &&
-          widget.flightDestination.isNotEmpty &&
-          widget.flightDate != null) {
-        _loadFlightOptions();
-      }
+      // Deliberately not loaded here. The flight lookup is a grounded model
+      // call per airline — slow and billable — and firing it the instant the
+      // sheet opens meant a spinner and a half-filled list appeared before
+      // the user had done anything. It now runs when they type, or when they
+      // tap "Show flights on this route". Hotels differ because their lookup
+      // is a single fast Places call with no model involved.
     } else if (widget.city.isNotEmpty) {
       _loadCityHotels();
     }
@@ -663,13 +664,17 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     if (_flightOptions.isNotEmpty || _loadingFlights || _searchedSchedule) {
       return;
     }
-    if (widget.flightDate == null ||
-        widget.flightOrigin.isEmpty ||
-        widget.flightDestination.isEmpty) {
-      return;
-    }
-    _findFlightsOnRoute();
+    if (!_canLookUpFlights) return;
+    // The full path: cached fares first, which come back in ~2s, then the
+    // grounded schedule merged in behind them.
+    _loadFlightOptions();
   }
+
+  /// Whether we know enough about the trip to look flights up at all.
+  bool get _canLookUpFlights =>
+      widget.flightDate != null &&
+      widget.flightOrigin.isNotEmpty &&
+      widget.flightDestination.isNotEmpty;
 
   /// Whether "Save to itinerary" does anything yet.
   ///
@@ -1211,6 +1216,28 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           // Real departures for this route and date. Tapping one fills in both
           // the flight number and its time, so the user never has to remember
           // either — they just recognise the flight they took.
+          // Offered rather than run automatically, so the model call happens
+          // when the user asks for it. Typing does the same thing.
+          if (_isFlight &&
+              _flightOptions.isEmpty &&
+              !_loadingFlights &&
+              !_searchedSchedule &&
+              _canLookUpFlights) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _loadFlightOptions,
+              icon: const Icon(Icons.search, size: 18),
+              label: Text(
+                'Show flights ${widget.flightOrigin} → '
+                '${widget.flightDestination}',
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Or type your flight number above.',
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+            ),
+          ],
           if (_isFlight && _flightOptions.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
