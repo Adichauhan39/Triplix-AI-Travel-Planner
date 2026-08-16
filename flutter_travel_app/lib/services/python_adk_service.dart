@@ -438,15 +438,28 @@ class PythonADKService {
           'date': isoDate,
         },
       );
+      // 90s, not 50. The server now runs one grounded lookup per airline, so
+      // a busy trunk route is far slower than a regional one: BOM-DEL measured
+      // 31s and returned 59 flights, where BLR-RPR took 7s. The server caps
+      // each airline at 45s, so 50s here could time out a request that was
+      // about to succeed — and the user would see "no flights" for a route
+      // that has plenty. The wait only happens once per route and date;
+      // afterwards the server answers from cache.
       final response =
-          await http.get(uri).timeout(const Duration(seconds: 50));
-      if (response.statusCode != 200) return const [];
+          await http.get(uri).timeout(const Duration(seconds: 90));
+      if (response.statusCode != 200) {
+        debugPrint('flightSchedule: HTTP ${response.statusCode} for $uri');
+        return const [];
+      }
 
       final data = json.decode(response.body) as Map<String, dynamic>;
       return ((data['flights'] as List?) ?? const [])
           .whereType<Map<String, dynamic>>()
           .toList();
-    } catch (_) {
+    } catch (e) {
+      // Was swallowed silently, which made a timeout indistinguishable from a
+      // route with no flights.
+      debugPrint('flightSchedule failed: $e');
       return const [];
     }
   }
