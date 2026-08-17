@@ -394,6 +394,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// in its place can be labelled honestly rather than looking like results.
   bool _noMatch = false;
 
+  /// Set when the request itself failed, as opposed to matching nothing.
+  ///
+  /// This path used to leave the sheet completely blank: no cards, no
+  /// spinner, no message — indistinguishable from a city with no hotels, and
+  /// impossible to diagnose from the screen.
+  String? _lookupError;
+
   /// True while the final "did you mean?" check runs on save.
   bool _verifying = false;
 
@@ -451,7 +458,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         query: 'hotel', city: widget.city, limit: 6);
     if (!mounted) return;
     setState(() {
-      if (found != null) {
+      if (found == null) {
+        _lookupError = "Couldn't load hotels — check the server is running.";
+      } else {
+        _lookupError = null;
         _cityHotels = found;
         // Don't clobber anything the user has already typed their way to.
         if (_controller.text.trim().isEmpty) _suggestions = found;
@@ -1096,8 +1106,14 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
       if (_controller.text.trim().toLowerCase() != query) return;
       setState(() {
         // null = lookup failed. Keep whatever was already on screen rather
-        // than blanking the list on a transient error.
-        if (found != null) {
+        // than blanking the list on a transient error — but say so, because
+        // an empty sheet with no explanation is what made this look like
+        // "there are no hotels called that".
+        if (found == null) {
+          _lookupError = "Couldn't reach the hotel list — check the server "
+              'is running, then type again.';
+        } else {
+          _lookupError = null;
           _hotelCache[query] = found;
           // An empty result must not empty the list. The point of this sheet
           // is to let the user tap their hotel instead of spelling it, so a
@@ -1379,6 +1395,24 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           // Real properties from Google Places. Tapping one replaces whatever
           // was typed, so a misspelling still ends up as the hotel's actual
           // name — when Places can find it.
+          if (!_isFlight && _lookupError != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline,
+                    size: 18, color: Colors.orange[800]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _lookupError!,
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.orange[800]),
+                  ),
+                ),
+              ],
+            ),
+          ],
           // First load only — afterwards the field's own suffix spinner covers
           // refinements, so the list doesn't jump while the user types.
           if (!_isFlight && _lookingUp && _suggestions.isEmpty) ...[
