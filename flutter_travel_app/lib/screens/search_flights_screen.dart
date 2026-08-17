@@ -474,30 +474,42 @@ class _AirportFieldState extends State<_AirportField> {
       // nothing, and that combination is exactly what produced "rpr (BLR)" —
       // a geocode of the string "rpr" landing near Bangalore and reporting
       // itself as an exact match. Treat it as no match.
+      final shortName = _shortCity(query);
       if (resolved == null || resolved.iata.isEmpty || !resolved.substituted) {
-        _fallbackNote = 'No airport found for "$query".';
+        _fallbackNote = 'No airport found for "$shortName".';
       } else {
         _fallbackOption = AirportOption(
           code: resolved.iata,
           name: resolved.airportName,
+          // Qualified, so the state still reaches the server on selection.
           city: query,
         );
-        _fallbackNote = '$query has no airport. Nearest is '
+        _fallbackNote = '$shortName has no airport. Nearest is '
             '${resolved.airportName} (${resolved.iata}), '
             '${resolved.distanceKm} km away.';
       }
     });
   }
 
+  /// "Bhilai, Chhattisgarh, India" -> "Bhilai".
+  ///
+  /// The qualified form is what gets sent to the server, since the state is
+  /// what tells two same-named cities apart, but it makes a poor label: the
+  /// field read "Bhilai, Chhattisgarh, India (RPR)".
+  static String _shortCity(String city) => city.split(',').first.trim();
+
   void _pick(AirportOption option, {String? note}) {
     _debounce?.cancel();
-    _controller.text = option.label;
+    _controller.text = '${_shortCity(option.city)} (${option.code})';
     FocusScope.of(context).unfocus();
     setState(() {
       _picked = true;
       _options = [];
       _searching = false;
-      _fallbackNote = note;
+      // Cleared, not kept. The parent shows this note in its own callout, and
+      // holding onto it here printed the same sentence twice, once under the
+      // field and once below it.
+      _fallbackNote = null;
       _fallbackOption = null;
     });
     widget.onSelected(option.city, option.code, note);
@@ -552,7 +564,7 @@ class _AirportFieldState extends State<_AirportField> {
                         fontWeight: FontWeight.w700,
                         color: AppConfig.primaryColor)),
               ),
-              title: Text(option.city,
+              title: Text(_shortCity(option.city),
                   style: const TextStyle(
                       fontSize: 14, fontWeight: FontWeight.w600)),
               subtitle: Text(option.name,
