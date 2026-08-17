@@ -565,6 +565,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         // airport in the same city.
         'origin_airport': (f['origin_airport'] ?? '').toString(),
         'destination_airport': (f['destination_airport'] ?? '').toString(),
+        // Where a connection stops and how long it waits — the detail a
+        // passenger actually remembers about their own itinerary.
+        'via': (f['via'] ?? '').toString(),
+        'layover_minutes': f['layover_minutes'] ?? 0,
         // Marks the row as schedule-derived rather than a real fare, so the
         // UI can say where it came from.
         'from_schedule': true,
@@ -641,6 +645,33 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   bool get _flightNoMatch {
     final q = _controller.text.trim();
     return q.isNotEmpty && _flightsMatching(q).isEmpty;
+  }
+
+  /// "Non-stop", or "1 stop in DEL · 2h 15m wait".
+  ///
+  /// The stop and the wait are what a passenger remembers about a connecting
+  /// itinerary — far more recognisable than the bare "1 stop(s)" this
+  /// replaces, which described every connection on the route identically.
+  /// Each part is only added when we actually have it, so a flight the
+  /// schedule couldn't detail still reads correctly rather than saying
+  /// "1 stop in  ·  wait".
+  String _stopsLabel(Map<String, dynamic> flight, int stops) {
+    if (stops == 0) return 'Non-stop';
+
+    final via = (flight['via'] ?? '').toString().trim();
+    final minutes = (flight['layover_minutes'] as num?)?.toInt() ?? 0;
+
+    final buffer = StringBuffer(stops == 1 ? '1 stop' : '$stops stops');
+    if (via.isNotEmpty) buffer.write(' in $via');
+    if (minutes > 0) {
+      final hours = minutes ~/ 60;
+      final mins = minutes % 60;
+      final wait = hours > 0
+          ? (mins > 0 ? '${hours}h ${mins}m' : '${hours}h')
+          : '${mins}m';
+      buffer.write(' · $wait wait');
+    }
+    return buffer.toString();
   }
 
   /// Direct flights first, then by departure time.
@@ -1350,7 +1381,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                             // the user at the wrong airport.
                             if (airportPair.isNotEmpty) airportPair,
                             if (duration.isNotEmpty) duration,
-                            stops == 0 ? 'Non-stop' : '$stops stop(s)',
+                            _stopsLabel(f, stops),
                           ].join(' · '),
                           style: const TextStyle(fontSize: 12),
                         ),

@@ -3753,6 +3753,48 @@ def replan_itinerary(request: AgentRequest):
 _flight_schedule_cache: Dict[str, Any] = {}
 
 
+def _clean_via(value) -> str:
+    """Intermediate stop codes, e.g. "DEL" or "DEL, BOM".
+
+    Only real three-letter designators survive, so the model can't put prose
+    ("via Delhi airport") or a placeholder into a field the UI prints as fact.
+    """
+    if not value:
+        return ""
+    try:
+        known = {a.get('code') for a in _load_airports()}
+    except Exception:
+        known = set()
+
+    parts = re.split(r"[,/>\-]| via ", str(value), flags=re.IGNORECASE)
+    codes = []
+    for part in parts:
+        code = part.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", code) or code in codes:
+            continue
+        # Checked against the real airport list, so "XXX" — which is
+        # shaped exactly like a code — can't be printed as a stop.
+        if known and code not in known:
+            print(f"[SCHEDULE] dropped unknown via code {code!r}")
+            continue
+        codes.append(code)
+    return ", ".join(codes)
+
+
+def _clean_layover(value) -> int:
+    """Ground time in minutes, or 0 when it isn't a believable number.
+
+    Capped at 24h: anything longer is the model misreading a total journey
+    time as a connection, and a "36h layover" on a domestic hop is obviously
+    wrong to a reader but would still be printed as if checked.
+    """
+    try:
+        minutes = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return 0
+    return minutes if 0 < minutes <= 24 * 60 else 0
+
+
 def _airport_phrase(iata: str) -> str:
     """Describe every airport serving the same city as [iata].
 
@@ -3866,8 +3908,12 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
                 'have exactly these keys: "airline" (name), "flight_number" '
                 '(e.g. "6E 6361"), "departure_time" ("HH:MM", 24-hour, '
                 'local), "arrival_time" ("HH:MM"), "stops" (integer), '
-                '"origin_airport" (the IATA code it actually departs from) '
-                'and "destination_airport" (the IATA code it arrives at). '
+                '"origin_airport" (the IATA code it actually departs from), '
+                '"destination_airport" (the IATA code it arrives at), '
+                '"via" (IATA codes of the intermediate stops, comma '
+                'separated, empty string for a nonstop flight) and '
+                '"layover_minutes" (total time on the ground between legs as '
+                'an integer, 0 for a nonstop flight). '
                 "Never use a placeholder such as XXXX — omit any flight "
                 f"whose number you cannot verify. If {airline} does not fly "
                 "this route, return an empty array."
@@ -3974,12 +4020,26 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
                 continue
             seen_numbers.add(compact)
 
+            try:
+                stops = int(item.get("stops") or 0)
+            except (TypeError, ValueError):
+                stops = 0
+
             flights.append({
                 "airline": str(item.get("airline", "")).strip(),
                 "flight_number": number,
                 "departure_time": depart,
                 "arrival_time": str(item.get("arrival_time", "")).strip(),
-                "stops": int(item.get("stops") or 0),
+                "stops": stops,
+                # Where the connection stops, and how long it waits there.
+                # "1 stop" alone doesn't identify a flight — a passenger
+                # remembers changing at Delhi, not that there was a change.
+                # Only kept for flights that actually stop, so a nonstop can
+                # never carry a stray layover.
+                "via": _clean_via(item.get("via")) if stops > 0 else "",
+                "layover_minutes": (
+                    _clean_layover(item.get("layover_minutes"))
+                    if stops > 0 else 0),
                 # Which airport this actually uses. A Mumbai trip can leave
                 # from BOM or NMI and a Goa trip land at GOI or GOX, and
                 # those are an hour apart — the user needs to see which.
