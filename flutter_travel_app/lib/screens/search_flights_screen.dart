@@ -481,8 +481,11 @@ class _AirportFieldState extends State<_AirportField> {
         _fallbackOption = AirportOption(
           code: resolved.iata,
           name: resolved.airportName,
-          // Qualified, so the state still reaches the server on selection.
-          city: query,
+          // The airport's own city, not the one typed. Flying to Bhilai means
+          // flying into Raipur, so the field should read "Raipur (RPR)" —
+          // "Bhilai (RPR)" names a city that has no airport in it. The note
+          // below still explains the connection.
+          city: resolved.city.isNotEmpty ? resolved.city : shortName,
         );
         _fallbackNote = '$shortName has no airport. Nearest is '
             '${resolved.airportName} (${resolved.iata}), '

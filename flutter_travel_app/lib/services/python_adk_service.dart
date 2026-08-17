@@ -532,6 +532,7 @@ class PythonADKService {
       return AirportResolution(
         iata: (data['iata'] ?? '').toString(),
         airportName: (data['airport_name'] ?? '').toString(),
+        city: (data['city'] ?? '').toString(),
         substituted: data['substituted'] == true,
         distanceKm: (data['distance_km'] as num?)?.round() ?? 0,
       );
@@ -994,12 +995,17 @@ class AirportResolution {
     required this.airportName,
     required this.substituted,
     required this.distanceKm,
+    this.city = '',
   });
 
   final String iata;
   final String airportName;
   final bool substituted;
   final int distanceKm;
+
+  /// The airport's own city, which is not the city that was searched when
+  /// [substituted] is true: Bhilai resolves to RPR, whose city is Raipur.
+  final String city;
 }
 
 /// One airport offered in the From/To pickers.

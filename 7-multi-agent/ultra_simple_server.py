@@ -1027,6 +1027,24 @@ def _geocode_city_uncached(city: str):
         return None
 
 
+def _airport_city_name(iata: str) -> str:
+    """The city an airport serves, e.g. RPR -> "Raipur".
+
+    Needed because a substituted airport belongs to a different city than the
+    one searched: someone flying to Bhilai leaves from Raipur's airport, so
+    labelling it "Bhilai (RPR)" names a city with no airport in it.
+    """
+    try:
+        rec = next((a for a in _load_airports()
+                    if a.get('code') == str(iata).upper()), None)
+        if not rec:
+            return ''
+        city = (_load_cities().get(rec.get('city_code')) or {}).get('name')
+        return str(city or '').strip()
+    except Exception:
+        return ''
+
+
 def _resolve_airport(city: str):
     """Resolve a free-text city to a bookable airport.
 
@@ -1048,7 +1066,8 @@ def _resolve_airport(city: str):
     exact = _city_to_iata(city)
     if exact:
         result = {'iata': exact, 'substituted': False,
-                  'airport_name': '', 'distance_km': 0, 'query': city}
+                  'airport_name': '', 'distance_km': 0, 'query': city,
+                  'city': _airport_city_name(exact)}
         _airport_lookup_cache[key] = result
         return result
 
@@ -1069,7 +1088,8 @@ def _resolve_airport(city: str):
         if exact is not None:
             result = {'iata': exact['code'], 'substituted': False,
                       'airport_name': str(exact.get('name') or '').strip(),
-                      'distance_km': 0, 'query': city}
+                      'distance_km': 0, 'query': city,
+                      'city': _airport_city_name(exact['code'])}
             _airport_lookup_cache[key] = result
             return result
 
@@ -1097,6 +1117,9 @@ def _resolve_airport(city: str):
         'airport_name': nearest.get('name', ''),
         'distance_km': round(best),
         'query': city,
+        # The airport's own city, not the one searched. A Bhilai trip flies
+        # from Raipur, so the picker should say Raipur.
+        'city': _airport_city_name(nearest['code']),
     }
     _airport_lookup_cache[key] = result
     print(f"[AIRPORTS] {city!r} -> {result['iata']} "
