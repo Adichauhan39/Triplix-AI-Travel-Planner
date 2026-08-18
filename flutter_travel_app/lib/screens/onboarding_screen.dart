@@ -12,9 +12,14 @@ import '../services/google_places_service.dart';
 import '../utils/currency_input_formatter.dart';
 import '../widgets/user_progress_checkpoint.dart';
 
-/// Single-page onboarding wizard that merges the four preference screens
-/// (destination, budget, transport, additional context) into a stepper
-/// flow with shared Back/Next navigation.
+/// Single-page onboarding wizard that merges the preference screens
+/// (destination, budget, additional context) into a stepper flow with shared
+/// Back/Next navigation.
+///
+/// Transport preferences used to be a step here and were dropped: Triplix
+/// only books flights, so asking someone whether they prefer trains or buses
+/// promised a service the app cannot deliver, and the answer had nowhere to
+/// go — nothing in the booking flow read it.
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -342,11 +347,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Step 3: Transport
-  // ---------------------------------------------------------------------------
-  final TextEditingController _transportController = TextEditingController();
-
-  // ---------------------------------------------------------------------------
   // Step 4: Additional context
   // ---------------------------------------------------------------------------
   String _selectedCompanion = '';
@@ -478,7 +478,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _destTopController.dispose();
     _destTopFocusNode.dispose();
     _budgetController.dispose();
-    _transportController.dispose();
     _aiContextController.dispose();
     super.dispose();
   }
@@ -504,8 +503,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         return _loadedCity.isNotEmpty;
       case 1:
         return _enteredBudget != null;
-      case 2:
-        return _transportController.text.trim().isNotEmpty;
       case 3:
         return _hasContextSelections;
       default:
@@ -546,8 +543,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool get _allComplete =>
       _tripBasicsComplete &&
       _isSectionComplete(0) &&
-      _isSectionComplete(1) &&
-      _isSectionComplete(2);
+      _isSectionComplete(1);
 
   // Persists every field collected across all four steps into
   // UserPreferencesProvider in one shot, then navigates to /home.
@@ -579,14 +575,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (_enteredBudget != null) {
       provider.updateBudget(_enteredBudget!,
           currencyCode: _selectedCurrencyCode);
-    }
-
-    // Step 3
-    final txt = _transportController.text.trim();
-    if (txt.isNotEmpty) {
-      provider.updateTransport(
-        txt.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
-      );
     }
 
     // Step 4
@@ -2112,18 +2100,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             isUnlocked: _isSectionUnlocked(1),
                             body: _buildBudgetStep(),
                           ),
-                          const SizedBox(height: 12),
-                          _buildAccordionSection(
-                            index: 2,
-                            title: 'How do you like to travel?',
-                            subtitle: _transportController.text.trim().isEmpty
-                                ? 'Tell us your transport preferences'
-                                : 'Preferences saved',
-                            icon: Icons.directions_bus,
-                            isComplete: _isSectionComplete(2),
-                            isUnlocked: _isSectionUnlocked(2),
-                            body: _buildTransportStep(),
-                          ),
                         ],
                       ),
                     ),
@@ -2776,166 +2752,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
               ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Step 3 UI – transport
-  // ---------------------------------------------------------------------------
-  Widget _buildTransportStep() {
-    return Padding(
-      padding: const EdgeInsets.all(AppConfig.paddingMedium),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 8),
-          Icon(Icons.smart_toy_outlined,
-              size: 48, color: AppConfig.primaryColor.withValues(alpha: 0.7)),
-          const SizedBox(height: 16),
-          const Text(
-            'Tell our AI your transport preferences',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Describe how you prefer to travel and our AI will find the best options for you.',
-            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 24),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.grey[300]!, width: 1),
-            ),
-            child: TextField(
-              controller: _transportController,
-              maxLines: 6,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                hintText:
-                    'e.g., I prefer trains over buses because I get motion sick. '
-                    'I like scenic routes even if they take longer. '
-                    'For local travel I prefer auto or cab. '
-                    'Budget-friendly options are fine for short distances...',
-                hintStyle: TextStyle(
-                  color: Colors.grey,
-                  fontSize: 14,
-                  height: 1.5,
-                ),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.all(16),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Choose transport modes (tap to add):',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Colors.black54,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              {
-                'label': 'Flight',
-                'value': 'Prefer flights',
-                'icon': Icons.flight,
-              },
-              {
-                'label': 'Train',
-                'value': 'Train travel preferred',
-                'icon': Icons.train,
-              },
-              {
-                'label': 'Cab',
-                'value': 'Cab/Auto for local travel',
-                'icon': Icons.local_taxi,
-              },
-              {
-                'label': 'Self Drive',
-                'value': 'Self-drive preferred',
-                'icon': Icons.directions_car,
-              },
-              {
-                'label': 'Bus',
-                'value': 'Budget bus preferred',
-                'icon': Icons.directions_bus,
-              },
-            ].map((item) {
-              final label = item['label']! as String;
-              final value = item['value']! as String;
-              final icon = item['icon']! as IconData;
-              final selected = _transportController.text
-                  .split(',')
-                  .map((e) => e.trim().toLowerCase())
-                  .contains(value.toLowerCase());
-
-              return InkWell(
-                onTap: () {
-                  // Single choice: picking a mode replaces whatever was
-                  // selected before, and tapping the current one clears it.
-                  // A trip is planned around one primary mode — allowing
-                  // "flight, train, bus" together produced a preference the
-                  // downstream search couldn't act on.
-                  setState(() {
-                    _transportController.text = selected ? '' : value;
-                  });
-                },
-                borderRadius: BorderRadius.circular(14),
-                child: Container(
-                  width: 112,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: selected
-                        ? AppConfig.primaryColor.withValues(alpha: 0.12)
-                        : Colors.grey[100],
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected
-                          ? AppConfig.primaryColor
-                          : Colors.grey.shade300,
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        icon,
-                        size: 28,
-                        color:
-                            selected ? AppConfig.primaryColor : Colors.black54,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        label,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: selected
-                              ? AppConfig.primaryColor
-                              : Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
           ),
         ],
       ),
