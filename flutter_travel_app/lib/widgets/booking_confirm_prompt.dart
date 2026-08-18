@@ -737,12 +737,20 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// have it yet", which records the stay without inventing a name for it.
   ///
   /// Flights work the same way once any are listed. The exception is a route
-  /// we found nothing for: with no cards to tap, requiring a tap would make
-  /// the sheet impossible to complete, so a typed number is accepted there.
+  /// the lookup finished on and found nothing for: with no cards to tap,
+  /// requiring a tap would make the sheet impossible to complete, so a typed
+  /// number is accepted there.
+  ///
+  /// "Finished" matters. Testing for an empty list alone enabled Save while
+  /// the lookup was still running, because the list is empty then too — so
+  /// typing an airline name lit the button up seconds before any flight
+  /// appeared, and pressing it saved a number nobody had confirmed.
   bool get _canSave => _isFlight
-      ? (_flightOptions.isEmpty
-          ? _controller.text.trim().isNotEmpty
-          : _pickedFromPlaces)
+      ? (_loadingFlights
+          ? false
+          : (_searchedSchedule && _flightOptions.isEmpty)
+              ? _controller.text.trim().isNotEmpty
+              : _pickedFromPlaces)
       : _selectedHotel != null;
 
   /// Marks a flight as the user's choice, the same way tapping a hotel card
@@ -813,7 +821,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
       // This is the only point we know the user actually booked something and
       // wants it recorded, so it's the only point worth spending a slow,
       // billable grounded search on.
-      if (_flightOptions.isEmpty && !_searchedSchedule) {
+      // Not while one is already in flight: typing starts the lookup, so
+      // pressing Save mid-search used to fire a second identical request and
+      // pay for the same grounded query twice.
+      if (_flightOptions.isEmpty && !_searchedSchedule && !_loadingFlights) {
         setState(() => _verifying = true);
         await _findFlightsOnRoute();
         if (!mounted) return;
