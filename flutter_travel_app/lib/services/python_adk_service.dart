@@ -475,6 +475,45 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// Applies a typed request to a day-by-day plan, returning the new days.
+  ///
+  /// Returns null on failure so the caller can keep showing the plan the user
+  /// already has rather than replacing it with nothing.
+  Future<List<Map<String, dynamic>>?> adjustPlan({
+    required List<Map<String, dynamic>> days,
+    required String request,
+    String destination = '',
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/itinerary/adjust'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'days': days,
+              'request': request,
+              'destination': destination,
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) {
+        debugPrint('adjustPlan: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') {
+        debugPrint('adjustPlan: ${data['message']}');
+        return null;
+      }
+      return ((data['days'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (e) {
+      debugPrint('adjustPlan failed: $e');
+      return null;
+    }
+  }
+
   /// Airports whose city, name or code matches [query].
   ///
   /// Backed by the cached airport dataset rather than a model or Places, so it

@@ -3688,6 +3688,113 @@ Format it in a clear, easy-to-read structure with emojis for visual appeal."""
         }
 
 
+@app.post("/api/itinerary/adjust")
+def adjust_itinerary(request: dict):
+    """Apply a typed request to a day-by-day plan, returning the same shape.
+
+    Structured in and structured out, unlike /api/itinerary/replan below,
+    which returns prose. The screen renders days and items, so prose would
+    have to be parsed back into them — and a parser over free text is exactly
+    where an assistant's phrasing turns into a wrong itinerary.
+
+    The plan starts as the activities the user chose, so the model is told to
+    keep them unless asked otherwise. Anything it introduces is flagged
+    added_by_assistant, because we have not checked that it exists — the same
+    line the booking flow draws between a verified place and a typed one.
+    """
+    try:
+        days = request.get('days') or []
+        instruction = str(request.get('request') or '').strip()
+        destination = str(request.get('destination') or '').strip()
+
+        if not days:
+            return {"status": "error", "message": "no_plan", "days": []}
+        if not instruction:
+            return {"status": "success", "days": days}
+        if not GOOGLE_API_KEY:
+            return {"status": "error", "message": "no_api_key", "days": days}
+
+        prompt = (
+            "You are editing a travel plan. Apply the user's request and "
+            "return the WHOLE plan back.\n\n"
+            f"Destination: {destination or 'unknown'}\n"
+            f"Current plan (JSON): {json.dumps(days)}\n"
+            f"User request: {instruction}\n\n"
+            "Rules:\n"
+            "- Keep every existing item unless the request asks to remove, "
+            "replace or move it. These are the user's own choices.\n"
+            "- Keep the same dates and the same number of days.\n"
+            "- Set \"added_by_assistant\": true on any item you introduce, "
+            "and keep it false on items that were already there.\n"
+            "- Only suggest real, specific places in the destination. Never "
+            "invent a name.\n"
+            "Return ONLY a JSON array of days, each "
+            '{"date": "YYYY-MM-DD", "items": [{"title": str, '
+            '"added_by_assistant": bool}]}. No prose.'
+        )
+
+        from google import genai as genai_client
+        from google.genai import types as genai_types
+
+        client = genai_client.Client(api_key=GOOGLE_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-3.7-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(
+                    google_search=genai_types.GoogleSearch())],
+            ),
+        )
+
+        text = (response.text or "").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        start, end = text.find("["), text.rfind("]")
+        if start == -1 or end == -1:
+            return {"status": "error", "message": "unparseable", "days": days}
+
+        parsed = json.loads(text[start:end + 1])
+
+        # Rebuilt rather than trusted wholesale: a malformed reply must not be
+        # able to empty someone's plan or drop the dates it is keyed on.
+        cleaned = []
+        for day in parsed:
+            if not isinstance(day, dict):
+                continue
+            items = []
+            for item in (day.get('items') or []):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get('title') or '').strip()
+                if not title:
+                    continue
+                items.append({
+                    'title': title,
+                    'added_by_assistant': bool(item.get('added_by_assistant')),
+                })
+            cleaned.append({
+                'date': str(day.get('date') or '').strip(),
+                'items': items,
+            })
+
+        if len(cleaned) != len(days):
+            print(f"[PLAN] day count changed {len(days)} -> {len(cleaned)};"
+                  " keeping the original")
+            return {"status": "error", "message": "day_count_changed",
+                    "days": days}
+
+        return {"status": "success", "days": cleaned}
+
+    except Exception as e:
+        print(f"[PLAN] adjust failed: {e}")
+        # The caller keeps showing the plan it already has.
+        return {"status": "error", "message": str(e),
+                "days": request.get('days') or []}
+
+
 @app.post("/api/itinerary/replan")
 def replan_itinerary(request: AgentRequest):
     try:

@@ -12,6 +12,7 @@ import 'config/app_config.dart';
 import 'screens/home_screen.dart';
 import 'screens/search_hotels_screen.dart';
 import 'screens/swipe_screen.dart';
+import 'screens/trip_plan_screen.dart';
 import 'screens/bookings_screen.dart';
 import 'screens/swipeable_hotels_screen.dart';
 import 'screens/cart_screen.dart';
@@ -32,6 +33,7 @@ import 'providers/app_provider.dart';
 import 'providers/user_preferences_provider.dart';
 import 'providers/hotel_shortlist_provider.dart';
 import 'providers/booked_trip_provider.dart';
+import 'providers/trip_plan_provider.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
 
@@ -98,6 +100,7 @@ class MyApp extends StatelessWidget {
         // What the user says they've booked on partner sites — the only
         // signal we get, since the redirect never reports back.
         ChangeNotifierProvider(create: (_) => BookedTripProvider()),
+        ChangeNotifierProvider(create: (_) => TripPlanProvider()),
       ],
       child: GetMaterialApp(
         title: AppConfig.appName,
@@ -415,6 +418,10 @@ class MyApp extends StatelessWidget {
           GetPage(
               name: '/swipe',
               page: () => const SelectionArea(child: SwipeScreen()),
+              middlewares: [AuthGuard()]),
+          GetPage(
+              name: '/trip-plan',
+              page: () => const SelectionArea(child: TripPlanScreen()),
               middlewares: [AuthGuard()]),
           GetPage(
               name: '/bookings',

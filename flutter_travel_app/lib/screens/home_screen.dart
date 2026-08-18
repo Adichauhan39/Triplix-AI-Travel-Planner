@@ -15,7 +15,7 @@ import '../services/voice_input_service.dart';
 import '../services/trip_photo_service.dart';
 import '../providers/user_preferences_provider.dart';
 import '../widgets/triplix_logo.dart';
-import 'swipe_screen.dart';
+import 'trip_plan_screen.dart';
 import 'bookings_screen.dart';
 import 'mock_booking_screen.dart';
 import 'route_map_screen.dart';
@@ -37,9 +37,13 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
 
+  // The plan takes the slot the swipe deck had. Swiping asked the user to
+  // make a decision per card with no overview; the plan shows the finished
+  // trip and lets them change it. SwipeScreen still exists and its route is
+  // intact, so putting it back is a one-line change.
   final List<Widget> _screens = [
     const HomeTab(),
-    const SwipeScreen(),
+    const TripPlanScreen(),
     const BookingsScreen(),
     const BudgetTab(),
     const ProfileTab(),
@@ -119,9 +123,9 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Home',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.swipe_outlined),
-            activeIcon: Icon(Icons.swipe),
-            label: 'Swipe',
+            icon: Icon(Icons.map_outlined),
+            activeIcon: Icon(Icons.map),
+            label: 'Trip',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.bookmark_outline),
