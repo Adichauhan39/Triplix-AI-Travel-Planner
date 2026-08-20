@@ -143,7 +143,11 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     // on every search — slow and billable — and most searches never end in a
     // booking. The confirmation sheet offers it as a button instead, so it
     // only runs for someone who actually wants help identifying their flight.
-    final outbound = await BookingConfirmPrompt.launchAndConfirm(
+    // One sheet for the whole trip. Both legs were bought in the same
+    // transaction, so confirming the outbound, saving, then reopening an
+    // identical sheet for the return made one purchase feel like two - and by
+    // then the user had closed the page they could check it against.
+    await BookingConfirmPrompt.launchAndConfirm(
       context,
       launch: () => AffiliateLinks.open(AffiliateLinks.aviasalesFlightSearch(
         originCity: _origin!,
@@ -155,11 +159,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
         destinationIataOverride: _destinationIata,
       )),
       kind: BookingKind.flight,
-      // Named, because a round trip now asks twice and the two sheets are
-      // otherwise identical.
-      title: _roundTrip
-          ? 'Outbound: $_origin → $_destination'
-          : '$_origin → $_destination',
+      title: '$_origin to $_destination',
       startDate: _departDate,
       endDate: _roundTrip ? _returnDate : null,
       // Lets the prompt list the real departures on this route so the user
@@ -168,30 +168,9 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
       flightDestination: _destination!,
       flightOriginIata: _originIata ?? '',
       flightDestinationIata: _destinationIata ?? '',
-    );
-
-    // A round trip is two flights, and only the outbound was ever recorded —
-    // so the itinerary knew how the user got there and nothing about how
-    // they were getting back. Asked separately because it is a different
-    // flight number, on a different date, in the opposite direction.
-    //
-    // Only after the outbound is confirmed: someone who didn't book has
-    // nothing to tell us about a return either, and asking twice for a
-    // booking that didn't happen is the nagging this flow avoids. No second
-    // redirect — both legs were bought on the same Aviasales page.
-    if (outbound == null || !_roundTrip || _returnDate == null || !mounted) {
-      return;
-    }
-
-    await BookingConfirmPrompt.show(
-      context,
-      kind: BookingKind.flight,
-      title: 'Return: $_destination → $_origin',
-      startDate: _returnDate!,
-      flightOrigin: _destination!,
-      flightDestination: _origin!,
-      flightOriginIata: _destinationIata ?? '',
-      flightDestinationIata: _originIata ?? '',
+      // Adds the return leg to the same sheet, looked up on the reversed
+      // route for the return date.
+      returnDate: _roundTrip ? _returnDate : null,
     );
   }
 

@@ -10,6 +10,99 @@ import '../providers/booked_trip_provider.dart';
 import '../services/affiliate_links.dart';
 import '../services/python_adk_service.dart';
 
+/// Every flight we can find on a route and date, newest data merged in.
+///
+/// Shared by both legs of a round trip, so the return leg gets exactly the
+/// same treatment as the outbound rather than a second, subtly different
+/// implementation. [onPartial] fires with the cached fares as soon as they
+/// arrive (~2s) so the list can render before the slower grounded schedule
+/// lands behind it.
+Future<List<Map<String, dynamic>>> _lookupFlights({
+  required PythonADKService adk,
+  required String origin,
+  required String destination,
+  required String originIata,
+  required String destinationIata,
+  required DateTime date,
+  void Function(List<Map<String, dynamic>>)? onPartial,
+}) async {
+  final wanted = _isoDayOf(date);
+
+  final fares = await adk.searchFlightFares(
+    from: origin,
+    to: destination,
+    departureDate: date,
+  );
+
+  // Only flights actually on the requested day. The search endpoint widens to
+  // nearby dates when the exact one has no cached fare — useful when
+  // browsing, wrong here: asking "which flight did you book on 10 Sep" while
+  // listing departures from the 3rd invites confirming a flight never taken.
+  final sameDay = List<Map<String, dynamic>>.from(fares['flights'] ?? [])
+      .where((f) => (f['flight_date'] ?? '').toString() == wanted);
+
+  // One row per flight: the fare list repeats a flight at several prices, and
+  // the user is identifying a flight, not a fare.
+  final seenFare = <String>{};
+  final unique = <Map<String, dynamic>>[];
+  for (final f in sameDay) {
+    if (seenFare.add('${f['route_number']}_${f['departure_time']}')) {
+      unique.add(f);
+    }
+  }
+  if (unique.isNotEmpty) onPartial?.call(unique);
+
+  // IATA codes, not city names: the server caches on the exact strings it was
+  // given, so "Bangalore" and "BLR" would be separate entries. The resolved
+  // code comes first because it covers cities the built-in map doesn't, and
+  // substitutes the nearest airport for a city with none — without it a
+  // Bilaspur trip asks for flights from "Bilaspur", which is not an airport.
+  final from = originIata.isNotEmpty
+      ? originIata
+      : AffiliateLinks.iataCodeFor(origin) ?? origin;
+  final to = destinationIata.isNotEmpty
+      ? destinationIata
+      : AffiliateLinks.iataCodeFor(destination) ?? destination;
+
+  final schedule = await adk.flightSchedule(
+    originIata: from,
+    destinationIata: to,
+    isoDate: wanted,
+  );
+
+  String key(String s) => s.toLowerCase().replaceAll(RegExp(r'[\s-]'), '');
+  final merged = <Map<String, dynamic>>[...unique];
+  final seen =
+      unique.map((f) => key((f['route_number'] ?? '').toString())).toSet();
+
+  for (final f in schedule) {
+    final number = (f['flight_number'] ?? '').toString();
+    if (number.isEmpty || !seen.add(key(number))) continue;
+    merged.add({
+      'provider': (f['airline'] ?? '').toString(),
+      'route_number': number,
+      'departure_time': (f['departure_time'] ?? '').toString(),
+      'arrival_time': (f['arrival_time'] ?? '').toString(),
+      'stops': f['stops'] ?? 0,
+      'flight_date': wanted,
+      // Carried through so a card can show BOM vs NMI, or GOI vs GOX —
+      // without these two rows from different airports look identical.
+      'origin_airport': (f['origin_airport'] ?? '').toString(),
+      'destination_airport': (f['destination_airport'] ?? '').toString(),
+      // Where a connection stops and how long it waits — the detail a
+      // passenger actually remembers about their own itinerary.
+      'via': (f['via'] ?? '').toString(),
+      'layover_minutes': f['layover_minutes'] ?? 0,
+      'from_schedule': true,
+    });
+  }
+  return merged;
+}
+
+String _isoDayOf(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
+    '${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
+
 /// Asks the user whether they completed a booking after returning from a
 /// partner site.
 ///
@@ -59,6 +152,7 @@ class BookingConfirmPrompt {
     String flightDestination = '',
     String flightOriginIata = '',
     String flightDestinationIata = '',
+    DateTime? returnDate,
   }) async {
     await launch();
 
@@ -78,6 +172,7 @@ class BookingConfirmPrompt {
       flightDestination: flightDestination,
       flightOriginIata: flightOriginIata,
       flightDestinationIata: flightDestinationIata,
+      returnDate: returnDate,
     );
   }
 
@@ -95,6 +190,7 @@ class BookingConfirmPrompt {
     String flightDestination = '',
     String flightOriginIata = '',
     String flightDestinationIata = '',
+    DateTime? returnDate,
   }) async {
     final noun = kind == BookingKind.flight ? 'flight' : 'stay';
 
@@ -188,6 +284,7 @@ class BookingConfirmPrompt {
       flightDestination: flightDestination,
       flightOriginIata: flightOriginIata,
       flightDestinationIata: flightDestinationIata,
+      returnDate: returnDate,
     );
   }
 
@@ -206,6 +303,7 @@ class BookingConfirmPrompt {
     String flightDestination = '',
     String flightOriginIata = '',
     String flightDestinationIata = '',
+    DateTime? returnDate,
   }) async {
     final result = await showModalBottomSheet<_DetailResult>(
       context: context,
@@ -222,6 +320,7 @@ class BookingConfirmPrompt {
         flightOriginIata: flightOriginIata,
         flightDestinationIata: flightDestinationIata,
         flightDate: startDate,
+        returnDate: returnDate,
       ),
     );
 
@@ -230,7 +329,7 @@ class BookingConfirmPrompt {
     final isFlight = kind == BookingKind.flight;
     final entered = result.value;
 
-    return _save(
+    final saved = _save(
       context,
       ConfirmedBooking(
         kind: kind,
@@ -250,6 +349,31 @@ class BookingConfirmPrompt {
       ),
       lookupFailed: result.lookupFailed,
     );
+
+    // The return is a separate flight on a separate day, so it is recorded as
+    // its own booking rather than squeezed into fields describing the
+    // outbound. Skipped when the user left it blank - it is optional.
+    final returnNumber = result.returnFlightNumber;
+    if (isFlight &&
+        returnNumber != null &&
+        returnNumber.isNotEmpty &&
+        returnDate != null &&
+        context.mounted) {
+      _save(
+        context,
+        ConfirmedBooking(
+          kind: kind,
+          title: 'Return: $title',
+          startDate: returnDate,
+          flightNumber: returnNumber,
+          departureTime: result.returnDepartureTime,
+          // Only ever set by tapping a card, so it is always a real flight.
+          flightIsRealFlight: true,
+        ),
+      );
+    }
+
+    return saved;
   }
 
 
@@ -313,7 +437,14 @@ class _DetailResult {
     this.pickedFromPlaces, {
     this.departureTime,
     this.lookupFailed = false,
+    this.returnFlightNumber,
+    this.returnDepartureTime,
   });
+
+  /// The return leg, when the user picked one. Null on a one-way trip, and
+  /// null on a round trip they chose not to fill in - it is optional.
+  final String? returnFlightNumber;
+  final String? returnDepartureTime;
 
   /// Set only when a flight was chosen from the real departures list.
   final String? departureTime;
@@ -343,6 +474,7 @@ class _BookingDetailSheet extends StatefulWidget {
     this.flightOriginIata = '',
     this.flightDestinationIata = '',
     this.flightDate,
+    this.returnDate,
   });
 
   final BookingKind kind;
@@ -360,6 +492,10 @@ class _BookingDetailSheet extends StatefulWidget {
   /// them, in which case the built-in map is used as before.
   final String flightOriginIata;
   final String flightDestinationIata;
+
+  /// Set for a round trip, which puts the return leg in this same sheet
+  /// rather than in a second one after saving.
+  final DateTime? returnDate;
   final DateTime? flightDate;
 
   @override
@@ -393,6 +529,11 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// Set when a lookup succeeded but matched nothing, so the city list shown
   /// in its place can be labelled honestly rather than looking like results.
   bool _noMatch = false;
+
+  /// The return leg's selection, reported up by _ReturnLegPicker. Held here
+  /// rather than inside the picker so Save can carry both legs out together.
+  String? _returnNumber;
+  String? _returnTime;
 
   /// Set when the request itself failed, as opposed to matching nothing.
   ///
@@ -470,111 +611,24 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     });
   }
 
-  /// Fetches the real departures for this route and date. Same source the
-  /// flight search uses, so the list is exactly what was bookable.
+  /// Fetches the real departures for this route and date, via the shared
+  /// lookup both legs of a round trip use.
   Future<void> _loadFlightOptions() async {
     setState(() => _loadingFlights = true);
-    final result = await _adkService.searchFlightFares(
-      from: widget.flightOrigin,
-      to: widget.flightDestination,
-      departureDate: widget.flightDate!,
+    final merged = await _lookupFlights(
+      adk: _adkService,
+      origin: widget.flightOrigin,
+      destination: widget.flightDestination,
+      originIata: widget.flightOriginIata,
+      destinationIata: widget.flightDestinationIata,
+      date: widget.flightDate!,
+      // Cached fares arrive in ~2s; show them rather than holding the list
+      // back for the slower grounded schedule.
+      onPartial: (fares) {
+        if (mounted) setState(() => _flightOptions = fares);
+      },
     );
     if (!mounted) return;
-
-    // Keep only flights actually on the requested day.
-    //
-    // The search endpoint deliberately widens to nearby dates when the exact
-    // day has no cached fare — useful when browsing, wrong here. Asking "which
-    // flight did you book on 10 Sep" while listing departures from the 3rd,
-    // 5th and 24th invites the user to confirm a flight they were never on.
-    // Better to show nothing and let them type it.
-    final wanted = _isoDay(widget.flightDate!);
-    final sameDay = List<Map<String, dynamic>>.from(result['flights'] ?? [])
-        .where((f) => (f['flight_date'] ?? '').toString() == wanted);
-
-    // Collapse to one row per flight: the fare list repeats the same flight at
-    // different prices, and the user is identifying a flight, not a fare.
-    final seen = <String>{};
-    final unique = <Map<String, dynamic>>[];
-    for (final f in sameDay) {
-      final key = '${f['route_number']}_${f['departure_time']}';
-      if (seen.add(key)) unique.add(f);
-    }
-
-    // Show the fares straight away — they arrive in ~2s — then bring in the
-    // schedule behind them.
-    if (mounted && unique.isNotEmpty) {
-      setState(() => _flightOptions = unique);
-    }
-
-    // The fare cache is a price cache, not a timetable: BLR-RPR holds one
-    // fare where the route actually flies four times a day. So the grounded
-    // schedule always runs here and is merged in. It's justified at this
-    // point — the sheet only opens once the user has said they booked —
-    // unlike the earlier version that fired on every flight search.
-    await _findFlightsOnRoute(existing: unique);
-  }
-
-  /// Merges published schedules into [existing], keeping one row per flight.
-  Future<void> _findFlightsOnRoute({
-    List<Map<String, dynamic>> existing = const [],
-  }) async {
-    final wanted = _isoDay(widget.flightDate!);
-
-    // IATA codes, not city names: the server caches on the exact strings it
-    // was given, so "Bangalore" and "BLR" would be different entries.
-    // Server-resolved code first: it covers cities the built-in map doesn't,
-    // and substitutes the nearest airport for a city with none. Without it a
-    // Bilaspur trip asked the schedule lookup for flights from "Bilaspur",
-    // which is not an airport and cannot return anything useful.
-    final originIata = widget.flightOriginIata.isNotEmpty
-        ? widget.flightOriginIata
-        : AffiliateLinks.iataCodeFor(widget.flightOrigin) ??
-            widget.flightOrigin;
-    final destIata = widget.flightDestinationIata.isNotEmpty
-        ? widget.flightDestinationIata
-        : AffiliateLinks.iataCodeFor(widget.flightDestination) ??
-            widget.flightDestination;
-
-    if (mounted) setState(() => _loadingFlights = true);
-    final schedule = await _adkService.flightSchedule(
-      originIata: originIata,
-      destinationIata: destIata,
-      isoDate: wanted,
-    );
-    if (!mounted) return;
-
-    String key(String s) => s.toLowerCase().replaceAll(RegExp(r'[\s-]'), '');
-    final merged = <Map<String, dynamic>>[...existing];
-    final seen = existing
-        .map((f) => key((f['route_number'] ?? '').toString()))
-        .toSet();
-
-    for (final f in schedule) {
-      final number = (f['flight_number'] ?? '').toString();
-      if (number.isEmpty || !seen.add(key(number))) continue;
-      merged.add({
-        'provider': (f['airline'] ?? '').toString(),
-        'route_number': number,
-        'departure_time': (f['departure_time'] ?? '').toString(),
-        'arrival_time': (f['arrival_time'] ?? '').toString(),
-        'stops': f['stops'] ?? 0,
-        'flight_date': wanted,
-        // Carried through so the card can show BOM vs NMI, or GOI vs GOX —
-        // without these the row looks identical to one from the other
-        // airport in the same city.
-        'origin_airport': (f['origin_airport'] ?? '').toString(),
-        'destination_airport': (f['destination_airport'] ?? '').toString(),
-        // Where a connection stops and how long it waits — the detail a
-        // passenger actually remembers about their own itinerary.
-        'via': (f['via'] ?? '').toString(),
-        'layover_minutes': f['layover_minutes'] ?? 0,
-        // Marks the row as schedule-derived rather than a real fare, so the
-        // UI can say where it came from.
-        'from_schedule': true,
-      });
-    }
-
     setState(() {
       _searchedSchedule = true;
       _flightOptions = merged;
@@ -582,16 +636,14 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
     });
   }
 
+  /// Kept for the Save path, which runs the lookup when nothing is listed yet.
+  Future<void> _findFlightsOnRoute() => _loadFlightOptions();
+
   /// "2026-09-10" -> "10 Sep", for the row subtitle.
   static String _shortDay(String iso) {
     final parsed = DateTime.tryParse(iso);
     return parsed == null ? iso : DateFormat('dd MMM').format(parsed);
   }
-
-  static String _isoDay(DateTime d) =>
-      '${d.year.toString().padLeft(4, '0')}-'
-      '${d.month.toString().padLeft(2, '0')}-'
-      '${d.day.toString().padLeft(2, '0')}';
 
   /// IATA airline codes to the names people actually type. The fare data only
   /// carries the code ("6E"), so without this "IndiGo" matches nothing — and
@@ -616,13 +668,14 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// number, the departure time, the airline code and the airline name, so any
   /// of them narrows the list. "6E", "18:40" and "indigo" all work, and an
   /// empty field shows everything.
-  List<Map<String, dynamic>> _flightsMatching(String query) {
+  static List<Map<String, dynamic>> _matchesIn(
+      List<Map<String, dynamic>> options, String query) {
     // Ignore spaces and colons so "6E 405" matches "6E405" and "1840"
     // matches "18:40" — people type these inconsistently.
     String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[\s:]'), '');
     final nq = norm(query);
 
-    return _flightOptions.where((f) {
+    return options.where((f) {
       final code = (f['provider'] ?? '').toString();
       final number = norm((f['route_number'] ?? '').toString());
       final time = norm((f['departure_time'] ?? '').toString());
@@ -644,7 +697,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// broken filter, which is exactly how it was reported.
   bool get _flightNoMatch {
     final q = _controller.text.trim();
-    return q.isNotEmpty && _flightsMatching(q).isEmpty;
+    return q.isNotEmpty && _matchesIn(_flightOptions, q).isEmpty;
   }
 
   /// "Non-stop", or "1 stop in DEL · 2h 15m wait".
@@ -655,7 +708,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// Each part is only added when we actually have it, so a flight the
   /// schedule couldn't detail still reads correctly rather than saying
   /// "1 stop in  ·  wait".
-  String _stopsLabel(Map<String, dynamic> flight, int stops) {
+  static String _stopsLabel(Map<String, dynamic> flight, int stops) {
     if (stops == 0) return 'Non-stop';
 
     final via = (flight['via'] ?? '').toString().trim();
@@ -681,7 +734,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// filled the top of the list and the direct flights were below the fold.
   /// Someone recognising the flight they took looks for a direct one first,
   /// and a screen full of connections reads as the wrong route entirely.
-  List<Map<String, dynamic>> _sortedForDisplay(
+  static List<Map<String, dynamic>> _sortedForDisplay(
       List<Map<String, dynamic>> rows) {
     final out = [...rows];
     out.sort((a, b) {
@@ -698,7 +751,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   List<Map<String, dynamic>> get _filteredFlights {
     final q = _controller.text.trim();
     if (q.isEmpty) return _sortedForDisplay(_flightOptions);
-    final matches = _flightsMatching(q);
+    final matches = _matchesIn(_flightOptions, q);
     return _sortedForDisplay(matches.isEmpty ? _flightOptions : matches);
   }
 
@@ -808,6 +861,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
         text,
         _pickedFromPlaces,
         departureTime: _pickedDepartureTime,
+        returnFlightNumber: _returnNumber,
+        returnDepartureTime: _returnTime,
       ));
       return;
     }
@@ -1559,6 +1614,21 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               ),
             ),
           ],
+          // The return leg, in the same sheet. Both flights were bought in
+          // one transaction, so they are confirmed in one place.
+          if (_isFlight && widget.returnDate != null)
+            _ReturnLegPicker(
+              origin: widget.flightDestination,
+              destination: widget.flightOrigin,
+              originIata: widget.flightDestinationIata,
+              destinationIata: widget.flightOriginIata,
+              date: widget.returnDate!,
+              onSelected: (number, time) => setState(() {
+                _returnNumber = number;
+                _returnTime = time;
+              }),
+            ),
+
           const SizedBox(height: 20),
 
           // Says why the button is dead. A greyed button with no explanation
@@ -1617,6 +1687,236 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The return leg of a round trip, shown under the outbound in the same sheet.
+///
+/// Both legs are chosen in one place because they were bought in one
+/// transaction. Asking for the outbound, saving, then reopening a second
+/// identical sheet for the return made one purchase feel like two, and by then
+/// the user had closed the page they could check it against.
+///
+/// Optional by design: Save needs the outbound, not this. Someone who only
+/// remembers one flight number should still be able to record the trip.
+class _ReturnLegPicker extends StatefulWidget {
+  const _ReturnLegPicker({
+    required this.origin,
+    required this.destination,
+    required this.originIata,
+    required this.destinationIata,
+    required this.date,
+    required this.onSelected,
+  });
+
+  final String origin;
+  final String destination;
+  final String originIata;
+  final String destinationIata;
+  final DateTime date;
+
+  /// Nulls mean the selection was cleared by typing over it.
+  final void Function(String? number, String? departureTime) onSelected;
+
+  @override
+  State<_ReturnLegPicker> createState() => _ReturnLegPickerState();
+}
+
+class _ReturnLegPickerState extends State<_ReturnLegPicker> {
+  final TextEditingController _controller = TextEditingController();
+  final PythonADKService _adk = PythonADKService();
+
+  List<Map<String, dynamic>> _options = [];
+  bool _loading = false;
+  bool _searched = false;
+  bool _picked = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Same rule as the outbound: the lookup runs on intent, not on open. It is
+  /// a grounded model call per airline, and firing two of them the moment a
+  /// round-trip sheet appears doubles the cost for someone who may be about to
+  /// dismiss it.
+  void _ensureLoaded() {
+    if (_options.isNotEmpty || _loading || _searched) return;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final merged = await _lookupFlights(
+      adk: _adk,
+      origin: widget.origin,
+      destination: widget.destination,
+      originIata: widget.originIata,
+      destinationIata: widget.destinationIata,
+      date: widget.date,
+      onPartial: (fares) {
+        if (mounted) setState(() => _options = fares);
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _options = merged;
+      _searched = true;
+      _loading = false;
+    });
+  }
+
+  void _pick(Map<String, dynamic> flight) {
+    final number = (flight['route_number'] ?? '').toString();
+    final time = (flight['departure_time'] ?? '').toString();
+    _controller.text = number;
+    FocusScope.of(context).unfocus();
+    setState(() => _picked = true);
+    widget.onSelected(number, time.isEmpty ? null : time);
+  }
+
+  List<Map<String, dynamic>> get _visible {
+    final q = _controller.text.trim();
+    if (q.isEmpty) return _BookingDetailSheetState._sortedForDisplay(_options);
+    final matches = _BookingDetailSheetState._matchesIn(_options, q);
+    return _BookingDetailSheetState._sortedForDisplay(
+        matches.isEmpty ? _options : matches);
+  }
+
+  String _rowTitle(Map<String, dynamic> f, String number) {
+    final airline = _BookingDetailSheetState._airlineNameFor(
+        (f['provider'] ?? '').toString());
+    return number.isEmpty ? airline : '$airline · $number';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maxListHeight =
+        (MediaQuery.of(context).size.height * 0.28).clamp(120.0, 220.0);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 20),
+        const Divider(),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Icon(Icons.flight_land,
+                size: 18, color: AppConfig.primaryColor),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Return: ${widget.origin} to ${widget.destination}',
+                style:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+            ),
+            Text(DateFormat('dd MMM').format(widget.date),
+                style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text('Optional — you can add this later.',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _controller,
+          textCapitalization: TextCapitalization.characters,
+          onChanged: (_) {
+            setState(() => _picked = false);
+            widget.onSelected(null, null);
+            _ensureLoaded();
+          },
+          decoration: InputDecoration(
+            labelText: 'Return flight number, time or airline',
+            isDense: true,
+            suffixIcon: _picked
+                ? const Icon(Icons.check_circle, color: Colors.green)
+                : null,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+            ),
+          ),
+        ),
+        if (_loading) ...[
+          const SizedBox(height: 10),
+          const Row(
+            children: [
+              SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 8),
+              Text('Finding return flights…', style: TextStyle(fontSize: 12)),
+            ],
+          ),
+        ],
+        if (!_loading && _options.isEmpty && !_searched) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _load,
+            icon: const Icon(Icons.search, size: 16),
+            label: const Text('Show return flights'),
+          ),
+        ],
+        if (_options.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxListHeight),
+            child: SingleChildScrollView(
+              child: Column(
+                children: _visible.map((f) {
+                  final number = (f['route_number'] ?? '').toString();
+                  final time = (f['departure_time'] ?? '').toString();
+                  final stops = (f['stops'] as num?)?.toInt() ?? 0;
+                  final fromApt = (f['origin_airport'] ?? '').toString();
+                  final toApt = (f['destination_airport'] ?? '').toString();
+                  final selected = _picked && _controller.text.trim() == number;
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    elevation: 0,
+                    color: selected
+                        ? AppConfig.primaryColor.withValues(alpha: 0.08)
+                        : null,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+                      side: BorderSide(
+                        color: selected
+                            ? AppConfig.primaryColor
+                            : Colors.grey.shade300,
+                        width: selected ? 2 : 1,
+                      ),
+                    ),
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(
+                          selected ? Icons.check_circle : Icons.flight_takeoff,
+                          size: 18,
+                          color: AppConfig.primaryColor),
+                      title: Text(_rowTitle(f, number),
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        [
+                          if (time.isNotEmpty) 'Departs $time',
+                          if (fromApt.isNotEmpty && toApt.isNotEmpty)
+                            '$fromApt to $toApt',
+                          _BookingDetailSheetState._stopsLabel(f, stops),
+                        ].join(' · '),
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      onTap: () => _pick(f),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
