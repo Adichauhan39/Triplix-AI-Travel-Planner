@@ -501,8 +501,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     switch (index) {
       case 0:
         return _loadedCity.isNotEmpty;
-      case 1:
-        return _enteredBudget != null;
       case 3:
         return _hasContextSelections;
       default:
@@ -540,10 +538,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return '${items.sublist(0, items.length - 1).join(', ')} and ${items.last}';
   }
 
-  bool get _allComplete =>
-      _tripBasicsComplete &&
-      _isSectionComplete(0) &&
-      _isSectionComplete(1);
+  // Budget is no longer collected here, so "Where to next?" is the last
+  // section standing between the user and Continue.
+  bool get _allComplete => _tripBasicsComplete && _isSectionComplete(0);
 
   // Persists every field collected across all four steps into
   // UserPreferencesProvider in one shot, then navigates to /home.
@@ -2100,18 +2097,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   'Fill in Trip basics above and tap Explore',
                               body: _buildDestinationStep(),
                             ),
-                          ),
-                          const SizedBox(height: 12),
-                          _buildAccordionSection(
-                            index: 1,
-                            title: 'Budget & Allocation',
-                            subtitle: _budgetController.text.trim().isEmpty
-                                ? 'Set your trip budget and how to split it'
-                                : _formatBudgetAmount(_enteredBudget ?? 0),
-                            icon: Icons.account_balance_wallet,
-                            isComplete: _isSectionComplete(1),
-                            isUnlocked: _isSectionUnlocked(1),
-                            body: _buildBudgetStep(),
                           ),
                         ],
                       ),
