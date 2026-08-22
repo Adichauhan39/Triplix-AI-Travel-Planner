@@ -19,3 +19,6 @@ google-auth-oauthlib==1.2.0
 # MongoDB Atlas
 pymongo[srv]>=4.7.0
 motor>=3.4.0
+
+# Bundles an ffmpeg binary, used by trip_export to build the trip video.
+imageio-ffmpeg
