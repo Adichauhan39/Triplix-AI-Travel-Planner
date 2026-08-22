@@ -3729,9 +3729,11 @@ def suggest_day_schedule(request: dict):
         rules = [
             "Use the fixed times exactly as given. A flight departure or arrival is confirmed; never move it, never invent one.",
             "Only schedule a place within its opening hours when hours are given. If a place has no hours, do not state a time for it - say morning, afternoon or evening instead.",
-            "Allow realistic travel and rest between items.",
+            "Allow realistic travel time between places, and say when to set off, not only when to arrive.",
+            "Say roughly how long to spend at each place, and what to actually do there - use the description given for it, do not invent attractions.",
+            "Include meals and a rest where they naturally fall, without naming a specific restaurant unless one is listed.",
             "Cover only the places listed. Do not add new places.",
-            "3 to 6 lines per day, each under 90 characters, plain and practical, for example: 09:30 Head to City Palace, allow 2 hours.",
+            "6 to 10 lines per day, each under 120 characters, plain and practical, for example: 09:15 Set off for City Palace, about 20 minutes.",
             "If a day has nothing in it, return an empty list for it.",
         ]
         where = f" in {destination}" if destination else ""
@@ -3775,8 +3777,8 @@ def suggest_day_schedule(request: dict):
         for date, lines in parsed.items():
             if str(date) not in wanted or not isinstance(lines, list):
                 continue
-            cleaned = [str(line).strip()[:120]
-                       for line in lines if str(line).strip()][:8]
+            cleaned = [str(line).strip()[:160]
+                       for line in lines if str(line).strip()][:12]
             if cleaned:
                 notes[str(date)] = cleaned
 

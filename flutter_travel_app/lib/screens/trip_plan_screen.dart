@@ -162,9 +162,15 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         if (fixed.isNotEmpty) 'fixed': fixed,
         'items': day.items.map((i) {
           final hours = _todayHoursFor(i.title, day.date);
+          // Google's own description of the place, so a line can say what
+          // there is to do there rather than just naming it. Without this the
+          // model either stays vague or invents attractions.
+          final about =
+              (_summaries[i.title]?['description'] ?? '').toString().trim();
           return {
             'title': i.title,
             if (hours != null) 'hours_today': hours,
+            if (about.isNotEmpty) 'about': about,
           };
         }).toList(),
       };
