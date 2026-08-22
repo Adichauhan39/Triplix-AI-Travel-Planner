@@ -22,3 +22,5 @@ motor>=3.4.0
 
 # Bundles an ffmpeg binary, used by trip_export to build the trip video.
 imageio-ffmpeg
+# Renders the trip day cards (see trip_export.py).
+Pillow
