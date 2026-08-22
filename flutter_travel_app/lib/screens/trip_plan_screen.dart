@@ -431,6 +431,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                                     style: const TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600)),
+                                _whatYouCanDo(item.title),
                                 _subtitleFor(item.title),
                               ],
                             ),
@@ -758,6 +759,49 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           errorBuilder: (_, __, ___) => placeholder,
           loadingBuilder: (_, child, progress) =>
               progress == null ? child : placeholder),
+    );
+  }
+
+  /// What the place actually is, in Google's own words.
+  ///
+  /// This is Google's editorial description, not a generated one: asking a
+  /// model what a place is like invites a confident sentence about somewhere
+  /// it has never seen, which is the one thing this app does not do.
+  ///
+  /// Many smaller places have no description. Those fall back to the place
+  /// types Google assigns -- "Hindu temple, tourist attraction" is thin but
+  /// true -- and a place with neither simply shows nothing.
+  Widget _whatYouCanDo(String title) {
+    final summary = _summaries[title];
+    if (summary == null) return const SizedBox.shrink();
+
+    final description = (summary['description'] ?? '').toString().trim();
+    if (description.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text(
+          description,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 11.5, height: 1.3, color: Colors.grey[800]),
+        ),
+      );
+    }
+
+    final types = ((summary['types'] as List?) ?? const [])
+        .map((t) => t.toString().replaceAll('_', ' '))
+        .where((t) => t.isNotEmpty)
+        .toList();
+    if (types.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Text(
+        types.join(' · '),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+            fontSize: 11.5, fontStyle: FontStyle.italic, color: Colors.grey[700]),
+      ),
     );
   }
 

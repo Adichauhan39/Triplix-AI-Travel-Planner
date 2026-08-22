@@ -5274,7 +5274,7 @@ def get_place_summaries(request: PlaceSummariesRequest):
         field_mask = (
             "places.displayName,places.rating,places.userRatingCount,"
             "places.photos,places.regularOpeningHours,places.formattedAddress,"
-            "places.location"
+            "places.location,places.editorialSummary,places.types"
         )
 
         def summarise(name: str):
@@ -5321,6 +5321,17 @@ def get_place_summaries(request: PlaceSummariesRequest):
                         "weekdayDescriptions", []),
                     "lat": (place.get("location") or {}).get("latitude"),
                     "lng": (place.get("location") or {}).get("longitude"),
+                    # Google's own one-line description of the place, not a
+                    # generated one. Absent for many smaller places, in which
+                    # case the caller falls back to the place types rather
+                    # than inventing a sentence about somewhere it has never
+                    # seen.
+                    "description": (place.get("editorialSummary") or {}).get(
+                        "text", ""),
+                    "types": [
+                        t for t in (place.get("types") or [])
+                        if t not in ("point_of_interest", "establishment")
+                    ][:3],
                 }
                 _photo_cache[cache_key] = json.dumps(summary)
                 return name, summary
