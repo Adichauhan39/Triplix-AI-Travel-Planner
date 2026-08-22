@@ -31,9 +31,20 @@ class BookedTripProvider with ChangeNotifier {
   void restore() {
     final stored = LocalStore.loadList(LocalStore.keyBookings);
     if (stored.isEmpty) return;
-    _bookings
-      ..clear()
-      ..addAll(stored.map(ConfirmedBooking.fromJson));
+    _bookings.clear();
+    // Restored through the same de-duplication, so a device that already
+    // stored duplicates is cleaned up on the next launch rather than
+    // carrying them forever.
+    for (final json in stored) {
+      final booking = ConfirmedBooking.fromJson(json);
+      final index =
+          _bookings.indexWhere((existing) => _isSameLeg(existing, booking));
+      if (index >= 0) {
+        _bookings[index] = booking;
+      } else {
+        _bookings.add(booking);
+      }
+    }
     notifyListeners();
   }
 
@@ -45,9 +56,49 @@ class BookedTripProvider with ChangeNotifier {
         LocalStore.keyBookings, _bookings.map((b) => b.toJson()).toList());
   }
 
+  /// Records a booking, replacing an earlier one for the same leg.
+  ///
+  /// This used to append unconditionally, so confirming the same flight twice
+  /// -- easy to do, since the sheet reappears whenever the user searches that
+  /// route again -- listed it twice on the itinerary. Persistence made it
+  /// worse: the duplicates survived restarts and accumulated.
+  ///
+  /// Replacing rather than ignoring the second one is deliberate. The later
+  /// record is the one the user just confirmed, and it may correct the first:
+  /// a flight saved with no number through "I don't have it yet" should be
+  /// upgraded when they come back and pick it properly.
   void add(ConfirmedBooking booking) {
-    _bookings.add(booking);
+    final index = _bookings.indexWhere((existing) => _isSameLeg(existing, booking));
+    if (index >= 0) {
+      _bookings[index] = booking;
+    } else {
+      _bookings.add(booking);
+    }
     notifyListeners();
+  }
+
+  /// Whether two records describe the same leg of the trip.
+  ///
+  /// Two flights on one day are only the same leg if they carry the same
+  /// number -- a genuine outbound and a return on the same date must both
+  /// survive. A flight with no number is treated as the day's single
+  /// unnamed flight, since two of those cannot be told apart anyway.
+  ///
+  /// A hotel is keyed on its check-in date alone: nobody checks into two
+  /// hotels on the same day, and if they change which one, the new answer
+  /// replaces the old.
+  static bool _isSameLeg(ConfirmedBooking a, ConfirmedBooking b) {
+    if (a.kind != b.kind) return false;
+    final sameDay = a.startDate.year == b.startDate.year &&
+        a.startDate.month == b.startDate.month &&
+        a.startDate.day == b.startDate.day;
+    if (!sameDay) return false;
+    if (a.kind == BookingKind.hotel) return true;
+
+    final numberA = (a.flightNumber ?? '').replaceAll(' ', '').toUpperCase();
+    final numberB = (b.flightNumber ?? '').replaceAll(' ', '').toUpperCase();
+    if (numberA.isEmpty || numberB.isEmpty) return true;
+    return numberA == numberB;
   }
 
   void remove(ConfirmedBooking booking) {
