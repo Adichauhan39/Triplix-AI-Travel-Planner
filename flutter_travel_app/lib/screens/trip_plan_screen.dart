@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../config/app_config.dart';
 import '../models/trip_plan.dart';
 import '../models/user_preferences.dart';
+import '../providers/booked_trip_provider.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/python_adk_service.dart';
@@ -148,6 +150,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     final prefs = context.watch<UserPreferencesProvider>().preferences;
     _syncPlan(prefs);
 
+    // The confirmed flight and hotel, when there are any. A trip with none
+    // renders exactly as before: nothing is invented to fill the space.
+    final booked = context.watch<BookedTripProvider>();
     final plan = context.watch<TripPlanProvider>().plan;
     if (plan != null && !plan.isEmpty) {
       WidgetsBinding.instance
@@ -165,7 +170,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           ? _buildEmpty()
           : Column(
               children: [
-                Expanded(child: _buildDays(plan)),
+                Expanded(child: _buildDays(plan, booked)),
                 _buildRequestBar(),
               ],
             ),
@@ -198,7 +203,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         ),
       );
 
-  Widget _buildDays(TripPlan plan) {
+  Widget _buildDays(TripPlan plan, BookedTripProvider booked) {
     return ListView.builder(
       padding: const EdgeInsets.all(AppConfig.paddingMedium),
       itemCount: plan.days.length,
@@ -238,6 +243,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   ],
                 ),
                 const SizedBox(height: 10),
+
+                // What the user actually booked, on the day it happens.
+                // Only rendered when it exists — an itinerary that shows a
+                // flight nobody confirmed is a guess, and this app does not
+                // guess about bookings.
+                ..._bookedRowsFor(day.date, booked),
                 // An empty day is shown as empty rather than hidden — it is a
                 // true statement about the trip, and a missing Day 3 would
                 // misrepresent how long they are staying.
@@ -301,11 +312,157 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       ),
                     ),
                     ),
+
+                // Two or more stops with known positions make a route worth
+                // opening; one stop is just a pin, and the place sheet
+                // already offers that.
+                if (_mappableStops(day) > 1) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => _openDayRoute(day),
+                      icon: const Icon(Icons.directions, size: 16),
+                      label: Text(
+                          'Route for this day · ${_mappableStops(day)} stops'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  /// Opens the day's stops as a route in Google Maps.
+  ///
+  /// The distances and times come from Google rather than from us. A
+  /// straight line between two coordinates is not a road, and printing "4 km"
+  /// for a drive that is really nine would be a made-up number on a screen
+  /// whose whole point is that it is true. Google's own route is free,
+  /// accurate, traffic-aware, and opens in the app people navigate with.
+  Future<void> _openDayRoute(PlanDay day) async {
+    final stops = day.items
+        .map((i) => _summaries[i.title])
+        .whereType<Map<String, dynamic>>()
+        .where((s) => s['lat'] != null && s['lng'] != null)
+        .map((s) => '${s['lat']},${s['lng']}')
+        .toList();
+    if (stops.isEmpty) return;
+
+    // Maps takes the last stop as the destination and the rest as waypoints.
+    final params = <String, String>{
+      'api': '1',
+      'destination': stops.last,
+      'travelmode': 'driving',
+      if (stops.length > 1) 'origin': stops.first,
+      if (stops.length > 2)
+        'waypoints': stops.sublist(1, stops.length - 1).join('|'),
+    };
+    await launchUrl(Uri.https('www.google.com', '/maps/dir/', params),
+        mode: LaunchMode.externalApplication);
+  }
+
+  /// How many of a day's stops we have coordinates for.
+  int _mappableStops(PlanDay day) => day.items
+      .map((i) => _summaries[i.title])
+      .whereType<Map<String, dynamic>>()
+      .where((s) => s['lat'] != null && s['lng'] != null)
+      .length;
+
+  /// Flight and hotel entries that fall on [date].
+  ///
+  /// A flight lands on its own date. A hotel spans the stay, so it appears
+  /// once as a check-in on the first night rather than repeating on every
+  /// day, which would bury the actual plan under the same line six times.
+  List<Widget> _bookedRowsFor(DateTime date, BookedTripProvider booked) {
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+
+    final rows = <Widget>[];
+
+    for (final flight in booked.flights) {
+      if (!sameDay(flight.startDate, date)) continue;
+      final number = flight.flightNumber;
+      final time = flight.departureTime;
+      rows.add(_bookedRow(
+        icon: Icons.flight_takeoff,
+        title: number == null || number.isEmpty
+            ? flight.title
+            : '${flight.title} · $number',
+        // "Time not recorded" rather than a plausible-looking default: the
+        // user pressed "I don't have it yet", and inventing 09:00 here would
+        // put a departure on their itinerary that nobody ever confirmed.
+        subtitle: time == null || time.isEmpty
+            ? 'Booked · time not recorded'
+            : 'Departs $time',
+        verified: flight.flightIsRealFlight,
+      ));
+    }
+
+    for (final hotel in booked.hotels) {
+      if (!sameDay(hotel.startDate, date)) continue;
+      rows.add(_bookedRow(
+        icon: Icons.hotel,
+        title: hotel.hotelName ?? hotel.title,
+        subtitle: hotel.endDate == null
+            ? 'Check in'
+            : 'Check in · until ${_dayLabel.format(hotel.endDate!)}',
+        verified: hotel.hotelNameIsRealPlace,
+      ));
+    }
+
+    if (rows.isNotEmpty) rows.add(const SizedBox(height: 6));
+    return rows;
+  }
+
+  Widget _bookedRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool verified,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppConfig.primaryColor.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+        border: Border.all(
+            color: AppConfig.primaryColor.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppConfig.primaryColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(subtitle,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+              ],
+            ),
+          ),
+          // The same distinction the booking flow draws: a flight tapped from
+          // the real schedule is not the same as a number typed from memory.
+          if (!verified)
+            Tooltip(
+              message: 'As you typed it — we could not check this',
+              child: Icon(Icons.help_outline,
+                  size: 15, color: Colors.orange[700]),
+            ),
+        ],
+      ),
     );
   }
 

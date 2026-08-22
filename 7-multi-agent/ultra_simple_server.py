@@ -5186,9 +5186,12 @@ def get_place_summaries(request: PlaceSummariesRequest):
         if not names:
             return {"status": "success", "summaries": {}}
 
+        # Coordinates come free in this same call, so the day's stops can be
+        # handed to Google Maps as waypoints without a second lookup.
         field_mask = (
             "places.displayName,places.rating,places.userRatingCount,"
-            "places.photos,places.regularOpeningHours,places.formattedAddress"
+            "places.photos,places.regularOpeningHours,places.formattedAddress,"
+            "places.location"
         )
 
         def summarise(name: str):
@@ -5233,6 +5236,8 @@ def get_place_summaries(request: PlaceSummariesRequest):
                     "address": place.get("formattedAddress", ""),
                     "hours": (place.get("regularOpeningHours") or {}).get(
                         "weekdayDescriptions", []),
+                    "lat": (place.get("location") or {}).get("latitude"),
+                    "lng": (place.get("location") or {}).get("longitude"),
                 }
                 _photo_cache[cache_key] = json.dumps(summary)
                 return name, summary
