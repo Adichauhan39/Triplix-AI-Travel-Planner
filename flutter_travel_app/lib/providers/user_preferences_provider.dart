@@ -1,10 +1,32 @@
 import 'package:flutter/foundation.dart';
 import '../models/user_preferences.dart';
+import '../services/local_store.dart';
 
 class UserPreferencesProvider with ChangeNotifier {
   final UserPreferences _preferences = UserPreferences();
 
   UserPreferences get preferences => _preferences;
+
+  /// Reads back what the device saved, so a restart doesn't wipe the trip.
+  ///
+  /// Called once at startup before the first frame, so the app opens on the
+  /// user's existing trip rather than an empty form that fills in a moment
+  /// later.
+  void restore() {
+    final stored = LocalStore.load(LocalStore.keyPreferences);
+    if (stored == null) return;
+    _preferences.fromJson(stored);
+    notifyListeners();
+  }
+
+  /// Persists on every change rather than at each of the dozen mutation
+  /// points. Hooking the notification means a new setter cannot be added
+  /// later that quietly forgets to save.
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    LocalStore.save(LocalStore.keyPreferences, _preferences.toJson());
+  }
 
   void updateDestination(String destination) {
     _preferences.destination = destination;

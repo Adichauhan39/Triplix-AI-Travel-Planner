@@ -1,13 +1,13 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/trip_plan.dart';
+import '../services/local_store.dart';
 
 /// Holds the day-by-day plan while the user is looking at it.
 ///
-/// In memory only, like the other providers in this app — there is no storage
-/// layer yet, so the plan is lost on restart. That needs fixing before this
-/// ships: a user who builds a trip, closes the app and reopens it to an empty
-/// screen will not build it a second time.
+/// Written to the device on every change, so a plan the user has edited
+/// through the prompt box survives a restart. Those edits are the part that
+/// cannot be rebuilt from the onboarding answers.
 class TripPlanProvider with ChangeNotifier {
   TripPlan? _plan;
 
@@ -46,6 +46,39 @@ class TripPlanProvider with ChangeNotifier {
     if (existing == null) return;
     _plan = TripPlan(destination: existing.destination, days: days);
     notifyListeners();
+  }
+
+  /// Reads back a saved plan, including any adjustments the user made.
+  ///
+  /// Restored before the screen rebuilds from onboarding, and
+  /// [buildFromSelection] then leaves it alone because its inputs match — so
+  /// a plan the user reordered is not silently rebuilt from scratch.
+  void restore() {
+    final stored = LocalStore.load(LocalStore.keyTripPlan);
+    if (stored == null) return;
+    final days = ((stored['days'] as List?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(PlanDay.fromJson)
+        .toList();
+    if (days.isEmpty) return;
+    _plan = TripPlan(
+      destination: (stored['destination'] ?? '').toString(),
+      days: days,
+    );
+    notifyListeners();
+  }
+
+  /// Persists on every change, so no future mutation can forget to save.
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    final plan = _plan;
+    LocalStore.save(
+      LocalStore.keyTripPlan,
+      plan == null
+          ? null
+          : {'destination': plan.destination, 'days': plan.toJson()},
+    );
   }
 
   void clear() {

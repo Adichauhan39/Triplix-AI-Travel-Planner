@@ -96,4 +96,36 @@ class ConfirmedBooking {
         'recorded_at': recordedAt.toIso8601String(),
         'confirmed_by_user': confirmedByUser,
       };
+
+  /// Rebuilds a booking stored on the device.
+  ///
+  /// Anything missing or malformed falls back to a safe value rather than
+  /// throwing: a record written by an older version of the app should still
+  /// restore, and a trip that half-loads is worse than one field being blank.
+  /// The two "is real" flags default to false, so a record we cannot vouch
+  /// for is never restored as verified.
+  factory ConfirmedBooking.fromJson(Map<String, dynamic> json) {
+    DateTime? parse(Object? value) =>
+        value == null ? null : DateTime.tryParse(value.toString());
+
+    String? text(Object? value) {
+      final s = value?.toString().trim();
+      return (s == null || s.isEmpty) ? null : s;
+    }
+
+    return ConfirmedBooking(
+      kind: (json['kind']?.toString() == 'hotel')
+          ? BookingKind.hotel
+          : BookingKind.flight,
+      title: (json['title'] ?? '').toString(),
+      startDate: parse(json['start_date']) ?? DateTime.now(),
+      endDate: parse(json['end_date']),
+      flightNumber: text(json['flight_number']),
+      departureTime: text(json['departure_time']),
+      flightIsRealFlight: json['flight_is_real_flight'] == true,
+      hotelName: text(json['hotel_name']),
+      hotelNameIsRealPlace: json['hotel_name_is_real_place'] == true,
+      recordedAt: parse(json['recorded_at']),
+    );
+  }
 }

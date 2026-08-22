@@ -34,6 +34,7 @@ import 'providers/user_preferences_provider.dart';
 import 'providers/hotel_shortlist_provider.dart';
 import 'providers/booked_trip_provider.dart';
 import 'providers/trip_plan_provider.dart';
+import 'services/local_store.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
 
@@ -81,6 +82,11 @@ void main() async {
     debugPrint('Demo session flag load error: $e');
   }
 
+  // Opened before the first frame so the app starts on the user's existing
+  // trip. Restoring after runApp would show an empty screen that fills in a
+  // moment later, which reads as data being lost and then found.
+  await LocalStore.init();
+
   runApp(const MyApp());
 }
 
@@ -94,13 +100,16 @@ class MyApp extends StatelessWidget {
         // Global app UI/feature state.
         ChangeNotifierProvider(create: (_) => AppProvider()),
         // User travel profile and onboarding selections.
-        ChangeNotifierProvider(create: (_) => UserPreferencesProvider()),
+        // ..restore(): the device's copy is read as each provider is created,
+        // so the first frame already has the saved trip.
+        ChangeNotifierProvider(
+            create: (_) => UserPreferencesProvider()..restore()),
         // Hotels saved for comparison before booking.
         ChangeNotifierProvider(create: (_) => HotelShortlistProvider()),
         // What the user says they've booked on partner sites — the only
         // signal we get, since the redirect never reports back.
-        ChangeNotifierProvider(create: (_) => BookedTripProvider()),
-        ChangeNotifierProvider(create: (_) => TripPlanProvider()),
+        ChangeNotifierProvider(create: (_) => BookedTripProvider()..restore()),
+        ChangeNotifierProvider(create: (_) => TripPlanProvider()..restore()),
       ],
       child: GetMaterialApp(
         title: AppConfig.appName,
