@@ -42,6 +42,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   Map<String, Map<String, dynamic>> _summaries = {};
   String _summarisedFor = '';
 
+  /// Set when the summaries request failed, so missing photos and ratings
+  /// read as a problem to fix rather than as places Google knows nothing
+  /// about. Grey boxes with no explanation are indistinguishable from a
+  /// genuinely photo-less plan.
+  bool _summariesFailed = false;
+
   @override
   void dispose() {
     _requestController.dispose();
@@ -107,8 +113,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
     final found = await _adk.placeSummaries(
         city: plan.destination, names: names);
-    if (!mounted || found == null) return;
-    setState(() => _summaries = {..._summaries, ...found});
+    if (!mounted) return;
+    if (found == null) {
+      // Retried on the next plan change: clearing the signature means a
+      // restarted server is picked up without reopening the screen.
+      _summarisedFor = '';
+      setState(() => _summariesFailed = true);
+      return;
+    }
+    setState(() {
+      _summariesFailed = false;
+      _summaries = {..._summaries, ...found};
+    });
   }
 
   Future<void> _applyRequest() async {
@@ -206,8 +222,35 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   Widget _buildDays(TripPlan plan, BookedTripProvider booked) {
     return ListView.builder(
       padding: const EdgeInsets.all(AppConfig.paddingMedium),
-      itemCount: plan.days.length,
-      itemBuilder: (context, index) {
+      itemCount: plan.days.length + (_summariesFailed ? 1 : 0),
+      itemBuilder: (context, rawIndex) {
+        if (_summariesFailed && rawIndex == 0) {
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.image_not_supported_outlined,
+                    size: 18, color: Colors.orange[800]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Photos and ratings could not be loaded — check the '
+                    'server is running, then reopen this tab.',
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.orange[900]),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        final index = rawIndex - (_summariesFailed ? 1 : 0);
         final day = plan.days[index];
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
@@ -242,6 +285,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                             fontSize: 13, color: Colors.grey[700])),
                   ],
                 ),
+                _daySummary(day, booked),
                 const SizedBox(height: 10),
 
                 // What the user actually booked, on the day it happens.
@@ -338,6 +382,90 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         );
       },
     );
+  }
+
+  /// A one-line description of the day, built only from facts already held.
+  ///
+  /// No estimated distances or durations: a straight line between two
+  /// coordinates is not a road, and this line would be the most-read text on
+  /// the screen. It says how many places there are, whether a booked leg
+  /// falls on this day, and -- the part worth having -- whether any of those
+  /// places is closed on this particular date.
+  Widget _daySummary(PlanDay day, BookedTripProvider booked) {
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+
+    final parts = <String>[];
+
+    if (booked.flights.any((f) => sameDay(f.startDate, day.date))) {
+      parts.add('Flight day');
+    }
+    if (booked.hotels.any((h) => sameDay(h.startDate, day.date))) {
+      parts.add('Check-in');
+    }
+
+    final count = day.items.length;
+    if (count > 0) parts.add(count == 1 ? '1 place' : '$count places');
+
+    final closed = day.items
+        .where((i) => _isClosedOn(i.title, day.date))
+        .map((i) => i.title)
+        .toList();
+
+    if (parts.isEmpty && closed.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (parts.isNotEmpty)
+            Text(parts.join('  ·  '),
+                style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+          // The warning that actually saves a trip: turning up somewhere on
+          // the one day of the week it does not open.
+          for (final name in closed)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 15, color: Colors.orange[800]),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('$name is closed on this day',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.orange[800])),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Whether Google lists [title] as closed on [date]'s weekday.
+  ///
+  /// Only true when we actually have the hours and the line says closed --
+  /// a place we know nothing about is never reported as shut.
+  bool _isClosedOn(String title, DateTime date) {
+    final hours = (_summaries[title]?['hours'] as List?) ?? const [];
+    if (hours.isEmpty) return false;
+    const names = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ];
+    final weekday = names[date.weekday - 1];
+    for (final line in hours) {
+      final text = line.toString();
+      if (text.startsWith(weekday)) {
+        return text.toLowerCase().contains('closed');
+      }
+    }
+    return false;
   }
 
   /// Opens the day's stops as a route in Google Maps.
