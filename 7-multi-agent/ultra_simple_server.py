@@ -5163,6 +5163,96 @@ def resolve_airport(city: str):
         return {"status": "error", "message": str(e), "resolved": False}
 
 
+class PlaceSummariesRequest(BaseModel):
+    city: str
+    names: List[str]
+
+
+@app.post("/api/places/summaries")
+def get_place_summaries(request: PlaceSummariesRequest):
+    """One photo, rating and today's hours for each place, in a single call.
+
+    Exists so a day in the itinerary can show itself. Reading a plan used to
+    mean opening every place in turn to find out what any of them were, which
+    is a lot of taps to answer "what does this day look like".
+
+    One Text Search per place, run in parallel and cached, rather than the
+    two-call Place Details used when a place is actually opened -- reviews
+    are the only thing that needs the second call, and a summary does not
+    show them.
+    """
+    try:
+        names = list(dict.fromkeys(n for n in request.names if n and n.strip()))
+        if not names:
+            return {"status": "success", "summaries": {}}
+
+        field_mask = (
+            "places.displayName,places.rating,places.userRatingCount,"
+            "places.photos,places.regularOpeningHours,places.formattedAddress"
+        )
+
+        def summarise(name: str):
+            cache_key = f"summary_{name}_{request.city}"
+            cached = _photo_cache.get(cache_key)
+            if cached:
+                try:
+                    return name, json.loads(cached)
+                except Exception:
+                    pass
+            try:
+                resp = requests.post(
+                    "https://places.googleapis.com/v1/places:searchText",
+                    headers=_google_headers(field_mask),
+                    json={"textQuery": f"{name} in {request.city}, India",
+                          "maxResultCount": 1},
+                    timeout=8,
+                ).json()
+                places = resp.get("places") or []
+                if not places:
+                    return name, None
+                place = places[0]
+
+                photo_url = ""
+                photos = place.get("photos") or []
+                if photos:
+                    photo_name = photos[0].get("name", "")
+                    if photo_name:
+                        media = requests.get(
+                            f"https://places.googleapis.com/v1/{photo_name}"
+                            f"/media?maxWidthPx=400&skipHttpRedirect=true"
+                            f"&key={GOOGLE_PLACES_API_KEY}",
+                            timeout=6,
+                        ).json()
+                        photo_url = media.get("photoUri", "")
+
+                summary = {
+                    "name": (place.get("displayName") or {}).get("text", name),
+                    "rating": place.get("rating", 0),
+                    "total_ratings": place.get("userRatingCount", 0),
+                    "photo": photo_url,
+                    "address": place.get("formattedAddress", ""),
+                    "hours": (place.get("regularOpeningHours") or {}).get(
+                        "weekdayDescriptions", []),
+                }
+                _photo_cache[cache_key] = json.dumps(summary)
+                return name, summary
+            except Exception as e:
+                print(f"[SUMMARY] {name}: {e}")
+                return name, None
+
+        with ThreadPoolExecutor(max_workers=min(16, len(names))) as pool:
+            results = list(pool.map(summarise, names))
+
+        _save_photo_cache()
+        return {
+            "status": "success",
+            "summaries": {n: v for n, v in results if v is not None},
+        }
+    except Exception as e:
+        print(f"[SUMMARY] failed: {e}")
+        return {"status": "error", "message": str(e), "summaries": {}}
+
+
 @app.post("/api/places/details")
 def get_place_details(request: dict):
     """Get real Google Places details: photos, reviews, ratings, location (New API)"""

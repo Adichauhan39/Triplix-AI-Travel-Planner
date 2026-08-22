@@ -8,7 +8,6 @@ import '../models/user_preferences.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/python_adk_service.dart';
-import '../widgets/day_summary_sheet.dart';
 import '../widgets/place_detail_sheet.dart';
 
 /// The trip, day by day, built from the activities the user chose.
@@ -32,6 +31,14 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
   bool _applying = false;
   String? _error;
+
+  /// Photo, rating and hours for each place in the plan, keyed by its title.
+  ///
+  /// Fetched for the whole plan in one request so a day shows what it is
+  /// without the user opening each place in turn. Empty until it arrives;
+  /// the rows render fine without it and fill in when it lands.
+  Map<String, Map<String, dynamic>> _summaries = {};
+  String _summarisedFor = '';
 
   @override
   void dispose() {
@@ -82,6 +89,26 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         'spread across your days here.';
   }
 
+  /// Loads the photo/rating/hours for every place currently in the plan.
+  ///
+  /// Keyed on the plan's contents, so it re-runs when the plan changes and
+  /// does nothing when it hasn't -- including on every rebuild of this screen.
+  Future<void> _loadSummaries(TripPlan plan) async {
+    final names = plan.days
+        .expand((d) => d.items.map((i) => i.title))
+        .where((t) => t.trim().isNotEmpty)
+        .toSet()
+        .toList();
+    final signature = '${plan.destination}|${names.join('|')}';
+    if (names.isEmpty || signature == _summarisedFor) return;
+    _summarisedFor = signature;
+
+    final found = await _adk.placeSummaries(
+        city: plan.destination, names: names);
+    if (!mounted || found == null) return;
+    setState(() => _summaries = {..._summaries, ...found});
+  }
+
   Future<void> _applyRequest() async {
     final request = _requestController.text.trim();
     final plan = context.read<TripPlanProvider>().plan;
@@ -122,6 +149,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     _syncPlan(prefs);
 
     final plan = context.watch<TripPlanProvider>().plan;
+    if (plan != null && !plan.isEmpty) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _loadSummaries(plan));
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -185,45 +216,26 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Tapping the day header opens every place on it at once.
-                // Opening them one at a time meant three taps and three waits
-                // to find out what a day actually looks like.
-                InkWell(
-                  onTap: () => DaySummarySheet.show(
-                    context,
-                    day: day,
-                    dayNumber: index + 1,
-                    city: plan.destination,
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          gradient: AppConfig.primaryGradient,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text('Day ${index + 1}',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700)),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: AppConfig.primaryGradient,
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(_dayLabel.format(day.date),
-                            style: TextStyle(
-                                fontSize: 13, color: Colors.grey[700])),
-                      ),
-                      if (day.items.isNotEmpty)
-                        const Text('See the day',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: AppConfig.primaryColor)),
-                    ],
-                  ),
+                      child: Text('Day ${index + 1}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(_dayLabel.format(day.date),
+                        style: TextStyle(
+                            fontSize: 13, color: Colors.grey[700])),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 // An empty day is shown as empty rather than hidden — it is a
@@ -252,12 +264,19 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.place_outlined,
-                              size: 18, color: AppConfig.primaryColor),
-                          const SizedBox(width: 8),
+                          _thumbnail(item.title),
+                          const SizedBox(width: 10),
                           Expanded(
-                            child: Text(item.title,
-                                style: const TextStyle(fontSize: 14)),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(item.title,
+                                    style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600)),
+                                _subtitleFor(item.title),
+                              ],
+                            ),
                           ),
                           // Marked, because we haven't checked it exists —
                           // the user's own picks came from real Places
@@ -288,6 +307,76 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         );
       },
     );
+  }
+
+  /// The place's own photo, or a grey box.
+  ///
+  /// Never a stand-in image: a stock photo of somewhere else looks exactly
+  /// like the real thing, and the whole plan is meant to be true.
+  Widget _thumbnail(String title) {
+    final photo = (_summaries[title]?['photo'] ?? '').toString();
+    final placeholder = Container(
+      width: 52,
+      height: 52,
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+      ),
+      child: Icon(Icons.place_outlined, size: 20, color: Colors.grey[500]),
+    );
+    if (photo.isEmpty) return placeholder;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+      child: Image.network(photo,
+          width: 52,
+          height: 52,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => placeholder,
+          loadingBuilder: (_, child, progress) =>
+              progress == null ? child : placeholder),
+    );
+  }
+
+  /// Rating and today's hours, when we have them.
+  Widget _subtitleFor(String title) {
+    final summary = _summaries[title];
+    if (summary == null) return const SizedBox.shrink();
+
+    final rating = (summary['rating'] as num?)?.toDouble() ?? 0;
+    final count = (summary['total_ratings'] as num?)?.toInt() ?? 0;
+    final hours = (summary['hours'] as List?) ?? const [];
+    final today = _todayHours(hours);
+
+    final parts = <String>[
+      if (rating > 0) '$rating ★ ($count)',
+      if (today != null) today,
+    ];
+    if (parts.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(parts.join('  ·  '),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+    );
+  }
+
+  /// Today's line from Google's seven, matched by weekday name because the
+  /// list does not always start on the same day.
+  String? _todayHours(List<dynamic> hours) {
+    if (hours.isEmpty) return null;
+    const names = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ];
+    final today = names[DateTime.now().weekday - 1];
+    for (final line in hours) {
+      final text = line.toString();
+      if (text.startsWith(today)) {
+        return text.substring(today.length + 2).trim();
+      }
+    }
+    return null;
   }
 
   Widget _buildRequestBar() {

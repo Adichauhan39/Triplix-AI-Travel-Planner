@@ -72,41 +72,23 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
     await launchUrl(target, mode: LaunchMode.externalApplication);
   }
 
-  /// Seven lines of opening hours reduced to what a traveller acts on: the
-  /// usual hours, and which days it is shut.
+  /// The one line from Google's seven that applies to today.
   ///
-  /// "Monday: Closed / Tuesday: 9 to 5 / Wednesday: 9 to 5 ..." is seven
-  /// lines to read the same fact seven times. Days that share hours are
-  /// collapsed, and closed days are named separately because that is the one
-  /// entry that can ruin a day's plan.
-  ///
-  /// Falls back to the raw lines when the hours genuinely differ by day, since
-  /// summarising those would hide a real difference.
-  static String? _hoursSummary(List<dynamic> lines) {
-    if (lines.isEmpty) return null;
-
-    final closedDays = <String>[];
-    final openTimes = <String, List<String>>{};
-
-    for (final raw in lines) {
-      final text = raw.toString();
-      final split = text.indexOf(':');
-      if (split == -1) continue;
-      final day = text.substring(0, split).trim();
-      final hours = text.substring(split + 1).trim();
-      if (hours.toLowerCase().contains('closed')) {
-        closedDays.add(day);
-      } else {
-        openTimes.putIfAbsent(hours, () => []).add(day);
-      }
+  /// Each line reads "Monday: 9:00 AM - 6:00 PM", so it is matched by the
+  /// weekday name rather than by position -- Google does not always start
+  /// the list on the same day.
+  String? _todayHours(List<dynamic> hours) {
+    if (hours.isEmpty) return null;
+    const names = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ];
+    final today = names[DateTime.now().weekday - 1];
+    for (final line in hours) {
+      final text = line.toString();
+      if (text.startsWith(today)) return 'Today: ${text.substring(today.length + 2).trim()}';
     }
-
-    if (openTimes.isEmpty) return closedDays.isEmpty ? null : 'Closed';
-    if (openTimes.length > 1) return null; // genuinely varies; show it all
-
-    final hours = openTimes.keys.first;
-    if (closedDays.isEmpty) return 'Open $hours daily';
-    return 'Open $hours · Closed ${closedDays.join(', ')}';
+    return null;
   }
 
   @override
@@ -230,38 +212,22 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
             ),
           ),
 
-          if (hours.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Builder(builder: (_) {
-              final summary = _hoursSummary(hours);
-              if (summary != null) {
-                return Row(
-                  children: [
-                    Icon(Icons.schedule, size: 15, color: Colors.grey[700]),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(summary,
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.grey[800])),
-                    ),
-                  ],
-                );
-              }
-              // Hours differ by day, so every line is worth showing.
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Opening hours',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 4),
-                  for (final line in hours)
-                    Text(line.toString(),
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.grey[800])),
-                ],
-              );
-            }),
+          // Today only. Google returns all seven days, but six of them are
+          // about a day the user is not standing there on -- it filled the
+          // sheet and buried the reviews underneath it.
+          if (_todayHours(hours) != null) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(Icons.schedule, size: 15, color: Colors.grey[700]),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(_todayHours(hours)!,
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey[800])),
+                ),
+              ],
+            ),
           ],
 
           if (reviews.isNotEmpty) ...[
@@ -276,9 +242,9 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // The reviewer's name is dropped. It tells a traveller
-                    // nothing about the place and pushes the text they came
-                    // for further down.
+                    // No reviewer name. It identifies a stranger the user
+                    // will never meet and pushes the thing they came to read
+                    // -- the rating and what was said -- down the sheet.
                     Row(
                       children: [
                         const Icon(Icons.star, size: 13, color: Colors.amber),

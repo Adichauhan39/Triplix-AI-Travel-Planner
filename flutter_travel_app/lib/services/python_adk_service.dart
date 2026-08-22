@@ -475,6 +475,40 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// A photo, rating and today's hours for several places at once.
+  ///
+  /// One request for a whole day, so the itinerary can show what each place is
+  /// without the user opening them one by one. Cheaper than [placeDetails] per
+  /// item: a single search per place rather than the two calls reviews need.
+  Future<Map<String, Map<String, dynamic>>?> placeSummaries({
+    required String city,
+    required List<String> names,
+  }) async {
+    if (names.isEmpty) return const {};
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/places/summaries'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'city': city, 'names': names}),
+          )
+          .timeout(const Duration(seconds: 40));
+      if (response.statusCode != 200) {
+        debugPrint('placeSummaries: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final raw = (data['summaries'] as Map?) ?? const {};
+      return raw.map((key, value) => MapEntry(
+            key.toString(),
+            Map<String, dynamic>.from(value as Map),
+          ));
+    } catch (e) {
+      debugPrint('placeSummaries failed: $e');
+      return null;
+    }
+  }
+
   /// Everything Google knows about a place: photos, rating, reviews, hours,
   /// coordinates and a Maps link.
   ///
