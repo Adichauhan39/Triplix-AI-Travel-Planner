@@ -24,8 +24,6 @@ import 'trip_itinerary_screen.dart';
 import 'account_screen.dart';
 import 'search_hotels_screen.dart';
 import 'search_flights_screen.dart';
-import 'destination_preferences_screen.dart';
-import 'transport_preferences_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -1631,7 +1629,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                 ),
               ),
 
-              // Quick Access Sections: Hotels / Destination / Travel Mode
+              // Quick Access: Hotels / Flights / Plan my trip
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                 child: Column(
@@ -1662,28 +1660,20 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                       ),
                     ),
                     const SizedBox(height: 8),
+                    // Replaces the Destination and Travel Mode shortcuts.
+                    // Destination duplicated what onboarding already asks, and
+                    // Travel Mode offered trains, buses and cabs that Triplix
+                    // cannot book. This goes straight to the day-by-day plan,
+                    // which is the thing those two were meant to lead toward.
                     _buildQuickAccessRow(
-                      icon: Icons.place,
-                      title: 'Destination',
-                      subtitle: 'Choose where to go',
+                      icon: Icons.map,
+                      title: 'Plan my trip',
+                      subtitle: 'See your day-by-day itinerary',
                       color: AppConfig.primaryColor,
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const DestinationPreferencesScreen(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _buildQuickAccessRow(
-                      icon: Icons.directions_transit,
-                      title: 'Travel Mode',
-                      subtitle: 'Flight, train, bus or cab',
-                      color: AppConfig.warningColor,
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const TransportPreferencesScreen(),
+                          builder: (_) => const TripPlanScreen(),
                         ),
                       ),
                     ),
