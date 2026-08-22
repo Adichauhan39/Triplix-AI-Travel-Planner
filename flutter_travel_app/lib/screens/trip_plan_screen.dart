@@ -8,6 +8,7 @@ import '../models/user_preferences.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/python_adk_service.dart';
+import '../widgets/day_summary_sheet.dart';
 import '../widgets/place_detail_sheet.dart';
 
 /// The trip, day by day, built from the activities the user chose.
@@ -184,26 +185,45 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        gradient: AppConfig.primaryGradient,
-                        borderRadius: BorderRadius.circular(20),
+                // Tapping the day header opens every place on it at once.
+                // Opening them one at a time meant three taps and three waits
+                // to find out what a day actually looks like.
+                InkWell(
+                  onTap: () => DaySummarySheet.show(
+                    context,
+                    day: day,
+                    dayNumber: index + 1,
+                    city: plan.destination,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          gradient: AppConfig.primaryGradient,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text('Day ${index + 1}',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                       ),
-                      child: Text('Day ${index + 1}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(_dayLabel.format(day.date),
-                        style: TextStyle(
-                            fontSize: 13, color: Colors.grey[700])),
-                  ],
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(_dayLabel.format(day.date),
+                            style: TextStyle(
+                                fontSize: 13, color: Colors.grey[700])),
+                      ),
+                      if (day.items.isNotEmpty)
+                        const Text('See the day',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppConfig.primaryColor)),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 10),
                 // An empty day is shown as empty rather than hidden — it is a
