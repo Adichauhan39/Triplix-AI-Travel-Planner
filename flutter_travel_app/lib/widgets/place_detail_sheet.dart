@@ -40,10 +40,56 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
   bool _loading = true;
   bool _failed = false;
 
+  final TextEditingController _question = TextEditingController();
+  bool _asking = false;
+  String? _answer;
+  bool _answerFailed = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _question.dispose();
+    super.dispose();
+  }
+
+  /// Sends the question along with what we already know about the place, so
+  /// hours, address and rating are answered from data rather than recalled.
+  Future<void> _ask() async {
+    final text = _question.text.trim();
+    if (text.isEmpty || _asking) return;
+    setState(() {
+      _asking = true;
+      _answer = null;
+      _answerFailed = false;
+    });
+
+    final place = _place ?? const {};
+    final reply = await _adk.askAboutPlace(
+      place: (place['name'] ?? widget.name).toString(),
+      city: widget.city,
+      question: text,
+      facts: {
+        if (place['address'] != null) 'address': place['address'],
+        if (place['rating'] != null) 'rating': place['rating'],
+        if (place['total_ratings'] != null)
+          'total_ratings': place['total_ratings'],
+        if (place['opening_hours'] != null)
+          'opening_hours': place['opening_hours'],
+        if (place['phone'] != null) 'phone': place['phone'],
+        if (place['website'] != null) 'website': place['website'],
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _asking = false;
+      _answer = reply;
+      _answerFailed = reply == null;
+    });
   }
 
   Future<void> _load() async {
@@ -228,6 +274,74 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
                 ),
               ],
             ),
+          ],
+
+          const SizedBox(height: 18),
+          const Text('Ask about this place',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _question,
+                  enabled: !_asking,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _ask(),
+                  decoration: InputDecoration(
+                    hintText: 'e.g. is there parking?',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _asking
+                  ? const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : IconButton.filled(
+                      onPressed: _ask,
+                      icon: const Icon(Icons.arrow_upward, size: 18),
+                      style: IconButton.styleFrom(
+                          backgroundColor: AppConfig.primaryColor),
+                    ),
+            ],
+          ),
+          if (_answer != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Text(_answer!,
+                  style: const TextStyle(fontSize: 12.5, height: 1.35)),
+            ),
+            const SizedBox(height: 4),
+            // Said plainly. The answer is grounded in Google Places data and
+            // a web search, but it is still assembled by a model, and the
+            // reader deserves to know which parts of this sheet are checked
+            // facts and which are not.
+            Text('Answered using Google data and a web search — check '
+                'anything important.',
+                style: TextStyle(fontSize: 10.5, color: Colors.grey[600])),
+          ],
+          if (_answerFailed) ...[
+            const SizedBox(height: 8),
+            Text("Couldn't answer that just now — check the server is running.",
+                style: TextStyle(fontSize: 12, color: Colors.orange[800])),
           ],
 
           if (reviews.isNotEmpty) ...[

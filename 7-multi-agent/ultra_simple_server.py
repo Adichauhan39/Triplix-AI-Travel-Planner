@@ -5251,6 +5251,78 @@ class PlaceSummariesRequest(BaseModel):
     names: List[str]
 
 
+@app.post("/api/places/ask")
+def ask_about_place(request: dict):
+    """Answer a question about one place, grounded rather than improvised.
+
+    A model asked "is there parking at Maitri Bagh" will always produce a
+    confident answer, and an invented one is indistinguishable from a real
+    one to the person reading it. Two things keep this honest.
+
+    First, the facts already fetched for that place -- address, hours,
+    rating, description -- are handed over, so the common questions are
+    answered from data rather than from memory.
+
+    Second, Google Search grounding is on for everything else, and the model
+    is told to say plainly when it does not know. "I don't know" is a useful
+    answer to someone planning a trip; a plausible wrong one is not.
+    """
+    try:
+        question = str(request.get('question') or '').strip()
+        place = str(request.get('place') or '').strip()
+        city = str(request.get('city') or '').strip()
+        facts = request.get('facts') or {}
+
+        if not question or not place:
+            return {"status": "error", "message": "missing_question",
+                    "answer": ""}
+        if not GOOGLE_API_KEY:
+            return {"status": "error", "message": "no_api_key", "answer": ""}
+
+        rules = [
+            "Answer only about this place.",
+            "Use the facts given below first; they came from Google Places "
+            "and are current.",
+            "If the facts and your sources do not cover it, say you do not "
+            "know rather than guessing. Never invent prices, timings, "
+            "phone numbers or rules.",
+            "Answer in 1-3 short sentences, plain and practical.",
+            "Do not repeat the question back.",
+        ]
+        prompt = (
+            f"A traveller is asking about {place}"
+            + (f" in {city}" if city else "")
+            + ".\n\n"
+            + f"Known facts (JSON): {json.dumps(facts)}\n\n"
+            + f"Question: {question}\n\n"
+            + "Rules:\n"
+            + "".join(f"- {r}\n" for r in rules)
+        )
+
+        from google import genai as genai_client
+        from google.genai import types as genai_types
+
+        client = genai_client.Client(api_key=GOOGLE_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-3.7-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(
+                    google_search=genai_types.GoogleSearch())],
+            ),
+        )
+
+        answer = (response.text or "").strip()
+        if not answer:
+            return {"status": "error", "message": "empty", "answer": ""}
+        # Capped: this renders inside a bottom sheet, and a wall of text there
+        # is unreadable however good it is.
+        return {"status": "success", "answer": answer[:700]}
+    except Exception as e:
+        print(f"[PLACE ASK] failed: {e}")
+        return {"status": "error", "message": str(e), "answer": ""}
+
+
 @app.post("/api/places/summaries")
 def get_place_summaries(request: PlaceSummariesRequest):
     """One photo, rating and today's hours for each place, in a single call.

@@ -475,6 +475,46 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// Answers a question about one place.
+  ///
+  /// [facts] should carry what we already know about it, so the common
+  /// questions are answered from Google Places data rather than from the
+  /// model's memory. Returns null on failure so the caller can say so
+  /// instead of showing a blank answer.
+  Future<String?> askAboutPlace({
+    required String place,
+    required String question,
+    String city = '',
+    Map<String, dynamic> facts = const {},
+  }) async {
+    if (question.trim().isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/places/ask'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'place': place,
+              'city': city,
+              'question': question.trim(),
+              'facts': facts,
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) {
+        debugPrint('askAboutPlace: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') return null;
+      final answer = (data['answer'] ?? '').toString().trim();
+      return answer.isEmpty ? null : answer;
+    } catch (e) {
+      debugPrint('askAboutPlace failed: $e');
+      return null;
+    }
+  }
+
   /// A running order for each day, keyed by date.
   ///
   /// The days sent should carry any fixed points we know -- a confirmed
