@@ -60,6 +60,16 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   bool _scheduling = false;
   bool _exporting = false;
 
+  /// A built file waiting for the user to tap once more.
+  ///
+  /// Browsers only allow navigator.share() while handling a user gesture, and
+  /// building the file takes seconds of network and rendering -- by the time
+  /// it returns, the original tap has expired and the share is refused with
+  /// NotAllowedError. So the work happens on the first tap and the share on a
+  /// second one, which is still inside a gesture.
+  Uint8List? _exportBytes;
+  String _exportFormat = 'pdf';
+
   @override
   void dispose() {
     _requestController.dispose();
@@ -268,27 +278,44 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       return;
     }
 
+    setState(() {
+      _exporting = false;
+      _error = null;
+      _exportFormat = format;
+      _exportBytes = Uint8List.fromList(bytes);
+    });
+  }
+
+  /// Hands the built file to the share sheet, called straight from a tap.
+  ///
+  /// Nothing is awaited before the share call, so the browser still sees this
+  /// as part of the user's gesture.
+  Future<void> _shareBuiltFile() async {
+    final bytes = _exportBytes;
+    if (bytes == null) return;
+    final format = _exportFormat;
     try {
       // Shared straight from memory rather than written to disk first. This
       // app runs on Flutter web, where dart:io has no filesystem at all, so
       // a temp-file route would work on mobile and silently fail in the
       // browser -- which is where it is being used today.
-      setState(() => _exporting = false);
       await Share.shareXFiles(
         [
           XFile.fromData(
-            Uint8List.fromList(bytes),
+            bytes,
             name: 'triplix-trip.$format',
             mimeType: format == 'pdf' ? 'application/pdf' : 'video/mp4',
           )
         ],
-        text: 'My trip to ${plan.destination.split(',').first}',
+        text: 'My Triplix trip',
       );
+      if (mounted) setState(() => _exportBytes = null);
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _exporting = false;
-        _error = "Couldn't share the file: $e";
+        _error = 'Sharing is blocked here — open the app on your phone, or '
+            'use a browser that allows sharing. ($e)';
+        _exportBytes = null;
       });
     }
   }
@@ -977,6 +1004,24 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Shown until tapped: the second gesture the browser requires.
+          if (_exportBytes != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _shareBuiltFile,
+                  icon: const Icon(Icons.ios_share, size: 18),
+                  label: Text('Your ${_exportFormat.toUpperCase()} is ready — '
+                      'tap to share or save'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppConfig.primaryColor,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
