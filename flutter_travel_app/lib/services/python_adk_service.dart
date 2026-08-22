@@ -475,6 +475,42 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// A running order for each day, keyed by date.
+  ///
+  /// The days sent should carry any fixed points we know -- a confirmed
+  /// flight time, the distance from the airport -- and each place's hours for
+  /// that date, so the reply is arranged around facts rather than invented
+  /// around nothing.
+  Future<Map<String, List<String>>?> daySchedules({
+    required List<Map<String, dynamic>> days,
+    String destination = '',
+  }) async {
+    if (days.isEmpty) return const {};
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/itinerary/schedule'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'days': days, 'destination': destination}),
+          )
+          .timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) {
+        debugPrint('daySchedules: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') return null;
+      final raw = (data['notes'] as Map?) ?? const {};
+      return raw.map((key, value) => MapEntry(
+            key.toString(),
+            (value as List).map((e) => e.toString()).toList(),
+          ));
+    } catch (e) {
+      debugPrint('daySchedules failed: $e');
+      return null;
+    }
+  }
+
   /// A photo, rating and today's hours for several places at once.
   ///
   /// One request for a whole day, so the itinerary can show what each place is

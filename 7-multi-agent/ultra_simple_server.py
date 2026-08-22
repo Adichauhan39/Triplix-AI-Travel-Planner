@@ -3703,6 +3703,89 @@ Format it in a clear, easy-to-read structure with emojis for visual appeal."""
         }
 
 
+@app.post("/api/itinerary/schedule")
+def suggest_day_schedule(request: dict):
+    """A running order for each day, written around the facts we hold.
+
+    The user asked for "arrive at hotel at 7:00, take cab at 10:00" -- a day
+    that reads like a plan rather than a list. Most of those times are not
+    knowable: we have no idea when someone wakes up or hails a cab. What we do
+    know is the flight time they confirmed and each place's opening hours, so
+    the model is given those as fixed points and asked to order the day
+    between them.
+
+    Returned as suggestions, and labelled that way in the UI. A confirmed
+    departure is a fact; "leave for lunch around 13:00" is a guess, and the
+    two must not look alike.
+    """
+    try:
+        days = request.get('days') or []
+        destination = str(request.get('destination') or '').strip()
+        if not days:
+            return {"status": "error", "message": "no_days", "notes": {}}
+        if not GOOGLE_API_KEY:
+            return {"status": "error", "message": "no_api_key", "notes": {}}
+
+        rules = [
+            "Use the fixed times exactly as given. A flight departure or arrival is confirmed; never move it, never invent one.",
+            "Only schedule a place within its opening hours when hours are given. If a place has no hours, do not state a time for it - say morning, afternoon or evening instead.",
+            "Allow realistic travel and rest between items.",
+            "Cover only the places listed. Do not add new places.",
+            "3 to 6 lines per day, each under 90 characters, plain and practical, for example: 09:30 Head to City Palace, allow 2 hours.",
+            "If a day has nothing in it, return an empty list for it.",
+        ]
+        where = f" in {destination}" if destination else ""
+        prompt = (
+            f"Write a short running order for each day of this trip{where}.\n\n"
+            f"Days (JSON): {json.dumps(days)}\n\n"
+            + "Rules:\n"
+            + "".join(f"- {r}\n" for r in rules)
+            + 'Return ONLY JSON: {"YYYY-MM-DD": ["line", "line"]}. '
+            + "No prose."
+        )
+
+        from google import genai as genai_client
+        from google.genai import types as genai_types
+
+        client = genai_client.Client(api_key=GOOGLE_API_KEY)
+        # No search tool: this arranges facts already supplied rather than
+        # looking anything up, so grounding would add latency and cost for
+        # nothing.
+        response = client.models.generate_content(
+            model="gemini-3.7-flash",
+            contents=prompt,
+        )
+
+        text = (response.text or "").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1:
+            return {"status": "error", "message": "unparseable", "notes": {}}
+
+        parsed = json.loads(text[start:end + 1])
+
+        # Rebuilt rather than trusted: only dates we asked about, only strings,
+        # and capped, so a runaway reply cannot flood a day card.
+        wanted = {str(d.get('date')) for d in days}
+        notes = {}
+        for date, lines in parsed.items():
+            if str(date) not in wanted or not isinstance(lines, list):
+                continue
+            cleaned = [str(line).strip()[:120]
+                       for line in lines if str(line).strip()][:8]
+            if cleaned:
+                notes[str(date)] = cleaned
+
+        return {"status": "success", "notes": notes}
+    except Exception as e:
+        print(f"[SCHEDULE NOTES] failed: {e}")
+        return {"status": "error", "message": str(e), "notes": {}}
+
+
 @app.post("/api/itinerary/adjust")
 def adjust_itinerary(request: dict):
     """Apply a typed request to a day-by-day plan, returning the same shape.

@@ -48,6 +48,14 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// genuinely photo-less plan.
   bool _summariesFailed = false;
 
+  /// A suggested running order per day, keyed by ISO date.
+  ///
+  /// Requested on demand rather than built with the plan: it is a model call,
+  /// and most openings of this screen are someone checking their trip rather
+  /// than asking for it to be scheduled.
+  Map<String, List<String>> _schedules = {};
+  bool _scheduling = false;
+
   @override
   void dispose() {
     _requestController.dispose();
@@ -127,6 +135,73 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     });
   }
 
+  /// Asks for a running order, handing over every fixed point we hold.
+  ///
+  /// The confirmed flight time and the place's opening hours are what keep
+  /// this honest: without them a "schedule" is just invented clock times.
+  Future<void> _suggestSchedule(TripPlan plan, BookedTripProvider booked) async {
+    setState(() => _scheduling = true);
+
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+    String iso(DateTime d) => d.toIso8601String().split('T').first;
+
+    final days = plan.days.map((day) {
+      final fixed = <String>[];
+      for (final f in booked.flights.where((f) => sameDay(f.startDate, day.date))) {
+        final t = f.departureTime;
+        fixed.add(t == null || t.isEmpty
+            ? 'Flight ${f.flightNumber ?? f.title} on this day, time unknown'
+            : 'Flight ${f.flightNumber ?? f.title} departs $t');
+      }
+      for (final h in booked.hotels.where((h) => sameDay(h.startDate, day.date))) {
+        fixed.add('Check in at ${h.hotelName ?? h.title}');
+      }
+      return {
+        'date': iso(day.date),
+        if (fixed.isNotEmpty) 'fixed': fixed,
+        'items': day.items.map((i) {
+          final hours = _todayHoursFor(i.title, day.date);
+          return {
+            'title': i.title,
+            if (hours != null) 'hours_today': hours,
+          };
+        }).toList(),
+      };
+    }).toList();
+
+    final notes =
+        await _adk.daySchedules(days: days, destination: plan.destination);
+    if (!mounted) return;
+    setState(() {
+      _scheduling = false;
+      if (notes == null) {
+        _error = "Couldn't build a schedule — check the server is running.";
+      } else {
+        _error = null;
+        _schedules = notes;
+      }
+    });
+  }
+
+  /// The hours line for [title] on [date]'s weekday, if we have it.
+  String? _todayHoursFor(String title, DateTime date) {
+    final hours = (_summaries[title]?['hours'] as List?) ?? const [];
+    if (hours.isEmpty) return null;
+    const names = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ];
+    final weekday = names[date.weekday - 1];
+    for (final line in hours) {
+      final text = line.toString();
+      if (text.startsWith(weekday)) {
+        return text.substring(weekday.length + 2).trim();
+      }
+    }
+    return null;
+  }
+
   Future<void> _applyRequest() async {
     final request = _requestController.text.trim();
     final plan = context.read<TripPlanProvider>().plan;
@@ -186,6 +261,33 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           ? _buildEmpty()
           : Column(
               children: [
+                // Offered, not run automatically. Building the running order
+                // is a model call, and most openings of this screen are
+                // someone checking their trip rather than asking for it to
+                // be scheduled.
+                if (_schedules.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _scheduling
+                            ? null
+                            : () => _suggestSchedule(plan, booked),
+                        icon: _scheduling
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2),
+                              )
+                            : const Icon(Icons.schedule, size: 18),
+                        label: Text(_scheduling
+                            ? 'Working out the days...'
+                            : 'Suggest a running order for each day'),
+                      ),
+                    ),
+                  ),
                 Expanded(child: _buildDays(plan, booked)),
                 _buildRequestBar(),
               ],
@@ -360,6 +462,43 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 // Two or more stops with known positions make a route worth
                 // opening; one stop is just a pin, and the place sheet
                 // already offers that.
+                // Suggested, and labelled so. A confirmed departure is a
+                // fact; "leave around 13:00" is a guess, and the two must not
+                // look alike on the same card.
+                if ((_schedules[day.date.toIso8601String().split('T').first] ??
+                        const [])
+                    .isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius:
+                          BorderRadius.circular(AppConfig.radiusSmall),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Suggested running order',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.grey[700])),
+                        const SizedBox(height: 6),
+                        for (final line in _schedules[
+                                day.date.toIso8601String().split('T').first]!)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text('• $line',
+                                style: const TextStyle(
+                                    fontSize: 12, height: 1.35)),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+
                 if (_mappableStops(day) > 1) ...[
                   const SizedBox(height: 6),
                   Align(
