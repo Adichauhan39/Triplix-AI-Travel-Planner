@@ -8,6 +8,7 @@ import '../models/user_preferences.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/python_adk_service.dart';
+import '../widgets/place_detail_sheet.dart';
 
 /// The trip, day by day, built from the activities the user chose.
 ///
@@ -216,8 +217,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                           color: Colors.grey[500]))
                 else
                   for (final item in day.items)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
+                    // Tappable: a plan that only lists names is a list, not
+                    // something you can travel with. Opening a place shows
+                    // its photos, rating, reviews, hours and map position -
+                    // all from Google for that specific place.
+                    InkWell(
+                      onTap: () => PlaceDetailSheet.show(
+                        context,
+                        name: item.title,
+                        city: plan.destination,
+                      ),
+                      child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -244,8 +255,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                                       fontSize: 10,
                                       color: Colors.amber.shade900)),
                             ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.chevron_right,
+                              size: 16, color: Colors.grey[400]),
                         ],
                       ),
+                    ),
                     ),
               ],
             ),

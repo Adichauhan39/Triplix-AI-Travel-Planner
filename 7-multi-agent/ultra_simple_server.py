@@ -3,6 +3,21 @@ Triplix Travel Agent Server
 CSV + MongoDB + Gemini AI + Google Cloud (Vertex AI)
 """
 import os
+import sys
+
+# Logs are full of emoji, and Python encodes stdout with the console's own
+# codepage. Under cp1252 -- which is what Windows uses whenever output is
+# redirected to a file, as any real deployment does -- printing one raises
+# UnicodeEncodeError. That is not a logging problem: the exception propagates
+# out of the request handler and returns a 500, and the except block's own
+# emoji then fails too, so the response says nothing about what went wrong.
+# /api/places/details died this way while returning perfectly good data.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -5158,18 +5173,42 @@ def get_place_details(request: dict):
 
         print(f"\n📍 [PLACES] Getting details for: {query}")
 
-        # Use Places API (New) - Text Search
+        # Two calls, deliberately. Text Search finds the place but does not
+        # return reviews at all -- asking it for places.reviews silently
+        # yielded a rating of 0 and an empty review list for somewhere that
+        # plainly has both. Reviews only come from the Place Details endpoint,
+        # so this looks the place up, then fetches its detail by id.
+        #
+        # The second call only happens when a user opens a place, not while
+        # browsing, so it costs a request per tap rather than per card.
         search_url = "https://places.googleapis.com/v1/places:searchText"
-        field_mask = "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.reviews,places.photos,places.websiteUri,places.nationalPhoneNumber,places.googleMapsUri,places.regularOpeningHours,places.types"
-        
-        search_resp = requests.post(search_url, 
-            headers=_google_headers(field_mask),
-            json={"textQuery": query, "maxResultCount": 1}
+        search_resp = requests.post(
+            search_url,
+            headers=_google_headers("places.id"),
+            json={"textQuery": query, "maxResultCount": 1},
+            timeout=8,
         ).json()
 
         places_list = search_resp.get('places', [])
         if not places_list:
             return {"status": "not_found", "message": f"No place found for '{query}'"}
+
+        place_id = places_list[0].get('id', '')
+        if not place_id:
+            return {"status": "not_found", "message": f"No place found for '{query}'"}
+
+        detail_mask = (
+            "id,displayName,formattedAddress,location,rating,userRatingCount,"
+            "reviews,photos,websiteUri,nationalPhoneNumber,googleMapsUri,"
+            "regularOpeningHours,types"
+        )
+        detail_resp = requests.get(
+            f"https://places.googleapis.com/v1/places/{place_id}",
+            headers=_google_headers(detail_mask),
+            timeout=8,
+        ).json()
+        # Shaped like the search response the rest of this handler expects.
+        places_list = [detail_resp]
 
         result = places_list[0]
 

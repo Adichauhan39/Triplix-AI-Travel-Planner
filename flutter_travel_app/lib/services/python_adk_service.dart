@@ -475,6 +475,37 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// Everything Google knows about a place: photos, rating, reviews, hours,
+  /// coordinates and a Maps link.
+  ///
+  /// Returns null when the lookup fails, so the caller can say so rather than
+  /// showing an empty sheet that looks like the place has no information.
+  Future<Map<String, dynamic>?> placeDetails({
+    required String name,
+    String city = '',
+  }) async {
+    if (name.trim().isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/places/details'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'name': name, 'city': city}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) {
+        debugPrint('placeDetails: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') return null;
+      return data['place'] as Map<String, dynamic>?;
+    } catch (e) {
+      debugPrint('placeDetails failed: $e');
+      return null;
+    }
+  }
+
   /// Applies a typed request to a day-by-day plan, returning the new days.
   ///
   /// Returns null on failure so the caller can keep showing the plan the user
