@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../config/app_config.dart';
 import '../models/trip_plan.dart';
+import '../models/user_preferences.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/python_adk_service.dart';
@@ -31,31 +32,52 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   String? _error;
 
   @override
-  void initState() {
-    super.initState();
-    // After the first frame: reading one provider to write to another during
-    // build is what throws "setState during build".
-    WidgetsBinding.instance.addPostFrameCallback((_) => _buildPlan());
-  }
-
-  @override
   void dispose() {
     _requestController.dispose();
     super.dispose();
   }
 
-  void _buildPlan() {
-    final prefs = context.read<UserPreferencesProvider>().preferences;
+  /// Rebuilds the plan whenever the trip's inputs change.
+  ///
+  /// This used to run once in initState, which is wrong for this screen: the
+  /// Trip tab is built when the home screen first loads, so anyone who filled
+  /// in onboarding afterwards -- or changed their dates later -- kept looking
+  /// at "No trip yet" until the app was restarted.
+  ///
+  /// Scheduled after the frame because writing to one provider while building
+  /// from another throws "setState during build". TripPlanProvider ignores a
+  /// rebuild whose inputs match what it already holds, so this is safe on
+  /// every build and won't discard edits the user has made.
+  void _syncPlan(UserPreferences prefs) {
     final start = prefs.checkInDate;
     final end = prefs.checkOutDate;
     if (start == null || end == null) return;
 
-    context.read<TripPlanProvider>().buildFromSelection(
-          destination: prefs.destination ?? '',
-          start: start,
-          end: end,
-          activities: prefs.selectedActivities,
-        );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<TripPlanProvider>().buildFromSelection(
+            destination: prefs.destination ?? '',
+            start: start,
+            end: end,
+            activities: prefs.selectedActivities,
+          );
+    });
+  }
+
+  /// Names the input that is actually missing, so an empty screen explains
+  /// itself instead of listing everything the user might need to do.
+  String _missingInputMessage() {
+    final prefs = context.read<UserPreferencesProvider>().preferences;
+    if (prefs.checkInDate == null || prefs.checkOutDate == null) {
+      return 'Add your travel dates in Plan your trip, and your day-by-day '
+          'itinerary appears here.';
+    }
+    if ((prefs.destination ?? '').isEmpty) {
+      return 'Choose where you are going, and your day-by-day itinerary '
+          'appears here.';
+    }
+    return 'Pick a few things to do in Plan your trip, and they will be '
+        'spread across your days here.';
   }
 
   Future<void> _applyRequest() async {
@@ -92,6 +114,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Watched, not read: a trip filled in after this screen was built has to
+    // appear without the user restarting the app.
+    final prefs = context.watch<UserPreferencesProvider>().preferences;
+    _syncPlan(prefs);
+
     final plan = context.watch<TripPlanProvider>().plan;
 
     return Scaffold(
@@ -129,8 +156,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Pick your destination, dates and a few things to do, and '
-                'your plan appears here.',
+                _missingInputMessage(),
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.grey[600]),
               ),
