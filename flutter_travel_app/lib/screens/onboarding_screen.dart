@@ -1220,19 +1220,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _pickTripDates() async {
     final firstDate = _tripFirstAllowedDate;
     final lastDate = _tripLastAllowedDate;
-    DateTime initialStart = _tripFromDate ?? firstDate;
-    if (initialStart.isBefore(firstDate)) initialStart = firstDate;
-    if (initialStart.isAfter(lastDate)) initialStart = lastDate;
-    DateTime initialEnd =
-        _tripToDate ?? initialStart.add(const Duration(days: 3));
-    if (initialEnd.isBefore(initialStart)) initialEnd = initialStart;
-    if (initialEnd.isAfter(lastDate)) initialEnd = lastDate;
+
+    // Nothing is highlighted until the user has actually chosen dates.
+    //
+    // The picker used to open with today through today-plus-three already
+    // selected, which is a guess presented as an answer: it looks like a
+    // decision has been made, and someone who taps Done without touching the
+    // calendar leaves with a trip they never picked. With no range, the
+    // calendar simply opens on the current month and waits.
+    DateTimeRange? initialRange;
+    if (_tripFromDate != null && _tripToDate != null) {
+      DateTime start = _tripFromDate!;
+      if (start.isBefore(firstDate)) start = firstDate;
+      if (start.isAfter(lastDate)) start = lastDate;
+      DateTime end = _tripToDate!;
+      if (end.isBefore(start)) end = start;
+      if (end.isAfter(lastDate)) end = lastDate;
+      initialRange = DateTimeRange(start: start, end: end);
+    }
 
     final picked = await showDateRangePicker(
       context: context,
       firstDate: firstDate,
       lastDate: lastDate,
-      initialDateRange: DateTimeRange(start: initialStart, end: initialEnd),
+      // Opens on today's month when nothing is chosen yet.
+      currentDate: DateTime.now(),
+      initialDateRange: initialRange,
       helpText: 'Select travel dates',
       saveText: 'Done',
       builder: (context, child) {
