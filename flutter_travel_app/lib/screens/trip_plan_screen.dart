@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'dart:typed_data';
+
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/app_config.dart';
@@ -55,6 +58,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// than asking for it to be scheduled.
   Map<String, List<String>> _schedules = {};
   bool _scheduling = false;
+  bool _exporting = false;
 
   @override
   void dispose() {
@@ -208,6 +212,87 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     return null;
   }
 
+  /// Builds the plan as a file and hands it to the share sheet.
+  ///
+  /// The day cards are assembled here from what is already on screen, so the
+  /// shared file shows exactly what the user is looking at -- same photos,
+  /// same ratings, same running order.
+  Future<void> _sharePlan(
+      TripPlan plan, BookedTripProvider booked, String format) async {
+    setState(() => _exporting = true);
+
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+    String iso(DateTime d) => d.toIso8601String().split('T').first;
+
+    final days = plan.days.map((day) {
+      final fixed = <String>[];
+      for (final f
+          in booked.flights.where((f) => sameDay(f.startDate, day.date))) {
+        final t = f.departureTime;
+        fixed.add('${f.flightNumber ?? f.title}'
+            '${t == null || t.isEmpty ? '' : '  ·  $t'}');
+      }
+      for (final h
+          in booked.hotels.where((h) => sameDay(h.startDate, day.date))) {
+        fixed.add('Check in  ·  ${h.hotelName ?? h.title}');
+      }
+      return {
+        'date_label': _dayLabel.format(day.date),
+        if (fixed.isNotEmpty) 'fixed': fixed,
+        'items': day.items.map((i) {
+          final summary = _summaries[i.title] ?? const {};
+          return {
+            'title': i.title,
+            if (summary['rating'] != null) 'rating': summary['rating'],
+            if (summary['photo'] != null) 'photo': summary['photo'],
+            if (summary['description'] != null)
+              'about': summary['description'],
+            if (_todayHoursFor(i.title, day.date) != null)
+              'hours_today': _todayHoursFor(i.title, day.date),
+          };
+        }).toList(),
+        'notes': _schedules[iso(day.date)] ?? const <String>[],
+      };
+    }).toList();
+
+    final bytes = await _adk.exportPlan(
+        days: days, format: format, destination: plan.destination);
+    if (!mounted) return;
+
+    if (bytes == null) {
+      setState(() {
+        _exporting = false;
+        _error = "Couldn't build the $format — check the server is running.";
+      });
+      return;
+    }
+
+    try {
+      // Shared straight from memory rather than written to disk first. This
+      // app runs on Flutter web, where dart:io has no filesystem at all, so
+      // a temp-file route would work on mobile and silently fail in the
+      // browser -- which is where it is being used today.
+      setState(() => _exporting = false);
+      await Share.shareXFiles(
+        [
+          XFile.fromData(
+            Uint8List.fromList(bytes),
+            name: 'triplix-trip.$format',
+            mimeType: format == 'pdf' ? 'application/pdf' : 'video/mp4',
+          )
+        ],
+        text: 'My trip to ${plan.destination.split(',').first}',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _exporting = false;
+        _error = "Couldn't share the file: $e";
+      });
+    }
+  }
+
   Future<void> _applyRequest() async {
     final request = _requestController.text.trim();
     final plan = context.read<TripPlanProvider>().plan;
@@ -262,6 +347,30 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Your trip to ${plan!.destination.split(',').first}'
             : 'Your trip'),
         centerTitle: true,
+        actions: [
+          if (plan != null && !plan.isEmpty)
+            _exporting
+                ? const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : PopupMenuButton<String>(
+                    icon: const Icon(Icons.ios_share),
+                    tooltip: 'Share this trip',
+                    onSelected: (format) =>
+                        _sharePlan(plan, booked, format),
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                          value: 'pdf', child: Text('Share as PDF')),
+                      PopupMenuItem(
+                          value: 'mp4', child: Text('Share as video')),
+                    ],
+                  ),
+        ],
       ),
       body: plan == null || plan.isEmpty
           ? _buildEmpty()

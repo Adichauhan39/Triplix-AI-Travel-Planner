@@ -475,6 +475,48 @@ class PythonADKService {
   /// status) and an empty list when it succeeded but matched nothing. Callers
   /// must keep these apart: telling someone to "check the spelling" because
   /// our own request failed is worse than saying nothing.
+  /// The plan as a shareable file: 'pdf' or 'mp4'.
+  ///
+  /// Returns the raw bytes, or null on failure so the caller can say so
+  /// rather than sharing an empty file. Generous timeout because the video
+  /// path downloads a photo per place and then runs ffmpeg.
+  Future<List<int>?> exportPlan({
+    required List<Map<String, dynamic>> days,
+    required String format,
+    String destination = '',
+    bool includePhotos = true,
+  }) async {
+    if (days.isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/itinerary/export'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'days': days,
+              'format': format,
+              'destination': destination,
+              'include_photos': includePhotos,
+            }),
+          )
+          .timeout(const Duration(seconds: 180));
+      if (response.statusCode != 200) {
+        debugPrint('exportPlan: HTTP ${response.statusCode}');
+        return null;
+      }
+      // An error comes back as JSON rather than a file, so a body that
+      // starts with '{' is a failure however healthy the status code looks.
+      if (response.bodyBytes.isNotEmpty && response.bodyBytes.first == 0x7B) {
+        debugPrint('exportPlan: server returned an error payload');
+        return null;
+      }
+      return response.bodyBytes;
+    } catch (e) {
+      debugPrint('exportPlan failed: $e');
+      return null;
+    }
+  }
+
   /// Answers a question about one place.
   ///
   /// [facts] should carry what we already know about it, so the common

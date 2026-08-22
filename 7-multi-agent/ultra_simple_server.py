@@ -3703,6 +3703,60 @@ Format it in a clear, easy-to-read structure with emojis for visual appeal."""
         }
 
 
+@app.post("/api/itinerary/export")
+def export_itinerary(request: dict):
+    """The plan as a shareable PDF or MP4.
+
+    Both come from the same day renderer in trip_export, so the two formats
+    cannot disagree about what the trip contains.
+
+    Imported inside the handler rather than at module scope: Pillow and the
+    bundled ffmpeg are only needed by this one route, and a deployment that
+    skips them should still serve every other endpoint rather than failing to
+    boot.
+    """
+    try:
+        days = request.get("days") or []
+        destination = str(request.get("destination") or "").strip()
+        fmt = str(request.get("format") or "pdf").lower().strip()
+        include_photos = request.get("include_photos", True) is not False
+
+        if not days:
+            return {"status": "error", "message": "no_days"}
+        if fmt not in ("pdf", "mp4"):
+            return {"status": "error", "message": "bad_format"}
+
+        try:
+            import trip_export
+        except Exception as e:
+            print(f"[EXPORT] renderer unavailable: {e}")
+            return {"status": "error", "message": "renderer_unavailable"}
+
+        frames = trip_export.render_days(days, destination, include_photos)
+        if not frames:
+            return {"status": "error", "message": "nothing_to_render"}
+
+        if fmt == "pdf":
+            data = trip_export.build_pdf(frames)
+            media, name = "application/pdf", "triplix-trip.pdf"
+        else:
+            data = trip_export.build_video(frames, seconds_per_day=3.5)
+            media, name = "video/mp4", "triplix-trip.mp4"
+
+        if not data:
+            return {"status": "error", "message": "empty_output"}
+
+        from fastapi.responses import Response
+        return Response(
+            content=data,
+            media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+    except Exception as e:
+        print(f"[EXPORT] failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.post("/api/itinerary/schedule")
 def suggest_day_schedule(request: dict):
     """A running order for each day, written around the facts we hold.
