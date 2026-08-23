@@ -14,6 +14,7 @@ import '../models/confirmed_booking.dart';
 import '../providers/user_preferences_provider.dart';
 import '../providers/hotel_shortlist_provider.dart';
 import '../widgets/booking_confirm_prompt.dart';
+import '../widgets/plan_quick_edit.dart';
 import 'hotel_shortlist_screen.dart';
 
 class SearchHotelsScreen extends StatefulWidget {
@@ -364,6 +365,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: const PlanQuickEditButton(),
       appBar: AppBar(
         title: const Text('Search Hotels'),
         centerTitle: true,
