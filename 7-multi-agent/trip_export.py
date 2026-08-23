@@ -189,6 +189,128 @@ def render_day(day: Dict[str, Any], destination: str, day_number: int,
     return canvas
 
 
+def render_title(destination: str, days: List[Dict[str, Any]],
+                 include_photos: bool = True) -> Image.Image:
+    """The opening card: where, and over how long."""
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), ACCENT)
+    draw = ImageDraw.Draw(canvas)
+
+    # A photo from the trip behind the title, dimmed so the words stay
+    # readable. Falls back to the flat colour when there is nothing to use.
+    if include_photos:
+        for day in days:
+            for item in day.get("items", []):
+                photo = _fetch_image(item.get("photo", ""), (WIDTH, HEIGHT))
+                if photo is not None:
+                    canvas.paste(photo, (0, 0))
+                    shade = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+                    canvas = Image.blend(canvas, shade, 0.55)
+                    draw = ImageDraw.Draw(canvas)
+                    break
+            else:
+                continue
+            break
+
+    first = days[0].get("date_label", "") if days else ""
+    last = days[-1].get("date_label", "") if days else ""
+    span = first if first == last else f"{first}  -  {last}"
+
+    draw.text((MARGIN, HEIGHT // 2 - 190), "TRIPLIX", font=_font(34),
+              fill=(255, 255, 255))
+    name = destination.split(",")[0].strip() or "Your trip"
+    draw.text((MARGIN, HEIGHT // 2 - 130), name, font=_font(96, bold=True),
+              fill=(255, 255, 255))
+    draw.text((MARGIN, HEIGHT // 2 + 10), span, font=_font(36),
+              fill=(235, 235, 245))
+    total = sum(len(d.get("items", [])) for d in days)
+    draw.text((MARGIN, HEIGHT // 2 + 76),
+              f"{len(days)} days   ·   {total} places", font=_font(32),
+              fill=(210, 210, 230))
+    return canvas
+
+
+def render_place(item: Dict[str, Any], day_number: int,
+                 include_photos: bool = True) -> Image.Image:
+    """One place, photo-led — the shot a slideshow of text cards lacks."""
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), INK)
+    draw = ImageDraw.Draw(canvas)
+
+    photo = _fetch_image(item.get("photo", ""), (WIDTH, HEIGHT)) \
+        if include_photos else None
+    if photo is not None:
+        canvas.paste(photo, (0, 0))
+        # A gradient foot rather than a flat overlay: the picture stays
+        # visible at the top while the text below it stays legible.
+        overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
+        for y in range(HEIGHT - 460, HEIGHT):
+            alpha = int(235 * (y - (HEIGHT - 460)) / 460)
+            odraw.line([(0, y), (WIDTH, y)], fill=(0, 0, 0, alpha))
+        canvas = Image.alpha_composite(
+            canvas.convert("RGBA"), overlay).convert("RGB")
+        draw = ImageDraw.Draw(canvas)
+
+    y = HEIGHT - 330
+    draw.text((MARGIN, y), f"DAY {day_number}", font=_font(30),
+              fill=(200, 200, 220))
+    y += 46
+    for line in _wrap(draw, str(item.get("title", "")), _font(66, bold=True),
+                      WIDTH - 2 * MARGIN)[:2]:
+        draw.text((MARGIN, y), line, font=_font(66, bold=True),
+                  fill=(255, 255, 255))
+        y += 74
+
+    meta = []
+    if item.get("rating"):
+        meta.append(f"{item['rating']} stars")
+    if item.get("hours_today"):
+        meta.append(str(item["hours_today"]))
+    if meta:
+        draw.text((MARGIN, y + 6), "   ·   ".join(meta)[:52], font=_font(28),
+                  fill=(220, 220, 235))
+        y += 44
+
+    about = str(item.get("about", ""))
+    if about:
+        for line in _wrap(draw, about, _font(26), WIDTH - 2 * MARGIN)[:2]:
+            draw.text((MARGIN, y + 10), line, font=_font(26),
+                      fill=(205, 205, 220))
+            y += 34
+    return canvas
+
+
+def render_closing(destination: str) -> Image.Image:
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), ACCENT)
+    draw = ImageDraw.Draw(canvas)
+    name = destination.split(",")[0].strip()
+    draw.text((MARGIN, HEIGHT // 2 - 90),
+              f"See you in {name}" if name else "Have a good trip",
+              font=_font(66, bold=True), fill=(255, 255, 255))
+    draw.text((MARGIN, HEIGHT // 2 + 10), "Planned with Triplix",
+              font=_font(32), fill=(215, 215, 235))
+    return canvas
+
+
+def render_film(days: List[Dict[str, Any]], destination: str,
+                include_photos: bool = True) -> List[Image.Image]:
+    """The full running order of shots: title, then each day and its places.
+
+    A day card alone tells the viewer what is happening; a photo-led shot per
+    place is what makes it read as a film rather than a slideshow of
+    paperwork. Days with nothing in them still get their card, since an empty
+    day is part of the trip.
+    """
+    frames = [render_title(destination, days, include_photos)]
+    total = len(days)
+    for i, day in enumerate(days):
+        frames.append(render_day(day, destination, i + 1, total,
+                                 include_photos))
+        for item in day.get("items", [])[:3]:
+            frames.append(render_place(item, i + 1, include_photos))
+    frames.append(render_closing(destination))
+    return frames
+
+
 def render_days(days: List[Dict[str, Any]], destination: str,
                 include_photos: bool = True) -> List[Image.Image]:
     total = len(days)
@@ -232,14 +354,37 @@ def build_video(frames: List[Image.Image], seconds_per_day: float = 3.0
 
         out_path = os.path.join(workdir, "trip.mp4")
         exe = imageio_ffmpeg.get_ffmpeg_exe()
+        fps = 25
+        hold = max(0.5, seconds_per_day)
+        per_frame = int(fps * hold)
+        total_frames = per_frame * len(frames)
+
+        # zoompan gives each still a slow push in, which is what separates a
+        # film from a slideshow -- the eye reads a moving image as intentional
+        # and a static one as a document. Done in one filter chain rather than
+        # an xfade graph per frame, which grows unwieldy and fails oddly on
+        # long trips.
+        #
+        # d= holds each input for the whole shot; the 1.0008 step is a ~10%
+        # zoom across it, gentle enough not to look like a mistake. s= locks
+        # the output size, since zoompan otherwise renders at its own scale.
+        motion = (
+            f"zoompan=z='min(zoom+0.0008,1.10)':d={per_frame}"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":s={WIDTH}x{HEIGHT}:fps={fps},"
+            f"fade=t=in:st=0:d=0.6,"
+            f"fade=t=out:st={max(0.0, total_frames / fps - 0.8):.2f}:d=0.8,"
+            "format=yuv420p"
+        )
+
         cmd = [
             exe, "-y",
-            "-framerate", f"{1 / max(0.5, seconds_per_day)}",
+            "-framerate", f"{1 / hold}",
             "-i", os.path.join(workdir, "frame_%03d.png"),
             "-c:v", "libx264",
+            "-preset", "veryfast",
             "-pix_fmt", "yuv420p",
-            # Holds the last frame instead of cutting the moment it appears.
-            "-vf", "fps=25,format=yuv420p",
+            "-vf", motion,
             out_path,
         ]
         import subprocess

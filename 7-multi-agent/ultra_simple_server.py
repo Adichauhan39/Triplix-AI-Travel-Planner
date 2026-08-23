@@ -3732,15 +3732,21 @@ def export_itinerary(request: dict):
             print(f"[EXPORT] renderer unavailable: {e}")
             return {"status": "error", "message": "renderer_unavailable"}
 
-        frames = trip_export.render_days(days, destination, include_photos)
-        if not frames:
-            return {"status": "error", "message": "nothing_to_render"}
-
+        # The two formats want different cuts of the same trip. A PDF is read,
+        # so one dense page per day is right. A video is watched, so it gets a
+        # title, a photo-led shot per place and a closing card -- the same
+        # information, paced for the eye rather than the page.
         if fmt == "pdf":
+            frames = trip_export.render_days(days, destination, include_photos)
+            if not frames:
+                return {"status": "error", "message": "nothing_to_render"}
             data = trip_export.build_pdf(frames)
             media, name = "application/pdf", "triplix-trip.pdf"
         else:
-            data = trip_export.build_video(frames, seconds_per_day=3.5)
+            frames = trip_export.render_film(days, destination, include_photos)
+            if not frames:
+                return {"status": "error", "message": "nothing_to_render"}
+            data = trip_export.build_video(frames, seconds_per_day=3.0)
             media, name = "video/mp4", "triplix-trip.mp4"
 
         if not data:
