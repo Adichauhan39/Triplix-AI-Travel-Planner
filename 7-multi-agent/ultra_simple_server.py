@@ -5589,6 +5589,14 @@ def get_place_summaries(request: PlaceSummariesRequest):
             if cached:
                 try:
                     summary = json.loads(cached)
+                    # An entry written before a field existed is treated as a
+                    # miss rather than served short. Adding "photos" to this
+                    # shape had no effect on anyone with a warm cache: the old
+                    # single-photo entries came back unchanged and the trip
+                    # film kept rendering one angle per place, which read as
+                    # the change never having shipped.
+                    if "photos" not in summary:
+                        raise ValueError("stale summary shape")
                     # Claimed on the way out, so a cached answer still blocks
                     # a fresh lookup from picking the same place.
                     claim(str(summary.get("place_id") or ""))
