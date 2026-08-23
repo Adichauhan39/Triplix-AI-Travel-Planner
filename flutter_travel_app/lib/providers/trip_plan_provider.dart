@@ -136,6 +136,38 @@ class TripPlanProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Adds places to a day, marked as suggestions rather than choices.
+  ///
+  /// [addedByAssistant] is what keeps the distinction the rest of the app
+  /// relies on: the user picked their own activities, and these were offered
+  /// to fill an empty day. The badge on the card comes from this flag.
+  void addItems(int dayIndex, List<String> titles) {
+    final plan = _plan;
+    if (plan == null || titles.isEmpty) return;
+    if (dayIndex < 0 || dayIndex >= plan.days.length) return;
+
+    final day = plan.days[dayIndex];
+    final existing = day.items.map((i) => i.title.toLowerCase()).toSet();
+    final additions = [
+      for (final title in titles)
+        if (title.trim().isNotEmpty &&
+            !existing.contains(title.trim().toLowerCase()))
+          PlanItem(title: title.trim(), addedByAssistant: true),
+    ];
+    if (additions.isEmpty) return;
+
+    _plan = TripPlan(
+      destination: plan.destination,
+      days: [
+        for (var i = 0; i < plan.days.length; i++)
+          i == dayIndex
+              ? day.copyWith(items: [...day.items, ...additions])
+              : plan.days[i],
+      ],
+    );
+    notifyListeners();
+  }
+
   void clear() {
     if (_plan == null) return;
     _plan = null;

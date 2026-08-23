@@ -5394,6 +5394,121 @@ def ask_about_place(request: dict):
         return {"status": "error", "message": str(e), "answer": ""}
 
 
+class DiscoverRequest(BaseModel):
+    city: str
+    exclude: List[str] = []
+    interests: List[str] = []
+    limit: int = 3
+
+
+@app.post("/api/places/discover")
+def discover_places(request: DiscoverRequest):
+    """Real places in a city that are not already in the plan.
+
+    Ticking one interest box gives one place, because a category resolves to
+    a single venue -- so a four-day trip built from "Lake" had one lake and
+    three empty days. Rather than sending the user back to the onboarding
+    checklist to guess which other words map to good places, this fills a day
+    from where they are standing.
+
+    Everything returned is a real Google Places result for that city. The
+    caller marks them as suggestions, since the user did not choose them.
+    """
+    try:
+        city = (request.city or "").strip()
+        if not city:
+            return {"status": "error", "message": "no_city", "places": []}
+
+        # Their own interests first, so a "Lake" person gets parks and
+        # gardens rather than nightlife. The generic query is a fallback for
+        # someone who ticked nothing.
+        interests = [i for i in (request.interests or []) if i and i.strip()]
+        queries = [f"{i} in {city}, India" for i in interests[:3]]
+        queries.append(f"top places to visit in {city}, India")
+
+        excluded = {e.strip().lower() for e in (request.exclude or []) if e}
+        field_mask = (
+            "places.displayName,places.rating,places.userRatingCount,"
+            "places.photos,places.regularOpeningHours,places.formattedAddress,"
+            "places.location,places.editorialSummary,places.types,places.id"
+        )
+
+        found = []
+        seen_ids = set()
+        for query in queries:
+            if len(found) >= max(1, min(request.limit, 8)):
+                break
+            try:
+                resp = requests.post(
+                    "https://places.googleapis.com/v1/places:searchText",
+                    headers=_google_headers(field_mask),
+                    json={"textQuery": query, "maxResultCount": 10},
+                    timeout=8,
+                ).json()
+            except Exception as e:
+                print(f"[DISCOVER] {query}: {e}")
+                continue
+
+            for place in (resp.get("places") or []):
+                if len(found) >= max(1, min(request.limit, 8)):
+                    break
+                place_id = str(place.get("id") or "")
+                name = (place.get("displayName") or {}).get("text", "").strip()
+                if not name or place_id in seen_ids:
+                    continue
+                # Excluded by name as well as id: the plan holds names, and a
+                # place already on the itinerary must not be offered again.
+                if name.lower() in excluded:
+                    continue
+                seen_ids.add(place_id)
+
+                photo_url = ""
+                photos = place.get("photos") or []
+                if photos:
+                    photo_name = photos[0].get("name", "")
+                    if photo_name:
+                        try:
+                            media = requests.get(
+                                f"https://places.googleapis.com/v1/{photo_name}"
+                                f"/media?maxWidthPx=400&skipHttpRedirect=true"
+                                f"&key={GOOGLE_PLACES_API_KEY}",
+                                timeout=6,
+                            ).json()
+                            photo_url = media.get("photoUri", "")
+                        except Exception:
+                            photo_url = ""
+
+                summary = {
+                    "name": name,
+                    "rating": place.get("rating", 0),
+                    "total_ratings": place.get("userRatingCount", 0),
+                    "photo": photo_url,
+                    "address": place.get("formattedAddress", ""),
+                    "hours": (place.get("regularOpeningHours") or {}).get(
+                        "weekdayDescriptions", []),
+                    "lat": (place.get("location") or {}).get("latitude"),
+                    "lng": (place.get("location") or {}).get("longitude"),
+                    "description": (place.get("editorialSummary") or {}).get(
+                        "text", ""),
+                    "types": [
+                        t for t in (place.get("types") or [])
+                        if t not in ("point_of_interest", "establishment")
+                    ][:3],
+                    "place_id": place_id,
+                }
+                # Cached under the same key shape the summaries route uses, so
+                # the day card can render it without a second lookup.
+                _photo_cache[f"summary_{name}_{city}"] = json.dumps(summary)
+                found.append(summary)
+
+        if found:
+            _save_photo_cache()
+        return {"status": "success", "places": found}
+    except Exception as e:
+        print(f"[DISCOVER] failed: {e}")
+        return {"status": "error", "message": str(e), "places": []}
+
+
 @app.post("/api/places/summaries")
 def get_place_summaries(request: PlaceSummariesRequest):
     """One photo, rating and today's hours for each place, in a single call.

@@ -593,6 +593,46 @@ class PythonADKService {
     }
   }
 
+  /// Real places in [city] that are not already in the plan.
+  ///
+  /// [interests] steers the results toward what the user actually likes, and
+  /// [exclude] carries the names already on the itinerary so nothing is
+  /// offered twice. Returns null on failure so the caller can say so.
+  Future<List<Map<String, dynamic>>?> discoverPlaces({
+    required String city,
+    List<String> interests = const [],
+    List<String> exclude = const [],
+    int limit = 3,
+  }) async {
+    if (city.trim().isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/places/discover'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'city': city,
+              'interests': interests,
+              'exclude': exclude,
+              'limit': limit,
+            }),
+          )
+          .timeout(const Duration(seconds: 45));
+      if (response.statusCode != 200) {
+        debugPrint('discoverPlaces: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') return null;
+      return ((data['places'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (e) {
+      debugPrint('discoverPlaces failed: $e');
+      return null;
+    }
+  }
+
   /// A photo, rating and today's hours for several places at once.
   ///
   /// One request for a whole day, so the itinerary can show what each place is

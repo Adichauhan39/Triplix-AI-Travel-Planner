@@ -60,6 +60,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   bool _scheduling = false;
   bool _exporting = false;
 
+  /// The day currently having places found for it, so only its own button
+  /// shows a spinner rather than every day at once.
+  int? _fillingDay;
+
   /// A built file waiting for the user to tap once more.
   ///
   /// Browsers only allow navigator.share() while handling a user gesture, and
@@ -542,12 +546,43 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 // An empty day is shown as empty rather than hidden — it is a
                 // true statement about the trip, and a missing Day 3 would
                 // misrepresent how long they are staying.
-                if (day.items.isEmpty)
+                if (day.items.isEmpty) ...[
                   Text('Nothing planned yet',
                       style: TextStyle(
                           fontSize: 13,
                           fontStyle: FontStyle.italic,
-                          color: Colors.grey[500]))
+                          color: Colors.grey[500])),
+                  const SizedBox(height: 6),
+                  // Offered where the gap is felt, rather than sending the
+                  // user back to the onboarding checklist to guess which
+                  // other words map to good places. Ticking one interest
+                  // yields one place, so a four-day trip built from "Lake"
+                  // arrived with three empty days and no way forward.
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _fillingDay == null
+                          ? () => _fillDay(plan, index)
+                          : null,
+                      icon: _fillingDay == index
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add_location_alt_outlined,
+                              size: 16),
+                      label: Text(_fillingDay == index
+                          ? 'Finding places...'
+                          : 'Find things to do on this day'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                ]
                 else
                   for (final item in day.items)
                     // Tappable: a plan that only lists names is a list, not
@@ -893,6 +928,63 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         ],
       ),
     );
+  }
+
+  /// Fills an empty day with real places from the destination.
+  ///
+  /// Everything already in the plan is excluded, and the user's own chosen
+  /// interests steer the search -- someone who ticked "Lake" gets lakes and
+  /// parks, not nightlife. The results are marked as suggestions, because
+  /// they were offered rather than chosen.
+  Future<void> _fillDay(TripPlan plan, int dayIndex) async {
+    setState(() {
+      _fillingDay = dayIndex;
+      _error = null;
+    });
+
+    final already = plan.days
+        .expand((d) => d.items.map((i) => _placeName(i.title)))
+        .toSet()
+        .toList();
+    final interests =
+        context.read<UserPreferencesProvider>().preferences.selectedActivities;
+
+    final found = await _adk.discoverPlaces(
+      city: plan.destination,
+      interests: interests,
+      exclude: already,
+      limit: 3,
+    );
+    if (!mounted) return;
+
+    if (found == null || found.isEmpty) {
+      setState(() {
+        _fillingDay = null;
+        _error = found == null
+            ? "Couldn't look for places — check the server is running."
+            : 'No more places found for this city.';
+      });
+      return;
+    }
+
+    // Seeded into the summaries cache so the new rows render with their
+    // photo and rating immediately, rather than blank until the next fetch.
+    final names = <String>[];
+    for (final place in found) {
+      final name = (place['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      names.add(name);
+      _summaries[name] = place;
+    }
+
+    context.read<TripPlanProvider>().addItems(dayIndex, names);
+    if (!mounted) return;
+    setState(() {
+      _fillingDay = null;
+      // The running order described a day that has just changed.
+      _schedules = {};
+      _summarisedFor = '';
+    });
   }
 
   /// Applies a menu choice to one place.
