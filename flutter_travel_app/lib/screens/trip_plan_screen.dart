@@ -597,8 +597,25 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                                       color: Colors.amber.shade900)),
                             ),
                           const SizedBox(width: 4),
-                          Icon(Icons.chevron_right,
-                              size: 16, color: Colors.grey[400]),
+                          // Edits live behind a menu rather than a swipe:
+                          // a swipe that deletes is easy to trigger by
+                          // accident while scrolling a long trip.
+                          PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert,
+                                size: 18, color: Colors.grey[500]),
+                            tooltip: 'Change this place',
+                            onSelected: (choice) => _editItem(
+                                plan, index, day.items.indexOf(item), choice),
+                            itemBuilder: (_) => [
+                              for (var d = 0; d < plan.days.length; d++)
+                                if (d != index)
+                                  PopupMenuItem(
+                                      value: 'move:$d',
+                                      child: Text('Move to Day ${d + 1}')),
+                              const PopupMenuItem(
+                                  value: 'remove', child: Text('Remove')),
+                            ],
+                          ),
                         ],
                       ),
                     ),
@@ -876,6 +893,29 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         ],
       ),
     );
+  }
+
+  /// Applies a menu choice to one place.
+  ///
+  /// The running order is cleared afterwards because it described the old
+  /// arrangement: leaving "09:30 head to the temple" under a day the temple
+  /// has just left would be worse than showing no order at all.
+  void _editItem(TripPlan plan, int dayIndex, int itemIndex, String choice) {
+    final provider = context.read<TripPlanProvider>();
+    if (choice == 'remove') {
+      provider.removeItem(dayIndex, itemIndex);
+    } else if (choice.startsWith('move:')) {
+      final target = int.tryParse(choice.substring(5));
+      if (target == null) return;
+      provider.moveItem(dayIndex, itemIndex, target);
+    } else {
+      return;
+    }
+    setState(() {
+      _schedules = {};
+      // Forces the summaries to be re-checked against the new arrangement.
+      _summarisedFor = '';
+    });
   }
 
   /// The real place behind a plan entry.

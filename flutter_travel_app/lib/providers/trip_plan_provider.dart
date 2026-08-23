@@ -81,6 +81,61 @@ class TripPlanProvider with ChangeNotifier {
     );
   }
 
+  /// Removes one place from one day.
+  ///
+  /// Edits go through the provider rather than being made on a copy of the
+  /// plan, so they persist through the same notifyListeners hook everything
+  /// else uses -- a change the user makes must survive a restart exactly like
+  /// one the app made.
+  void removeItem(int dayIndex, int itemIndex) {
+    final plan = _plan;
+    if (plan == null) return;
+    if (dayIndex < 0 || dayIndex >= plan.days.length) return;
+    final day = plan.days[dayIndex];
+    if (itemIndex < 0 || itemIndex >= day.items.length) return;
+
+    final items = [...day.items]..removeAt(itemIndex);
+    _plan = TripPlan(
+      destination: plan.destination,
+      days: [
+        for (var i = 0; i < plan.days.length; i++)
+          i == dayIndex ? day.copyWith(items: items) : plan.days[i],
+      ],
+    );
+    notifyListeners();
+  }
+
+  /// Moves a place to another day, appending it at the end of that day.
+  ///
+  /// A no-op when the target is the same day: silently reordering within a
+  /// day would look like the move failed.
+  void moveItem(int fromDay, int itemIndex, int toDay) {
+    final plan = _plan;
+    if (plan == null || fromDay == toDay) return;
+    if (fromDay < 0 || fromDay >= plan.days.length) return;
+    if (toDay < 0 || toDay >= plan.days.length) return;
+    final source = plan.days[fromDay];
+    if (itemIndex < 0 || itemIndex >= source.items.length) return;
+
+    final moved = source.items[itemIndex];
+    final remaining = [...source.items]..removeAt(itemIndex);
+    final target = [...plan.days[toDay].items, moved];
+
+    _plan = TripPlan(
+      destination: plan.destination,
+      days: [
+        for (var i = 0; i < plan.days.length; i++)
+          if (i == fromDay)
+            source.copyWith(items: remaining)
+          else if (i == toDay)
+            plan.days[i].copyWith(items: target)
+          else
+            plan.days[i],
+      ],
+    );
+    notifyListeners();
+  }
+
   void clear() {
     if (_plan == null) return;
     _plan = null;
