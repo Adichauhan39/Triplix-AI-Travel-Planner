@@ -16,6 +16,7 @@ import '../services/trip_photo_service.dart';
 import '../providers/user_preferences_provider.dart';
 import '../widgets/triplix_logo.dart';
 import 'trip_plan_screen.dart';
+import '../widgets/plan_quick_edit.dart';
 import 'bookings_screen.dart';
 import 'mock_booking_screen.dart';
 import 'route_map_screen.dart';
@@ -51,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: const PlanQuickEditButton(),
       body: Stack(
         children: [
           IndexedStack(

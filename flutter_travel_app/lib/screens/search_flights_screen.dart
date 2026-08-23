@@ -10,6 +10,7 @@ import '../services/affiliate_links.dart';
 import '../services/python_adk_service.dart';
 import '../providers/user_preferences_provider.dart';
 import '../widgets/booking_confirm_prompt.dart';
+import '../widgets/plan_quick_edit.dart';
 
 /// Flight search entry point. There is no in-app results list: Aviasales owns
 /// search, pricing and booking, and its live search shows far more than the
@@ -177,6 +178,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: const PlanQuickEditButton(),
       appBar: AppBar(title: const Text('Search Flights'), centerTitle: true),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(AppConfig.paddingMedium),
