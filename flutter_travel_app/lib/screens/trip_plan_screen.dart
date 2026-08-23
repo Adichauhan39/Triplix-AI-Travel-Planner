@@ -182,7 +182,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           final about =
               (_summaries[i.title]?['description'] ?? '').toString().trim();
           return {
-            'title': i.title,
+            // The resolved name, so the running order can say where to
+            // actually go rather than repeating a category back.
+            'title': _placeName(i.title),
             if (hours != null) 'hours_today': hours,
             if (about.isNotEmpty) 'about': about,
           };
@@ -253,7 +255,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         'items': day.items.map((i) {
           final summary = _summaries[i.title] ?? const {};
           return {
-            'title': i.title,
+            'title': _placeName(i.title),
             if (summary['rating'] != null) 'rating': summary['rating'],
             if (summary['photo'] != null) 'photo': summary['photo'],
             if (summary['description'] != null)
@@ -555,7 +557,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                     InkWell(
                       onTap: () => PlaceDetailSheet.show(
                         context,
-                        name: item.title,
+                        name: _placeName(item.title),
                         city: plan.destination,
                       ),
                       child: Padding(
@@ -569,7 +571,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(item.title,
+                                Text(_placeName(item.title),
                                     style: const TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600)),
@@ -691,7 +693,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
     final closed = day.items
         .where((i) => _isClosedOn(i.title, day.date))
-        .map((i) => i.title)
+        .map((i) => _placeName(i.title))
         .toList();
 
     if (parts.isEmpty && closed.isEmpty) return const SizedBox.shrink();
@@ -874,6 +876,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         ],
       ),
     );
+  }
+
+  /// The real place behind a plan entry.
+  ///
+  /// Onboarding collects categories -- "Nature Trail", "Temple", "Park" --
+  /// not places, so a day could read "Nature Trail" while showing the photo,
+  /// rating and hours of an actual named venue Google matched it to. The
+  /// name is the one part that was still generic, which made the plan
+  /// unusable: nobody can travel to "Nature Trail".
+  String _placeName(String title) {
+    final resolved = (_summaries[title]?['name'] ?? '').toString().trim();
+    return resolved.isEmpty ? title : resolved;
   }
 
   /// The place's own photo, or a grey box.
