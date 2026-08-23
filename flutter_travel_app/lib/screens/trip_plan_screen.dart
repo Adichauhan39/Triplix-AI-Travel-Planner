@@ -64,6 +64,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// shows a spinner rather than every day at once.
   int? _fillingDay;
 
+  /// The day currently being scheduled, so only its button spins.
+  int? _schedulingDay;
+
   /// A built file waiting for the user to tap once more.
   ///
   /// Browsers only allow navigator.share() while handling a user gesture, and
@@ -159,23 +162,41 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// this honest: without them a "schedule" is just invented clock times.
   Future<void> _suggestSchedule(TripPlan plan, BookedTripProvider booked) async {
     setState(() => _scheduling = true);
+    final days = plan.days.map((day) => _dayPayload(day, booked)).toList();
 
+    final notes =
+        await _adk.daySchedules(days: days, destination: plan.destination);
+    if (!mounted) return;
+    setState(() {
+      _scheduling = false;
+      if (notes == null) {
+        _error = "Couldn't build a schedule — check the server is running.";
+      } else {
+        _error = null;
+        _schedules = notes;
+      }
+    });
+  }
+
+  /// One day, described for the scheduler: its fixed points and its places.
+  Map<String, dynamic> _dayPayload(PlanDay day, BookedTripProvider booked) {
     bool sameDay(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day;
     String iso(DateTime d) => d.toIso8601String().split('T').first;
 
-    final days = plan.days.map((day) {
-      final fixed = <String>[];
-      for (final f in booked.flights.where((f) => sameDay(f.startDate, day.date))) {
-        final t = f.departureTime;
-        fixed.add(t == null || t.isEmpty
-            ? 'Flight ${f.flightNumber ?? f.title} on this day, time unknown'
-            : 'Flight ${f.flightNumber ?? f.title} departs $t');
-      }
-      for (final h in booked.hotels.where((h) => sameDay(h.startDate, day.date))) {
-        fixed.add('Check in at ${h.hotelName ?? h.title}');
-      }
-      return {
+    final fixed = <String>[];
+    for (final f
+        in booked.flights.where((f) => sameDay(f.startDate, day.date))) {
+      final t = f.departureTime;
+      fixed.add(t == null || t.isEmpty
+          ? 'Flight ${f.flightNumber ?? f.title} on this day, time unknown'
+          : 'Flight ${f.flightNumber ?? f.title} departs $t');
+    }
+    for (final h
+        in booked.hotels.where((h) => sameDay(h.startDate, day.date))) {
+      fixed.add('Check in at ${h.hotelName ?? h.title}');
+    }
+    return {
         'date': iso(day.date),
         if (fixed.isNotEmpty) 'fixed': fixed,
         'items': day.items.map((i) {
@@ -193,21 +214,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             if (about.isNotEmpty) 'about': about,
           };
         }).toList(),
-      };
-    }).toList();
-
-    final notes =
-        await _adk.daySchedules(days: days, destination: plan.destination);
-    if (!mounted) return;
-    setState(() {
-      _scheduling = false;
-      if (notes == null) {
-        _error = "Couldn't build a schedule — check the server is running.";
-      } else {
-        _error = null;
-        _schedules = notes;
-      }
-    });
+    };
   }
 
   /// The hours line for [title] on [date]'s weekday, if we have it.
@@ -696,6 +703,39 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   ),
                 ],
 
+                // Per day as well as for the whole trip: after changing
+                // one day, re-running every day costs a model call each for
+                // no benefit.
+                if (day.items.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _schedulingDay == null
+                          ? () => _suggestDaySchedule(plan, booked, index)
+                          : null,
+                      icon: _schedulingDay == index
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.schedule, size: 16),
+                      label: Text(_schedules[
+                                  day.date.toIso8601String().split('T').first]
+                              ?.isNotEmpty ==
+                          true
+                          ? 'Redo this day\'s order'
+                          : 'Plan this day'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                ],
+
                 if (_mappableStops(day) > 1) ...[
                   const SizedBox(height: 6),
                   Align(
@@ -967,10 +1007,28 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       return;
     }
 
+    setState(() => _fillingDay = null);
+
+    // Offered, not imposed. Adding all three outright would put places on
+    // someone's itinerary they never agreed to, which is the distinction
+    // this app keeps everywhere else.
+    final chosen = await showModalBottomSheet<List<Map<String, dynamic>>>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _PlacePickerSheet(
+        places: found,
+        dayLabel: _dayLabel.format(plan.days[dayIndex].date),
+      ),
+    );
+    if (!mounted || chosen == null || chosen.isEmpty) return;
+
     // Seeded into the summaries cache so the new rows render with their
     // photo and rating immediately, rather than blank until the next fetch.
     final names = <String>[];
-    for (final place in found) {
+    for (final place in chosen) {
       final name = (place['name'] ?? '').toString();
       if (name.isEmpty) continue;
       names.add(name);
@@ -980,10 +1038,38 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     context.read<TripPlanProvider>().addItems(dayIndex, names);
     if (!mounted) return;
     setState(() {
-      _fillingDay = null;
       // The running order described a day that has just changed.
       _schedules = {};
       _summarisedFor = '';
+    });
+  }
+
+  /// Builds a running order for one day only.
+  ///
+  /// The whole-trip button is still there, but a day the user has just
+  /// changed is the one they want re-planned, and re-running every day to
+  /// fix one of them costs a model call per day for no benefit.
+  Future<void> _suggestDaySchedule(
+      TripPlan plan, BookedTripProvider booked, int dayIndex) async {
+    setState(() {
+      _schedulingDay = dayIndex;
+      _error = null;
+    });
+
+    final day = plan.days[dayIndex];
+    final notes = await _adk.daySchedules(
+      days: [_dayPayload(day, booked)],
+      destination: plan.destination,
+    );
+    if (!mounted) return;
+
+    setState(() {
+      _schedulingDay = null;
+      if (notes == null) {
+        _error = "Couldn't build the order — check the server is running.";
+      } else {
+        _schedules = {..._schedules, ...notes};
+      }
     });
   }
 
@@ -1223,6 +1309,156 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Lets the user choose which discovered places go on a day.
+///
+/// Everything found is shown with its photo, rating and description so the
+/// choice is informed, and nothing is ticked to begin with -- a pre-ticked
+/// list is a default dressed up as a decision, and these are places the user
+/// has never seen before.
+class _PlacePickerSheet extends StatefulWidget {
+  const _PlacePickerSheet({required this.places, required this.dayLabel});
+
+  final List<Map<String, dynamic>> places;
+  final String dayLabel;
+
+  @override
+  State<_PlacePickerSheet> createState() => _PlacePickerSheetState();
+}
+
+class _PlacePickerSheetState extends State<_PlacePickerSheet> {
+  final Set<int> _selected = {};
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Add to ${widget.dayLabel}',
+              style:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          Text('Pick the ones you want. Nothing is added until you tap below.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+          const SizedBox(height: 12),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  for (var i = 0; i < widget.places.length; i++)
+                    _tile(i, widget.places[i]),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: ElevatedButton(
+              onPressed: _selected.isEmpty
+                  ? null
+                  : () => Navigator.of(context).pop(
+                      [for (final i in _selected) widget.places[i]]),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppConfig.primaryColor,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: Colors.grey.shade300,
+                disabledForegroundColor: Colors.grey.shade600,
+              ),
+              child: Text(_selected.isEmpty
+                  ? 'Select at least one'
+                  : 'Add ${_selected.length} to this day'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tile(int index, Map<String, dynamic> place) {
+    final selected = _selected.contains(index);
+    final photo = (place['photo'] ?? '').toString();
+    final rating = (place['rating'] as num?)?.toDouble() ?? 0;
+    final count = (place['total_ratings'] as num?)?.toInt() ?? 0;
+    final about = (place['description'] ?? '').toString();
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      elevation: 0,
+      color: selected
+          ? AppConfig.primaryColor.withValues(alpha: 0.08)
+          : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+        side: BorderSide(
+          color: selected ? AppConfig.primaryColor : Colors.grey.shade300,
+          width: selected ? 2 : 1,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+        onTap: () => setState(() {
+          if (!_selected.remove(index)) _selected.add(index);
+        }),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (photo.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+                  child: Image.network(photo,
+                      width: 52,
+                      height: 52,
+                      fit: BoxFit.cover,
+                      // No stand-in image: a grey box is honest about a photo
+                      // that would not load.
+                      errorBuilder: (_, __, ___) => Container(
+                          width: 52, height: 52, color: Colors.grey[200])),
+                )
+              else
+                Container(width: 52, height: 52, color: Colors.grey[200]),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text((place['name'] ?? '').toString(),
+                        style: const TextStyle(
+                            fontSize: 13.5, fontWeight: FontWeight.w600)),
+                    if (rating > 0)
+                      Text('$rating ★ ($count)',
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[700])),
+                    if (about.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(about,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey[800])),
+                      ),
+                  ],
+                ),
+              ),
+              Icon(
+                selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                size: 20,
+                color: selected ? AppConfig.primaryColor : Colors.grey[400],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
