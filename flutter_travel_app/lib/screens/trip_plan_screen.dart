@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:provider/provider.dart';
@@ -706,8 +707,33 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 // Per day as well as for the whole trip: after changing
                 // one day, re-running every day costs a model call each for
                 // no benefit.
+                // Available on a day that already has places too: an
+                // itinerary is rarely finished in one pass, and adding a
+                // fourth stop should not mean emptying the day first.
                 if (day.items.isNotEmpty) ...[
                   const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _fillingDay == null
+                          ? () => _fillDay(plan, index)
+                          : null,
+                      icon: _fillingDay == index
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add_location_alt_outlined,
+                              size: 16),
+                      label: const Text('Add a place to this day'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
@@ -1021,6 +1047,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       builder: (_) => _PlacePickerSheet(
         places: found,
         dayLabel: _dayLabel.format(plan.days[dayIndex].date),
+        onSearch: (query) => _adk.discoverPlaces(
+          city: plan.destination,
+          interests: [query],
+          exclude: already,
+          limit: 6,
+        ),
       ),
     );
     if (!mounted || chosen == null || chosen.isEmpty) return;
@@ -1321,10 +1353,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 /// list is a default dressed up as a decision, and these are places the user
 /// has never seen before.
 class _PlacePickerSheet extends StatefulWidget {
-  const _PlacePickerSheet({required this.places, required this.dayLabel});
+  const _PlacePickerSheet({
+    required this.places,
+    required this.dayLabel,
+    required this.onSearch,
+  });
 
   final List<Map<String, dynamic>> places;
   final String dayLabel;
+
+  /// Looks up places matching typed text, so someone who already knows where
+  /// they want to go is not restricted to what was suggested.
+  final Future<List<Map<String, dynamic>>?> Function(String query) onSearch;
 
   @override
   State<_PlacePickerSheet> createState() => _PlacePickerSheetState();
@@ -1332,6 +1372,52 @@ class _PlacePickerSheet extends StatefulWidget {
 
 class _PlacePickerSheetState extends State<_PlacePickerSheet> {
   final Set<int> _selected = {};
+  final TextEditingController _query = TextEditingController();
+
+  late List<Map<String, dynamic>> _shown = widget.places;
+  Timer? _debounce;
+  bool _searching = false;
+  String? _searchError;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _query.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    final query = value.trim();
+    if (query.isEmpty) {
+      setState(() {
+        _shown = widget.places;
+        _selected.clear();
+        _searching = false;
+        _searchError = null;
+      });
+      return;
+    }
+    setState(() => _searching = true);
+    // 400ms: each keystroke past this is a Places search, and the results
+    // only become meaningful once a few characters are in.
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      final found = await widget.onSearch(query);
+      if (!mounted || _query.text.trim() != query) return;
+      setState(() {
+        _searching = false;
+        if (found == null) {
+          _searchError = "Couldn't search — check the server is running.";
+        } else {
+          _searchError = found.isEmpty ? 'Nothing found for "$query".' : null;
+          // Selection is indices into the visible list, so it has to reset
+          // when that list changes or the wrong place would be added.
+          _selected.clear();
+          _shown = found;
+        }
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1345,15 +1431,43 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
               style:
                   const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
-          Text('Pick the ones you want. Nothing is added until you tap below.',
+          Text('Pick the ones you want, or search for somewhere specific.',
               style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _query,
+            onChanged: _onQueryChanged,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search a place to add',
+              isDense: true,
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: _searching
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
+              ),
+            ),
+          ),
+          if (_searchError != null) ...[
+            const SizedBox(height: 8),
+            Text(_searchError!,
+                style: TextStyle(fontSize: 12, color: Colors.orange[800])),
+          ],
           const SizedBox(height: 12),
           Flexible(
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  for (var i = 0; i < widget.places.length; i++)
-                    _tile(i, widget.places[i]),
+                  for (var i = 0; i < _shown.length; i++) _tile(i, _shown[i]),
                 ],
               ),
             ),
@@ -1365,8 +1479,8 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
             child: ElevatedButton(
               onPressed: _selected.isEmpty
                   ? null
-                  : () => Navigator.of(context).pop(
-                      [for (final i in _selected) widget.places[i]]),
+                  : () => Navigator.of(context)
+                      .pop([for (final i in _selected) _shown[i]]),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppConfig.primaryColor,
                 foregroundColor: Colors.white,
