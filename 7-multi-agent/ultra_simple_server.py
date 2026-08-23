@@ -5398,12 +5398,34 @@ def get_place_summaries(request: PlaceSummariesRequest):
         if not names:
             return {"status": "success", "summaries": {}}
 
+        # Onboarding collects categories, and several of them describe the
+        # same kind of thing: Temple, Shrine, Spiritual Site, Worship Place
+        # and Religious Site are five separate boxes that all resolve to the
+        # single most prominent temple in town. Left unchecked, a plan showed
+        # Jagannath Temple on Day 2 and again on Day 3.
+        #
+        # So a place is claimed by the first category that lands on it, and
+        # later ones take the next result instead. get_activity_image already
+        # does this for photos; the same reasoning applies here, and more
+        # visibly, since this decides what the day actually says.
+        claimed_places = set()
+        claim_lock = threading.Lock()
+
+        def claim(place_id: str) -> bool:
+            if not place_id:
+                return True
+            with claim_lock:
+                if place_id in claimed_places:
+                    return False
+                claimed_places.add(place_id)
+                return True
+
         # Coordinates come free in this same call, so the day's stops can be
         # handed to Google Maps as waypoints without a second lookup.
         field_mask = (
             "places.displayName,places.rating,places.userRatingCount,"
             "places.photos,places.regularOpeningHours,places.formattedAddress,"
-            "places.location,places.editorialSummary,places.types"
+            "places.location,places.editorialSummary,places.types,places.id"
         )
 
         def summarise(name: str):
@@ -5411,21 +5433,30 @@ def get_place_summaries(request: PlaceSummariesRequest):
             cached = _photo_cache.get(cache_key)
             if cached:
                 try:
-                    return name, json.loads(cached)
+                    summary = json.loads(cached)
+                    # Claimed on the way out, so a cached answer still blocks
+                    # a fresh lookup from picking the same place.
+                    claim(str(summary.get("place_id") or ""))
+                    return name, summary
                 except Exception:
                     pass
             try:
+                # Several candidates, not one: a category whose best match is
+                # already taken needs somewhere else to go.
                 resp = requests.post(
                     "https://places.googleapis.com/v1/places:searchText",
                     headers=_google_headers(field_mask),
                     json={"textQuery": f"{name} in {request.city}, India",
-                          "maxResultCount": 1},
+                          "maxResultCount": 5},
                     timeout=8,
                 ).json()
                 places = resp.get("places") or []
-                if not places:
+                place = next(
+                    (p for p in places if claim(str(p.get("id") or ""))), None)
+                if place is None:
+                    # Every candidate was taken by another category. Better to
+                    # drop this one than to repeat a place already in the plan.
                     return name, None
-                place = places[0]
 
                 photo_url = ""
                 photos = place.get("photos") or []
@@ -5461,6 +5492,7 @@ def get_place_summaries(request: PlaceSummariesRequest):
                         t for t in (place.get("types") or [])
                         if t not in ("point_of_interest", "establishment")
                     ][:3],
+                    "place_id": str(place.get("id") or ""),
                 }
                 _photo_cache[cache_key] = json.dumps(summary)
                 return name, summary
