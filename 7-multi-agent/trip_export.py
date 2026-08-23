@@ -270,12 +270,17 @@ def render_place(item: Dict[str, Any], day_number: int,
                   fill=(220, 220, 235))
         y += 44
 
-    about = str(item.get("about", ""))
-    if about:
-        for line in _wrap(draw, about, _font(26), WIDTH - 2 * MARGIN)[:2]:
-            draw.text((MARGIN, y + 10), line, font=_font(26),
-                      fill=(205, 205, 220))
-            y += 34
+    # Narration takes the place of the description when there is one: it says
+    # the same thing in a line meant to be read over a picture, and printing
+    # both would be the same fact twice in two voices.
+    narration = str(item.get("narration", "")).strip()
+    body = narration or str(item.get("about", ""))
+    if body:
+        font = _font(28) if narration else _font(26)
+        colour = (238, 238, 248) if narration else (205, 205, 220)
+        for line in _wrap(draw, body, font, WIDTH - 2 * MARGIN)[:2]:
+            draw.text((MARGIN, y + 10), line, font=font, fill=colour)
+            y += 36
     return canvas
 
 

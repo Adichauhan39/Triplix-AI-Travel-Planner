@@ -3647,6 +3647,73 @@ Format it in a clear, easy-to-read structure with emojis for visual appeal."""
         }
 
 
+def _narrate_trip(days, destination):
+    """One line of narration per place, for the film's shots.
+
+    Phrasing, not facts. The model is given the place's name and Google's own
+    description and asked to turn them into a line a voice could read over the
+    shot -- it is not asked what the place is like, which is the question that
+    invites a confident sentence about somewhere it has never seen.
+
+    Returns a dict keyed by place name. A failure returns {} and the film
+    renders exactly as before, because narration is a garnish and its absence
+    must not cost anyone their video.
+    """
+    places = []
+    for day in days:
+        for item in (day.get("items") or []):
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            places.append({
+                "name": title,
+                "about": str(item.get("about") or "")[:200],
+            })
+    if not places or not GOOGLE_API_KEY:
+        return {}
+
+    rules = [
+        "One line per place, under 70 characters.",
+        "Use only the name and description given. Add no facts of your own - "
+        "no prices, no history, no claims about what it is famous for.",
+        "Write it as narration over a photograph, not as a caption or a "
+        "sentence starting with the name.",
+        "Warm and plain. No exclamation marks, no travel-brochure language.",
+    ]
+    prompt = (
+        f"Narration for a short film about a trip to "
+        f"{destination.split(',')[0] or 'this destination'}.\n\n"
+        f"Places (JSON): {json.dumps(places)}\n\n"
+        + "Rules:\n" + "".join(f"- {r}\n" for r in rules)
+        + 'Return ONLY JSON: {"place name": "line"}. No prose.'
+    )
+
+    try:
+        from google import genai as genai_client
+        client = genai_client.Client(api_key=GOOGLE_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-3.7-flash", contents=prompt)
+        text = (response.text or "").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1:
+            return {}
+        parsed = json.loads(text[start:end + 1])
+        wanted = {p["name"] for p in places}
+        return {
+            str(k): str(v).strip()[:90]
+            for k, v in parsed.items()
+            if str(k) in wanted and str(v).strip()
+        }
+    except Exception as e:
+        print(f"[NARRATE] {e}")
+        return {}
+
+
 @app.post("/api/itinerary/export")
 def export_itinerary(request: dict):
     """The plan as a shareable PDF or MP4.
@@ -3687,6 +3754,15 @@ def export_itinerary(request: dict):
             data = trip_export.build_pdf(frames)
             media, name = "application/pdf", "triplix-trip.pdf"
         else:
+            # Narration is attached before rendering so a shot can carry
+            # its line. Failure yields {} and the film is unchanged.
+            narration = _narrate_trip(days, destination)
+            if narration:
+                for day in days:
+                    for item in (day.get("items") or []):
+                        line = narration.get(str(item.get("title") or ""))
+                        if line:
+                            item["narration"] = line
             frames = trip_export.render_film(days, destination, include_photos)
             if not frames:
                 return {"status": "error", "message": "nothing_to_render"}
