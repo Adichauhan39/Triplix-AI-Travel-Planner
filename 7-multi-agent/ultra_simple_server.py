@@ -5593,20 +5593,32 @@ def get_place_summaries(request: PlaceSummariesRequest):
                     # drop this one than to repeat a place already in the plan.
                     return name, None
 
-                photo_url = ""
-                photos = place.get("photos") or []
-                if photos:
-                    photo_name = photos[0].get("name", "")
-                    if photo_name:
+                # Up to three, not one. The card shows a single thumbnail,
+                # but the trip film gives each place several seconds, and one
+                # still held that long reads as a frozen slideshow. Resolved
+                # at 800px because the film is full-bleed, where a 400px
+                # thumbnail is visibly soft.
+                photo_urls = []
+                for photo in (place.get("photos") or [])[:3]:
+                    photo_name = photo.get("name", "")
+                    if not photo_name:
+                        continue
+                    try:
                         media = requests.get(
                             f"https://places.googleapis.com/v1/{photo_name}"
-                            f"/media?maxWidthPx=400&skipHttpRedirect=true"
+                            f"/media?maxWidthPx=800&skipHttpRedirect=true"
                             f"&key={GOOGLE_PLACES_API_KEY}",
                             timeout=6,
                         ).json()
-                        photo_url = media.get("photoUri", "")
+                        url = media.get("photoUri", "")
+                        if url:
+                            photo_urls.append(url)
+                    except Exception:
+                        continue
+                photo_url = photo_urls[0] if photo_urls else ""
 
                 summary = {
+                    "photos": photo_urls,
                     "name": (place.get("displayName") or {}).get("text", name),
                     "rating": place.get("rating", 0),
                     "total_ratings": place.get("userRatingCount", 0),

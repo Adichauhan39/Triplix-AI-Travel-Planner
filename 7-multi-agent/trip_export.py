@@ -306,7 +306,20 @@ def render_film(days: List[Dict[str, Any]], destination: str,
         frames.append(render_day(day, destination, i + 1, total,
                                  include_photos))
         for item in day.get("items", [])[:3]:
-            frames.append(render_place(item, i + 1, include_photos))
+            # A shot per photo, not per place. Several seconds on one still
+            # reads as a frozen slideshow however slowly it zooms; two or
+            # three angles of the same place reads as coverage of it.
+            photos = [u for u in (item.get("photos") or []) if u]
+            if not photos:
+                photos = [item.get("photo", "")]
+            for index, photo in enumerate(photos[:3]):
+                shot = {**item, "photo": photo}
+                # The name and blurb belong on the establishing shot. Repeated
+                # under every angle they read as a caption stuck to the
+                # screen rather than an introduction to the place.
+                if index > 0:
+                    shot["about"] = ""
+                frames.append(render_place(shot, i + 1, include_photos))
     frames.append(render_closing(destination))
     return frames
 
