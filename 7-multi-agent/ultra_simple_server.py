@@ -2134,63 +2134,6 @@ def _save_photo_cache():
     except Exception as e:
         print(f"[CACHE] Could not save photo cache: {e}")
 
-# Themed fallback pools (all IDs verified to resolve on images.unsplash.com),
-# keyed by rough activity topic. Used when Places API finds nothing for an
-# abstract/generic activity word (e.g. "Daily Life", "Retail Therapy") that
-# isn't a real, searchable place.
-_ACTIVITY_FALLBACK_THEMES = {
-    'nature': [
-        "1441974231531-c6227db76b6e", "1441906363162-903afd0d3d52",
-        "1477587458883-47145ed94245", "1512621776951-a57141f2eefd",
-    ],
-    'spiritual': [
-        "1519501025264-65ba15a82390", "1476514525535-07fb3b4ae5f1",
-    ],
-    'food': [
-        "1517248135467-4c7edcad34c4", "1533105079780-92b9be482077",
-        "1555396273-367ea4eb4db5",
-    ],
-    'market': [
-        "1555529669-e69e7aa0ba9a", "1533900298318-6b8da08a523e",
-    ],
-    'heritage': [
-        "1519677100203-a0e668c92439", "1524492412937-b28074a5d7da",
-    ],
-    'urban': [
-        "1449824913935-59a10b8d2000", "1502602898657-3e91760cbb34",
-    ],
-    'entertainment': [
-        "1488646953014-85cb44e25828", "1566073771259-6a8506099945",
-    ],
-}
-
-_ACTIVITY_THEME_KEYWORDS = {
-    'nature': ['park', 'garden', 'lake', 'green', 'nature', 'picnic', 'river',
-               'zoo', 'hill', 'forest', 'beach', 'view'],
-    'spiritual': ['temple', 'shrine', 'mosque', 'church', 'dargah', 'pilgrim',
-                  'spiritual', 'religious', 'meditation', 'ashram', 'sacred'],
-    'food': ['food', 'cuisine', 'cafe', 'restaurant', 'dhaba', 'biryani',
-             'snack', 'sweet', 'dining', 'eatery', 'street food', 'diner'],
-    'market': ['market', 'shop', 'mall', 'bazaar', 'textile', 'retail',
-               'souvenir', 'boutique', 'wholesale'],
-    'heritage': ['fort', 'palace', 'monument', 'museum', 'heritage',
-                 'historical', 'ancient', 'old town', 'ruins', 'building'],
-    'urban': ['city', 'urban', 'cityscape', 'architecture', 'walk',
-              'local life', 'daily life', 'views', 'commercial', 'stroll'],
-    'entertainment': ['cinema', 'amusement', 'entertainment', 'theme park',
-                       'family fun', 'recreation', 'playground', 'event',
-                       'leisure'],
-}
-
-
-def _fallback_theme_for(query: str) -> str:
-    q = query.lower()
-    for theme, keywords in _ACTIVITY_THEME_KEYWORDS.items():
-        if any(kw in q for kw in keywords):
-            return theme
-    return 'urban'
-
-
 def get_activity_image(
     query: str,
     city: str,
@@ -2278,24 +2221,22 @@ def get_activity_image(
             # Claimed the place but couldn't resolve any of its photos
             # (rare) — fall through and try the next place.
 
-        # Fallback: themed stock images, trying to avoid a repeat within
-        # this batch before accepting one.
-        theme = _fallback_theme_for(query)
-        candidates = _ACTIVITY_FALLBACK_THEMES[theme]
-        for photo_id in candidates:
-            if claim(photo_id):
-                url = f"https://images.unsplash.com/photo-{photo_id}?w=400&h=300&fit=crop"
-                _photo_cache[cache_key] = url
-                return url
-
-        # Every themed candidate was already used this batch — accept a
-        # repeat rather than return nothing.
-        url = f"https://images.unsplash.com/photo-{candidates[0]}?w=400&h=300&fit=crop"
-        _photo_cache[cache_key] = url
-        return url
+        # Nothing real for this activity in this city. Returns empty rather
+        # than a themed stock photograph.
+        #
+        # The stock fallback was indistinguishable from a real result: a card
+        # labelled "Nature Trail" showed a handsome photograph of a trail
+        # somewhere else entirely, and nothing on screen said so. That is the
+        # one thing this app does not do anywhere else -- flights, hotels,
+        # place descriptions and reviews are all real or absent -- and it
+        # undercut the claim everywhere it appeared.
+        #
+        # Not cached: a miss today may be a hit next week, and caching the
+        # absence would keep the card blank for a day for no reason.
+        return ""
     except Exception as e:
         print(f"[ACTIVITY IMAGE] [ERROR] '{query}' in {city}: {e}")
-        return "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&h=300&fit=crop"
+        return ""
 
 
 class ActivityImagesRequest(BaseModel):
@@ -2342,7 +2283,10 @@ def get_activity_images(request: ActivityImagesRequest):
                     ),
                     to_fetch,
                 ))
-            results.update(dict(fetched))
+            # Only real photos. An empty string means Places had nothing for
+            # that activity, and the app draws its grey placeholder when a
+            # key is missing -- an honest blank rather than a stand-in.
+            results.update({k: v for k, v in fetched if v})
             # Checkpoint here rather than only on shutdown: the server is
             # usually stopped with a kill, which never runs the shutdown hook,
             # and this is the point where expensive new lookups exist.
