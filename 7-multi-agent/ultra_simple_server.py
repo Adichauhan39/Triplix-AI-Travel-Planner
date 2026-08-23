@@ -3878,7 +3878,10 @@ def adjust_itinerary(request: dict):
             "Rules:\n"
             "- Keep every existing item unless the request asks to remove, "
             "replace or move it. These are the user's own choices.\n"
-            "- Keep the same dates and the same number of days.\n"
+            "- Keep the existing dates unless the user asks to change how "
+            "long the trip is. If they ask for fewer or more days, return "
+            "that many, keeping the dates consecutive from the first day and "
+            "dropping or spreading places to fit.\n"
             "- Set \"added_by_assistant\": true on any item you introduce, "
             "and keep it false on items that were already there.\n"
             "- Only suggest real, specific places in the destination. Never "
@@ -3935,11 +3938,22 @@ def adjust_itinerary(request: dict):
                 'items': items,
             })
 
-        if len(cleaned) != len(days):
-            print(f"[PLAN] day count changed {len(days)} -> {len(cleaned)};"
-                  " keeping the original")
-            return {"status": "error", "message": "day_count_changed",
+        # A sanity check, not a lock. This used to require the day count to
+        # match exactly, which made "change my trip to 2 days" -- a perfectly
+        # ordinary request -- the one thing the endpoint could never do. The
+        # guard was meant to stop a malformed reply wiping a plan, so it now
+        # tests for that instead: something came back, it is a believable
+        # length, and every day carries a usable date.
+        if not cleaned or len(cleaned) > 30:
+            print(f"[PLAN] implausible day count {len(cleaned)}; keeping the"
+                  " original")
+            return {"status": "error", "message": "implausible_plan",
                     "days": days}
+        if any(not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d["date"])
+               for d in cleaned):
+            print("[PLAN] a day came back without a usable date; keeping the"
+                  " original")
+            return {"status": "error", "message": "bad_dates", "days": days}
 
         return {"status": "success", "days": cleaned}
 
