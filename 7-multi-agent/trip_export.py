@@ -27,6 +27,11 @@ from PIL import Image, ImageDraw, ImageFont
 WIDTH, HEIGHT = 1080, 1350
 MARGIN = 64
 
+# The film is 9:16, the page stays 4:5. WhatsApp Status and Reels are where a
+# trip video actually gets shared, and a 4:5 video is letterboxed there; a PDF
+# page has no such constraint and 4:5 prints better.
+FILM_WIDTH, FILM_HEIGHT = 1080, 1920
+
 INK = (17, 24, 39)
 MUTED = (107, 114, 128)
 ACCENT = (13, 13, 130)
@@ -284,6 +289,70 @@ def render_place(item: Dict[str, Any], day_number: int,
     return canvas
 
 
+def render_place_layers(item: Dict[str, Any], day_number: int,
+                        include_photos: bool = True):
+    """A place shot as (picture, text layer), both at film size.
+
+    Split so the words can arrive after the picture. Painted into a single
+    image they appear the instant the shot cuts, which reads as a caption
+    stuck on the frame rather than a title introducing it.
+    """
+    w, h = FILM_WIDTH, FILM_HEIGHT
+    base = Image.new("RGB", (w, h), INK)
+    photo = _fetch_image(item.get("photo", ""), (w, h)) \
+        if include_photos else None
+    if photo is not None:
+        base.paste(photo, (0, 0))
+
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # A gradient foot keeps the picture visible up top while the words stay
+    # legible below.
+    for y in range(h - 620, h):
+        alpha = int(238 * (y - (h - 620)) / 620)
+        draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
+
+    y = h - 430
+    draw.text((MARGIN, y), f"DAY {day_number}", font=_font(32),
+              fill=(198, 198, 222, 255))
+    y += 50
+    for line in _wrap(draw, str(item.get("title", "")), _font(72, bold=True),
+                      w - 2 * MARGIN)[:2]:
+        draw.text((MARGIN, y), line, font=_font(72, bold=True),
+                  fill=(255, 255, 255, 255))
+        y += 82
+
+    meta = []
+    if item.get("rating"):
+        meta.append(f"{item['rating']} stars")
+    if item.get("hours_today"):
+        meta.append(str(item["hours_today"]))
+    if meta:
+        draw.text((MARGIN, y + 8), "   ·   ".join(meta)[:52], font=_font(30),
+                  fill=(222, 222, 238, 255))
+        y += 48
+
+    body = str(item.get("narration", "")).strip() or str(item.get("about", ""))
+    if body:
+        for line in _wrap(draw, body, _font(30), w - 2 * MARGIN)[:2]:
+            draw.text((MARGIN, y + 12), line, font=_font(30),
+                      fill=(236, 236, 248, 255))
+            y += 40
+
+    return base, overlay
+
+
+def _fit_film(image: Image.Image) -> Image.Image:
+    """A 4:5 card centred on a 9:16 canvas, so cards and photos mix cleanly."""
+    canvas = Image.new("RGB", (FILM_WIDTH, FILM_HEIGHT), PAPER)
+    scale = FILM_WIDTH / image.width
+    resized = image.resize(
+        (FILM_WIDTH, max(1, int(image.height * scale))), Image.LANCZOS)
+    canvas.paste(resized, (0, (FILM_HEIGHT - resized.height) // 2))
+    return canvas
+
+
 def render_closing(destination: str) -> Image.Image:
     canvas = Image.new("RGB", (WIDTH, HEIGHT), ACCENT)
     draw = ImageDraw.Draw(canvas)
@@ -297,36 +366,58 @@ def render_closing(destination: str) -> Image.Image:
 
 
 def render_film(days: List[Dict[str, Any]], destination: str,
-                include_photos: bool = True) -> List[Image.Image]:
-    """The full running order of shots: title, then each day and its places.
+                include_photos: bool = True) -> List[Dict[str, Any]]:
+    """The running order of shots, each with its own timing and camera move.
 
-    A day card alone tells the viewer what is happening; a photo-led shot per
-    place is what makes it read as a film rather than a slideshow of
-    paperwork. Days with nothing in them still get their card, since an empty
-    day is part of the trip.
+    Uniform timing is most of what makes an edit feel generated. A title needs
+    to land, a day card is a signpost, an establishing shot wants room, and a
+    second angle of the same place is a quick cut. The camera move rotates for
+    the same reason -- every shot pushing in reads as mechanical long before
+    any single move does.
     """
-    frames = [render_title(destination, days, include_photos)]
+    shots: List[Dict[str, Any]] = [{
+        "image": _fit_film(render_title(destination, days, include_photos)),
+        "seconds": 4.0,
+        "mode": 0,
+    }]
+
     total = len(days)
+    move = 0
     for i, day in enumerate(days):
-        frames.append(render_day(day, destination, i + 1, total,
-                                 include_photos))
+        shots.append({
+            "image": _fit_film(
+                render_day(day, destination, i + 1, total, include_photos)),
+            "seconds": 2.2,
+            "mode": 1,
+        })
         for item in day.get("items", [])[:3]:
-            # A shot per photo, not per place. Several seconds on one still
-            # reads as a frozen slideshow however slowly it zooms; two or
-            # three angles of the same place reads as coverage of it.
             photos = [u for u in (item.get("photos") or []) if u]
             if not photos:
                 photos = [item.get("photo", "")]
             for index, photo in enumerate(photos[:3]):
                 shot = {**item, "photo": photo}
-                # The name and blurb belong on the establishing shot. Repeated
-                # under every angle they read as a caption stuck to the
-                # screen rather than an introduction to the place.
+                # Name and blurb on the establishing shot only; under every
+                # angle they stop introducing the place and start nagging.
                 if index > 0:
                     shot["about"] = ""
-                frames.append(render_place(shot, i + 1, include_photos))
-    frames.append(render_closing(destination))
-    return frames
+                    shot["narration"] = ""
+                base, overlay = render_place_layers(shot, i + 1,
+                                                    include_photos)
+                move = (move + 1) % 4
+                shots.append({
+                    "image": base,
+                    "overlay": overlay,
+                    # The picture reads for a beat before the words arrive.
+                    "overlay_from": 0.45 if index == 0 else 0.2,
+                    "seconds": 3.2 if index == 0 else 1.8,
+                    "mode": move,
+                })
+    shots.append({
+        "image": _fit_film(render_closing(destination)),
+        "seconds": 3.4,
+        "mode": 1,
+    })
+    return shots
 
 
 def render_days(days: List[Dict[str, Any]], destination: str,
@@ -350,71 +441,187 @@ def build_pdf(frames: List[Image.Image]) -> bytes:
     return buffer.getvalue()
 
 
-def build_video(frames: List[Image.Image], seconds_per_day: float = 3.0
-                ) -> bytes:
-    """The same frames as an MP4 slideshow.
+def _ease(t: float) -> float:
+    """Smoothstep: starts and stops gently instead of snapping into motion."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
 
-    Written through ffmpeg's image2 demuxer rather than frame-by-frame
-    encoding: the input is a handful of stills, and holding each for a few
-    seconds is all a trip recap needs.
+
+def _kenburns(image: Image.Image, progress: float, mode: int,
+              size) -> Image.Image:
+    """One frame of a slow camera move across [image].
+
+    Four moves, chosen by shot index. Every shot pushing in is what makes a
+    sequence feel mechanical -- the eye notices the repetition long before it
+    notices any single move.
     """
-    if not frames:
+    out_w, out_h = size
+    eased = _ease(progress)
+    zoom_span = 0.12
+
+    if mode == 0:      # push in
+        zoom = 1.0 + zoom_span * eased
+        cx, cy = 0.5, 0.5
+    elif mode == 1:    # pull out
+        zoom = 1.0 + zoom_span * (1 - eased)
+        cx, cy = 0.5, 0.5
+    elif mode == 2:    # drift left to right
+        zoom = 1.0 + zoom_span * 0.6
+        cx, cy = 0.36 + 0.28 * eased, 0.5
+    else:              # drift up, slight push
+        zoom = 1.0 + zoom_span * (0.3 + 0.5 * eased)
+        cx, cy = 0.5, 0.62 - 0.22 * eased
+
+    crop_w = image.width / zoom
+    crop_h = image.height / zoom
+    left = max(0, min(image.width - crop_w, cx * image.width - crop_w / 2))
+    top = max(0, min(image.height - crop_h, cy * image.height - crop_h / 2))
+    frame = image.crop((int(left), int(top),
+                        int(left + crop_w), int(top + crop_h)))
+    # BILINEAR, not LANCZOS. This runs once per frame -- 25 times a second of
+    # film -- and nobody pauses a moving shot to inspect it. LANCZOS roughly
+    # doubled the render time for a difference invisible in motion.
+    return frame.resize((out_w, out_h), Image.BILINEAR)
+
+
+def build_video(shots, seconds_per_day: float = 3.0,
+                music_path: Optional[str] = None) -> bytes:
+    """The film, rendered frame by frame and piped straight into ffmpeg.
+
+    [shots] may be plain images -- the old shape -- or dicts carrying their own
+    duration, camera move and text overlay. Frames are generated here rather
+    than handed to an ffmpeg filter because that is what buys per-shot timing,
+    a different move on each shot, and text that arrives after its picture.
+    None of those are expressible as one filter chain over a fixed image
+    sequence.
+
+    Raw frames go over a pipe rather than through PNGs on disk: a 30 second
+    film is 750 frames, and writing them out costs more than rendering them.
+
+    [music_path] is mixed in when given. Nothing ships with the app -- the
+    file has to be one you are licensed to redistribute, since the video is
+    made to be shared.
+    """
+    if not shots:
         return b""
 
+    import subprocess
     import imageio_ffmpeg
 
-    workdir = tempfile.mkdtemp(prefix="triplix_video_")
+    normalised = []
+    for i, shot in enumerate(shots):
+        if isinstance(shot, dict):
+            normalised.append({
+                "image": shot["image"],
+                "seconds": float(shot.get("seconds", seconds_per_day)),
+                "mode": int(shot.get("mode", i % 4)),
+                "overlay": shot.get("overlay"),
+                "overlay_from": float(shot.get("overlay_from", 0.0)),
+            })
+        else:
+            normalised.append({"image": shot, "seconds": seconds_per_day,
+                               "mode": i % 4, "overlay": None,
+                               "overlay_from": 0.0})
+
+    fps = 25
+    width, height = normalised[0]["image"].size
+    total_seconds = sum(s["seconds"] for s in normalised)
+
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [
+        exe, "-y",
+        "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
+    ]
+    if music_path and os.path.exists(music_path):
+        cmd += ["-i", music_path, "-c:a", "aac", "-b:a", "160k",
+                "-shortest", "-af",
+                f"afade=t=out:st={max(0.0, total_seconds - 2):.2f}:d=2"]
+    # Frames go in over a pipe, but the file comes out on disk: MP4 writes
+    # its header last and then seeks back to move it, which a pipe cannot do.
+    # Piping the output produced "Invalid argument" mid-write as ffmpeg gave
+    # up and closed the input.
+    workdir = tempfile.mkdtemp(prefix="triplix_film_")
+    out_path = os.path.join(workdir, "trip.mp4")
+    cmd += [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        out_path,
+    ]
+
+    # stderr goes to a file, not a pipe. ffmpeg is chatty, and an unread
+    # stderr pipe fills, blocks ffmpeg, and deadlocks against us still writing
+    # frames into stdin -- the render simply hangs with no error anywhere.
+    log_path = os.path.join(workdir, "ffmpeg.log")
+    log = open(log_path, "wb")
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                               stdout=subprocess.DEVNULL,
+                               stderr=log)
     try:
-        for i, frame in enumerate(frames):
-            # yuv420p needs even dimensions; the canvas is already even, but
-            # a future size change should not silently produce a broken file.
-            frame.save(os.path.join(workdir, f"frame_{i:03d}.png"))
+        elapsed = 0.0
+        for shot in normalised:
+            frames = max(1, int(fps * shot["seconds"]))
+            base = shot["image"]
+            for f in range(frames):
+                progress = f / max(1, frames - 1)
+                frame = _kenburns(base, progress, shot["mode"],
+                                  (width, height))
 
-        out_path = os.path.join(workdir, "trip.mp4")
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        fps = 25
-        hold = max(0.5, seconds_per_day)
-        per_frame = int(fps * hold)
-        total_frames = per_frame * len(frames)
+                # The picture lands first and the words follow. Painted into
+                # frame one they appear the instant the shot cuts, which reads
+                # as a caption rather than a title.
+                overlay = shot.get("overlay")
+                if overlay is not None:
+                    delay = shot["overlay_from"]
+                    t = (f / fps) - delay
+                    if t > 0:
+                        alpha = min(1.0, t / 0.5)
+                        if alpha >= 1.0:
+                            frame = Image.alpha_composite(
+                                frame.convert("RGBA"), overlay).convert("RGB")
+                        else:
+                            faded = overlay.copy()
+                            faded.putalpha(
+                                faded.getchannel("A").point(
+                                    lambda v, a=alpha: int(v * a)))
+                            frame = Image.alpha_composite(
+                                frame.convert("RGBA"), faded).convert("RGB")
 
-        # zoompan gives each still a slow push in, which is what separates a
-        # film from a slideshow -- the eye reads a moving image as intentional
-        # and a static one as a document. Done in one filter chain rather than
-        # an xfade graph per frame, which grows unwieldy and fails oddly on
-        # long trips.
-        #
-        # d= holds each input for the whole shot; the 1.0008 step is a ~10%
-        # zoom across it, gentle enough not to look like a mistake. s= locks
-        # the output size, since zoompan otherwise renders at its own scale.
-        motion = (
-            f"zoompan=z='min(zoom+0.0008,1.10)':d={per_frame}"
-            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-            f":s={WIDTH}x{HEIGHT}:fps={fps},"
-            f"fade=t=in:st=0:d=0.6,"
-            f"fade=t=out:st={max(0.0, total_frames / fps - 0.8):.2f}:d=0.8,"
-            "format=yuv420p"
-        )
+                # A fade at each end, so it opens and closes rather than
+                # starting and stopping.
+                now = elapsed + f / fps
+                fade = 1.0
+                if now < 0.7:
+                    fade = now / 0.7
+                elif now > total_seconds - 0.9:
+                    fade = max(0.0, (total_seconds - now) / 0.9)
+                if fade < 1.0:
+                    frame = Image.blend(
+                        Image.new("RGB", frame.size, (0, 0, 0)), frame, fade)
 
-        cmd = [
-            exe, "-y",
-            "-framerate", f"{1 / hold}",
-            "-i", os.path.join(workdir, "frame_%03d.png"),
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-pix_fmt", "yuv420p",
-            "-vf", motion,
-            out_path,
-        ]
-        import subprocess
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode != 0 or not os.path.exists(out_path):
-            raise RuntimeError(
-                (result.stderr or b"").decode("utf-8", "replace")[-400:])
+                process.stdin.write(frame.tobytes())
+            elapsed += shot["seconds"]
 
+        process.stdin.close()
+        process.wait(timeout=300)
+        log.close()
+        if process.returncode != 0 or not os.path.exists(out_path):
+            with open(log_path, "rb") as fh:
+                tail = fh.read()[-400:].decode("utf-8", "replace")
+            raise RuntimeError(tail)
         with open(out_path, "rb") as fh:
             return fh.read()
     finally:
-        # Best effort: a left-behind temp directory is untidy, not harmful.
+        try:
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+        except Exception:
+            pass
+        try:
+            if not log.closed:
+                log.close()
+        except Exception:
+            pass
         try:
             for name in os.listdir(workdir):
                 os.remove(os.path.join(workdir, name))
