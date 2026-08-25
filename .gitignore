@@ -99,3 +99,8 @@ Desktop.ini
 # Cached Travelpayouts city dataset (see _CITIES_PATH). 2.3MB, re-downloaded
 # on first use, so it has no business in the repo.
 7-multi-agent/.cities.json
+
+# Soundtrack files are licensed per-publisher, not committed.
+# See 7-multi-agent/music/README.md
+7-multi-agent/music/*
+!7-multi-agent/music/README.md

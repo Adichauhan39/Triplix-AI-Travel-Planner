@@ -353,6 +353,132 @@ def _fit_film(image: Image.Image) -> Image.Image:
     return canvas
 
 
+def _mercator(lat: float, lng: float, zoom: int):
+    """Web Mercator world pixel for a coordinate, at 256px tiles.
+
+    Needed to know where a coordinate lands inside a static map image, so the
+    car can be drawn at the right spot. Google gives the picture, not the
+    projection, but the projection is fixed and standard.
+    """
+    import math
+    scale = 256 * (2 ** zoom)
+    x = (lng + 180.0) / 360.0 * scale
+    siny = min(max(math.sin(math.radians(lat)), -0.9999), 0.9999)
+    y = (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi)) * scale
+    return x, y
+
+
+def _fit_zoom(points, width: int, height: int, padding: int = 120) -> int:
+    """The closest zoom that still holds every stop inside the frame."""
+    for zoom in range(15, 3, -1):
+        xs, ys = zip(*[_mercator(la, ln, zoom) for la, ln in points])
+        if (max(xs) - min(xs)) <= (width - padding) and \
+           (max(ys) - min(ys)) <= (height - padding):
+            return zoom
+    return 4
+
+
+def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
+    """A map of one day's stops, plus where each sits in the image.
+
+    One request per day, not one per frame. The car is animated locally over
+    this single picture -- drawing it server-side would mean a billed map
+    request twenty-five times a second, which is why this shot is worth
+    building at all.
+
+    Returns (image, pixel_points) or None when it cannot be had; the film then
+    simply has no map shot rather than failing.
+    """
+    if not api_key or len(points) < 2:
+        return None
+
+    width, height = size
+    # Static Maps caps a request at 640x640, doubled with scale=2.
+    req_w, req_h = 640, min(640, int(640 * height / width))
+    # req_w, not req_w * 2. _fit_zoom measures spans in unscaled world
+    # pixels, and scale=2 doubles them in the returned image -- comparing
+    # against the doubled size chose a zoom twice too close, which put the
+    # first stop on the bottom edge and pushed the last one out of frame.
+    zoom = _fit_zoom(points, req_w, req_h)
+
+    centre_lat = sum(p[0] for p in points) / len(points)
+    centre_lng = sum(p[1] for p in points) / len(points)
+
+    markers = "".join(
+        f"&markers=color:0x0d0d82%7Clabel:{i + 1}%7C{la},{ln}"
+        for i, (la, ln) in enumerate(points))
+    path = "&path=color:0x0d0d82c0%7Cweight:6%7C" + "%7C".join(
+        f"{la},{ln}" for la, ln in points)
+
+    url = (f"https://maps.googleapis.com/maps/api/staticmap"
+           f"?size={req_w}x{req_h}&scale=2&maptype=roadmap"
+           f"&center={centre_lat},{centre_lng}&zoom={zoom}"
+           f"{markers}{path}&key={api_key}")
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200 or "image" not in \
+                (resp.headers.get("content-type") or ""):
+            print(f"[MAP] {resp.status_code}: {resp.text[:120]}")
+            return None
+        raw_map = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    except Exception as e:
+        print(f"[MAP] {e}")
+        return None
+
+    # Where each stop falls in the returned image, before it is scaled up.
+    cx, cy = _mercator(centre_lat, centre_lng, zoom)
+    half_w, half_h = raw_map.width / 2, raw_map.height / 2
+    pixels = []
+    for la, ln in points:
+        px, py = _mercator(la, ln, zoom)
+        pixels.append(((px - cx) * 2 + half_w, (py - cy) * 2 + half_h))
+
+    scale = width / raw_map.width
+    scaled = raw_map.resize(
+        (width, max(1, int(raw_map.height * scale))), Image.LANCZOS)
+    canvas = Image.new("RGB", (width, height), (232, 234, 238))
+    top = (height - scaled.height) // 2
+    canvas.paste(scaled, (0, top))
+    pixels = [(x * scale, y * scale + top) for x, y in pixels]
+    return canvas, pixels
+
+
+def render_car(base: Image.Image, pixels, progress: float,
+               day_number: int) -> Image.Image:
+    """The map with the car placed along the route at [progress].
+
+    Travels leg by leg at a constant share of the journey per leg, so a day
+    with three stops spends the same time on each hop rather than racing the
+    short one.
+    """
+    frame = base.copy()
+    draw = ImageDraw.Draw(frame)
+
+    legs = max(1, len(pixels) - 1)
+    position = min(0.9999, max(0.0, progress)) * legs
+    leg = int(position)
+    within = position - leg
+    x0, y0 = pixels[leg]
+    x1, y1 = pixels[min(leg + 1, len(pixels) - 1)]
+    x = x0 + (x1 - x0) * within
+    y = y0 + (y1 - y0) * within
+
+    # The road already travelled, drawn over the route so progress is visible.
+    travelled = [pixels[i] for i in range(leg + 1)] + [(x, y)]
+    if len(travelled) > 1:
+        draw.line(travelled, fill=(214, 45, 32), width=9, joint="curve")
+
+    r = 26
+    draw.ellipse([x - r, y - r, x + r, y + r], fill=(214, 45, 32),
+                 outline=(255, 255, 255), width=5)
+    draw.ellipse([x - 8, y - 8, x + 8, y + 8], fill=(255, 255, 255))
+
+    label = f"DAY {day_number}  ·  ON THE ROAD"
+    draw.rectangle([0, 0, FILM_WIDTH, 96], fill=(13, 13, 130))
+    draw.text((MARGIN, 30), label, font=_font(30), fill=(255, 255, 255))
+    return frame
+
+
 def render_closing(destination: str) -> Image.Image:
     canvas = Image.new("RGB", (WIDTH, HEIGHT), ACCENT)
     draw = ImageDraw.Draw(canvas)
@@ -366,7 +492,8 @@ def render_closing(destination: str) -> Image.Image:
 
 
 def render_film(days: List[Dict[str, Any]], destination: str,
-                include_photos: bool = True) -> List[Dict[str, Any]]:
+                include_photos: bool = True,
+                maps_key: str = "") -> List[Dict[str, Any]]:
     """The running order of shots, each with its own timing and camera move.
 
     Uniform timing is most of what makes an edit feel generated. A title needs
@@ -390,6 +517,23 @@ def render_film(days: List[Dict[str, Any]], destination: str,
             "seconds": 2.2,
             "mode": 1,
         })
+        # The route for the day, with the car driving it. Placed before the
+        # places so the film shows where it is going, then what is there.
+        stops = [(i["lat"], i["lng"]) for i in day.get("items", [])[:4]
+                 if i.get("lat") is not None and i.get("lng") is not None]
+        if maps_key and len(stops) >= 2:
+            drawn = fetch_day_map(stops, maps_key)
+            if drawn is not None:
+                base, pixels = drawn
+                shots.append({
+                    "image": base,
+                    "seconds": 4.0,
+                    # Animated per frame rather than panned: the movement is
+                    # the car, not the camera.
+                    "animate": lambda p, b=base, px=pixels, d=i + 1:
+                        render_car(b, px, p, d),
+                })
+
         for item in day.get("items", [])[:3]:
             photos = [u for u in (item.get("photos") or []) if u]
             if not photos:
@@ -517,11 +661,14 @@ def build_video(shots, seconds_per_day: float = 3.0,
                 "mode": int(shot.get("mode", i % 4)),
                 "overlay": shot.get("overlay"),
                 "overlay_from": float(shot.get("overlay_from", 0.0)),
+                # A shot that draws itself each frame, for the map: the
+                # movement belongs to the car rather than the camera.
+                "animate": shot.get("animate"),
             })
         else:
             normalised.append({"image": shot, "seconds": seconds_per_day,
                                "mode": i % 4, "overlay": None,
-                               "overlay_from": 0.0})
+                               "overlay_from": 0.0, "animate": None})
 
     fps = 25
     width, height = normalised[0]["image"].size
@@ -564,8 +711,9 @@ def build_video(shots, seconds_per_day: float = 3.0,
             base = shot["image"]
             for f in range(frames):
                 progress = f / max(1, frames - 1)
-                frame = _kenburns(base, progress, shot["mode"],
-                                  (width, height))
+                animate = shot.get("animate")
+                frame = animate(progress) if animate else _kenburns(
+                    base, progress, shot["mode"], (width, height))
 
                 # The picture lands first and the words follow. Painted into
                 # frame one they appear the instant the shot cuts, which reads

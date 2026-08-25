@@ -3763,7 +3763,9 @@ def export_itinerary(request: dict):
                         line = narration.get(str(item.get("title") or ""))
                         if line:
                             item["narration"] = line
-            frames = trip_export.render_film(days, destination, include_photos)
+            frames = trip_export.render_film(
+                days, destination, include_photos,
+                maps_key=GOOGLE_PLACES_API_KEY)
             if not frames:
                 return {"status": "error", "message": "nothing_to_render"}
             # A soundtrack if one has been provided. Nothing ships with the
