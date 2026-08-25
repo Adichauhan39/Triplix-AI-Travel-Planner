@@ -3766,7 +3766,22 @@ def export_itinerary(request: dict):
             frames = trip_export.render_film(days, destination, include_photos)
             if not frames:
                 return {"status": "error", "message": "nothing_to_render"}
-            data = trip_export.build_video(frames, seconds_per_day=3.0)
+            # A soundtrack if one has been provided. Nothing ships with the
+            # app: the video is made to be shared, so the track has to be one
+            # you hold redistribution rights to. Drop a file in
+            # 7-multi-agent/music/ and it is picked up automatically.
+            music_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "music")
+            music_path = None
+            if os.path.isdir(music_dir):
+                for name in sorted(os.listdir(music_dir)):
+                    if name.lower().endswith((".mp3", ".m4a", ".aac", ".wav")):
+                        music_path = os.path.join(music_dir, name)
+                        break
+            if music_path:
+                print(f"[EXPORT] scoring with {os.path.basename(music_path)}")
+            data = trip_export.build_video(frames, seconds_per_day=3.0,
+                                           music_path=music_path)
             media, name = "video/mp4", "triplix-trip.mp4"
 
         if not data:

@@ -270,6 +270,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             'title': _placeName(i.title),
             if (summary['rating'] != null) 'rating': summary['rating'],
             if (summary['photo'] != null) 'photo': summary['photo'],
+            // Every photo, not just the first. The film gives each
+            // place two or three angles, and sending one meant it
+            // rendered the same still repeatedly -- the feature only
+            // ever worked when the payload was built by hand.
+            if (summary['photos'] != null) 'photos': summary['photos'],
             if (summary['description'] != null)
               'about': summary['description'],
             if (_todayHoursFor(i.title, day.date) != null)
