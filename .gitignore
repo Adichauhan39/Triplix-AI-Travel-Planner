@@ -104,3 +104,6 @@ Desktop.ini
 # See 7-multi-agent/music/README.md
 7-multi-agent/music/*
 !7-multi-agent/music/README.md
+
+# Cached flight schedules (see _SCHEDULE_CACHE_PATH). Regenerated on demand.
+7-multi-agent/.flight_schedules.json

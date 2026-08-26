@@ -1287,6 +1287,33 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             const SizedBox(height: 16),
           ],
 
+          // The outbound leg is named the same way the return is. Without a
+          // header it read as the only flight on the sheet, and the return
+          // below looked like a second, unrelated question.
+          if (_isFlight &&
+              widget.returnDate != null &&
+              widget.flightOrigin.isNotEmpty) ...[
+            Row(
+              children: [
+                const Icon(Icons.flight_takeoff,
+                    size: 18, color: AppConfig.primaryColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'To: ${widget.flightOrigin.split(',').first} to '
+                    '${widget.flightDestination.split(',').first}',
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (widget.flightDate != null)
+                  Text(DateFormat('dd MMM').format(widget.flightDate!),
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey[600])),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
           TextField(
             controller: _controller,
             autofocus: true,

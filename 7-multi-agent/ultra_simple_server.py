@@ -4069,7 +4069,46 @@ def replan_itinerary(request: AgentRequest):
             "response": "I hit an error while re-planning your itinerary."
         }
 
-_flight_schedule_cache: Dict[str, Any] = {}
+_SCHEDULE_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '.flight_schedules.json')
+
+
+def _load_schedule_cache() -> Dict[str, Any]:
+    """Flight schedules looked up previously, read back from disk.
+
+    This was memory-only, so every restart threw away every route and the
+    next lookup paid for five grounded model calls again -- 10 to 30 seconds
+    for something already known. The answers describe published timetables,
+    which do not change between restarts.
+    """
+    try:
+        if os.path.exists(_SCHEDULE_CACHE_PATH):
+            with open(_SCHEDULE_CACHE_PATH, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                print(f"[SCHEDULE] {len(data)} routes loaded from disk")
+                return data
+    except Exception as e:
+        print(f"[SCHEDULE] could not read cache: {e}")
+    return {}
+
+
+def _save_schedule_cache() -> None:
+    """Written after each new lookup, merging rather than overwriting.
+
+    uvicorn can run several workers, and a plain overwrite would let one
+    worker discard routes another had just paid to look up.
+    """
+    try:
+        merged = _load_schedule_cache()
+        merged.update(_flight_schedule_cache)
+        with open(_SCHEDULE_CACHE_PATH, 'w', encoding='utf-8') as fh:
+            json.dump(merged, fh)
+    except Exception as e:
+        print(f"[SCHEDULE] could not save cache: {e}")
+
+
+_flight_schedule_cache: Dict[str, Any] = _load_schedule_cache()
 
 
 def _clean_via(value) -> str:
@@ -4370,6 +4409,10 @@ def flight_schedule(origin: str, destination: str, date: str = ""):
 
         flights.sort(key=lambda f: f["departure_time"])
         _flight_schedule_cache[key] = flights
+        # Checkpointed here rather than at shutdown: the server is usually
+        # stopped with a kill, which never runs a shutdown hook, and this is
+        # the moment an expensive answer exists.
+        _save_schedule_cache()
         print(f"[SCHEDULE] {len(flights)} grounded flights {origin}->{destination}")
         return {"status": "success", "flights": flights, "source": "grounded"}
 
