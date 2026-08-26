@@ -1785,6 +1785,20 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
         matches.isEmpty ? _options : matches);
   }
 
+  /// True when nothing matches what was typed — e.g. "SpiceJet" on a route
+  /// SpiceJet does not fly.
+  ///
+  /// The list still falls back to every flight, because leaving the user with
+  /// nothing to tap is worse. But the fallback has to be labelled: a list of
+  /// IndiGo flights under the word "spicejet" reads as a broken filter. The
+  /// outbound leg has said this since it was reported there; the return leg
+  /// was built later and never got it.
+  bool get _noMatch {
+    final q = _controller.text.trim();
+    return q.isNotEmpty &&
+        _BookingDetailSheetState._matchesIn(_options, q).isEmpty;
+  }
+
   String _rowTitle(Map<String, dynamic> f, String number) {
     final airline = _BookingDetailSheetState._airlineNameFor(
         (f['provider'] ?? '').toString());
@@ -1864,6 +1878,18 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
         ],
         if (_options.isNotEmpty) ...[
           const SizedBox(height: 10),
+          if (_noMatch)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                'No return flight matches "${_controller.text.trim()}" on '
+                'this route — showing all flights that day',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.orange[800]),
+              ),
+            ),
           ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxListHeight),
             child: SingleChildScrollView(
