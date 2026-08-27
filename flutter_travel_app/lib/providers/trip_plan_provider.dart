@@ -11,6 +11,18 @@ import '../services/local_store.dart';
 class TripPlanProvider with ChangeNotifier {
   TripPlan? _plan;
 
+  /// The trip inputs the current plan was built from.
+  ///
+  /// The plan is only kept while these hold. Previously the guard compared
+  /// the destination and the start date alone, so changing the activities or
+  /// the length of the trip left the old itinerary in place -- the user
+  /// edited their trip and the plan carried on describing the previous one.
+  ///
+  /// Comparing everything is also what protects the user's own edits: as long
+  /// as the trip is unchanged, a rebuild is a no-op and a place they removed
+  /// stays removed.
+  String _builtFrom = '';
+
   TripPlan? get plan => _plan;
   bool get hasPlan => _plan != null && !_plan!.isEmpty;
 
@@ -24,13 +36,16 @@ class TripPlanProvider with ChangeNotifier {
     required DateTime end,
     required List<String> activities,
   }) {
-    final existing = _plan;
-    if (existing != null &&
-        existing.destination == destination &&
-        existing.days.isNotEmpty &&
-        existing.days.first.date == start) {
-      return;
-    }
+    final signature = [
+      destination,
+      start.toIso8601String().split('T').first,
+      end.toIso8601String().split('T').first,
+      ...activities,
+    ].join('|');
+
+    if (_plan != null && signature == _builtFrom) return;
+    _builtFrom = signature;
+
     _plan = TripPlan.fromSelection(
       destination: destination,
       start: start,
@@ -65,6 +80,7 @@ class TripPlanProvider with ChangeNotifier {
       destination: (stored['destination'] ?? '').toString(),
       days: days,
     );
+    _builtFrom = (stored['built_from'] ?? '').toString();
     notifyListeners();
   }
 
@@ -77,7 +93,15 @@ class TripPlanProvider with ChangeNotifier {
       LocalStore.keyTripPlan,
       plan == null
           ? null
-          : {'destination': plan.destination, 'days': plan.toJson()},
+          : {
+              'destination': plan.destination,
+              'days': plan.toJson(),
+              // Stored with the plan so a restored trip knows which inputs
+              // produced it. Without this, reopening the app and changing an
+              // activity would not rebuild, because nothing on disk recorded
+              // what the saved plan was built from.
+              'built_from': _builtFrom,
+            },
     );
   }
 
@@ -215,6 +239,7 @@ class TripPlanProvider with ChangeNotifier {
   void clear() {
     if (_plan == null) return;
     _plan = null;
+    _builtFrom = '';
     notifyListeners();
   }
 }

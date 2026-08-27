@@ -117,4 +117,59 @@ void main() {
         p.plan!.days.expand((d) => d.items.map((i) => i.title.toLowerCase()));
     expect(titles.where((t) => t == 'shaheed udyaan'), hasLength(1));
   });
+
+  test('changing the activities rebuilds the plan', () {
+    final p = seeded();
+    p.removeItem(0, 0);
+    final before = p.plan!.activityCount;
+
+    p.buildFromSelection(
+      destination: 'Bhilai',
+      start: DateTime(2026, 8, 27),
+      end: DateTime(2026, 8, 29),
+      activities: ['Temple', 'Park', 'Garden', 'Lake'],
+    );
+    expect(p.plan!.activityCount, greaterThan(before),
+        reason: 'a new activity must reach the plan');
+  });
+
+  test('changing the trip length rebuilds the plan', () {
+    final p = seeded();
+    expect(p.plan!.days, hasLength(3));
+    p.buildFromSelection(
+      destination: 'Bhilai',
+      start: DateTime(2026, 8, 27),
+      end: DateTime(2026, 8, 28),
+      activities: ['Temple', 'Park', 'Garden'],
+    );
+    expect(p.plan!.days, hasLength(2),
+        reason: 'a shorter trip must not keep the old days');
+  });
+
+  test('changing the destination rebuilds the plan', () {
+    final p = seeded();
+    p.buildFromSelection(
+      destination: 'Raipur',
+      start: DateTime(2026, 8, 27),
+      end: DateTime(2026, 8, 29),
+      activities: ['Temple', 'Park', 'Garden'],
+    );
+    expect(p.plan!.destination, 'Raipur');
+  });
+
+  test('an edit survives a restart and the rebuild that follows it', () async {
+    seeded().removeItem(0, 0);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // What the screen does on its first frame after a cold start.
+    final after = TripPlanProvider()..restore();
+    after.buildFromSelection(
+      destination: 'Bhilai',
+      start: DateTime(2026, 8, 27),
+      end: DateTime(2026, 8, 29),
+      activities: ['Temple', 'Park', 'Garden'],
+    );
+    expect(after.plan!.activityCount, 2,
+        reason: 'the removed place must not come back on relaunch');
+  });
 }
