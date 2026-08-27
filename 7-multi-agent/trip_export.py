@@ -20,7 +20,7 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # 1080x1350 is the portrait frame that reads well both printed and on a phone,
 # and is what social platforms accept without cropping.
@@ -436,7 +436,25 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
     scale = width / raw_map.width
     scaled = raw_map.resize(
         (width, max(1, int(raw_map.height * scale))), Image.LANCZOS)
+
+    # Static Maps caps a request at 640x640, so the map is square and the film
+    # is 9:16 -- roughly 800px of the frame is neither map nor text. Filling it
+    # with a blurred blow-up of the same map reads as a deliberate backdrop
+    # where flat grey read as a rendering fault. Cropping the map to fill
+    # instead would be simpler but can push a stop off frame, which is the one
+    # thing this shot cannot do.
+    cover = width / raw_map.height if raw_map.height else 1
+    cover = max(cover, height / raw_map.height if raw_map.height else 1)
+    backdrop = raw_map.resize(
+        (max(1, int(raw_map.width * cover)), max(1, int(raw_map.height * cover))),
+        Image.BILINEAR,
+    ).filter(ImageFilter.GaussianBlur(28))
     canvas = Image.new("RGB", (width, height), (232, 234, 238))
+    canvas.paste(backdrop, ((width - backdrop.width) // 2,
+                            (height - backdrop.height) // 2))
+    canvas = Image.blend(canvas, Image.new("RGB", (width, height),
+                                           (18, 20, 44)), 0.35)
+
     top = (height - scaled.height) // 2
     canvas.paste(scaled, (0, top))
     pixels = [(x * scale, y * scale + top) for x, y in pixels]
@@ -444,12 +462,18 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
 
 
 def render_car(base: Image.Image, pixels, progress: float,
-               day_number: int) -> Image.Image:
+               day_number: int, heading: str = "") -> Image.Image:
     """The map with the car placed along the route at [progress].
 
     Travels leg by leg at a constant share of the journey per leg, so a day
     with three stops spends the same time on each hop rather than racing the
     short one.
+
+    [heading] names the stop being driven to. The film cuts to that place's
+    photos the moment the car lands on it, so the map has to say where it is
+    going -- an unlabelled dot sliding between pins is movement without a
+    destination, and the cut that follows then reads as a change of subject
+    rather than an arrival.
     """
     frame = base.copy()
     draw = ImageDraw.Draw(frame)
@@ -468,14 +492,38 @@ def render_car(base: Image.Image, pixels, progress: float,
     if len(travelled) > 1:
         draw.line(travelled, fill=(214, 45, 32), width=9, joint="curve")
 
+    # Arrival: a ring opening out of the pin over the last fifth of the leg.
+    # Without it the car simply stops, and a cut away from a stationary dot
+    # looks like the render gave up rather than like the journey got there.
+    if within > 0.8:
+        landed = (within - 0.8) / 0.2
+        ring = int(30 + 46 * landed)
+        fade = int(230 * (1 - landed))
+        draw.ellipse([x1 - ring, y1 - ring, x1 + ring, y1 + ring],
+                     outline=(214, 45, 32, fade), width=6)
+
     r = 26
     draw.ellipse([x - r, y - r, x + r, y + r], fill=(214, 45, 32),
                  outline=(255, 255, 255), width=5)
     draw.ellipse([x - 8, y - 8, x + 8, y + 8], fill=(255, 255, 255))
 
-    label = f"DAY {day_number}  ·  ON THE ROAD"
     draw.rectangle([0, 0, FILM_WIDTH, 96], fill=(13, 13, 130))
-    draw.text((MARGIN, 30), label, font=_font(30), fill=(255, 255, 255))
+    draw.text((MARGIN, 30), f"DAY {day_number}  ·  ON THE ROAD",
+              font=_font(30), fill=(255, 255, 255))
+
+    if heading:
+        band = FILM_HEIGHT - 150
+        draw.rectangle([0, band, FILM_WIDTH, band + 150], fill=(13, 13, 130))
+        # The band tracks the car. Holding "NEXT STOP" after it has landed
+        # describes the wrong moment, and this is the frame the cut to the
+        # photos happens on -- it should read as an arrival.
+        arrived = within > 0.8 or legs == 0 or progress <= 0.0
+        draw.text((MARGIN, band + 30),
+                  "ARRIVING AT" if arrived else "NEXT STOP",
+                  font=_font(24), fill=(150, 152, 220))
+        name = heading if len(heading) <= 26 else heading[:25].rstrip() + "…"
+        draw.text((MARGIN, band + 66), name,
+                  font=_font(40, bold=True), fill=(255, 255, 255))
     return frame
 
 
@@ -517,24 +565,12 @@ def render_film(days: List[Dict[str, Any]], destination: str,
             "seconds": 2.2,
             "mode": 1,
         })
-        # The route for the day, with the car driving it. Placed before the
-        # places so the film shows where it is going, then what is there.
-        stops = [(i["lat"], i["lng"]) for i in day.get("items", [])[:4]
-                 if i.get("lat") is not None and i.get("lng") is not None]
-        if maps_key and len(stops) >= 2:
-            drawn = fetch_day_map(stops, maps_key)
-            if drawn is not None:
-                base, pixels = drawn
-                shots.append({
-                    "image": base,
-                    "seconds": 4.0,
-                    # Animated per frame rather than panned: the movement is
-                    # the car, not the camera.
-                    "animate": lambda p, b=base, px=pixels, d=i + 1:
-                        render_car(b, px, p, d),
-                })
+        items = day.get("items", [])[:4]
 
-        for item in day.get("items", [])[:3]:
+        def photo_shots(item, day_index=i):
+            """Every angle of one place, as consecutive shots."""
+            nonlocal move
+            out = []
             photos = [u for u in (item.get("photos") or []) if u]
             if not photos:
                 photos = [item.get("photo", "")]
@@ -545,10 +581,10 @@ def render_film(days: List[Dict[str, Any]], destination: str,
                 if index > 0:
                     shot["about"] = ""
                     shot["narration"] = ""
-                base, overlay = render_place_layers(shot, i + 1,
+                base, overlay = render_place_layers(shot, day_index + 1,
                                                     include_photos)
                 move = (move + 1) % 4
-                shots.append({
+                out.append({
                     "image": base,
                     "overlay": overlay,
                     # The picture reads for a beat before the words arrive.
@@ -556,6 +592,58 @@ def render_film(days: List[Dict[str, Any]], destination: str,
                     "seconds": 3.2 if index == 0 else 1.8,
                     "mode": move,
                 })
+            return out
+
+        # The day's route, cut so that driving and arriving alternate: the car
+        # covers one leg, lands on a pin, and the film cuts straight to that
+        # place's photos before setting off again.
+        #
+        # It used to drive the whole route in one 4s shot and only then show
+        # the places, which left the two halves of a day unrelated -- the map
+        # finished before the viewer had seen anywhere it went, so the photos
+        # that followed could have been of any trip. Arrival is what ties a
+        # picture to a point on the map.
+        mapped = [it for it in items
+                  if it.get("lat") is not None and it.get("lng") is not None]
+        drawn = None
+        if maps_key and len(mapped) >= 2:
+            drawn = fetch_day_map([(it["lat"], it["lng"]) for it in mapped],
+                                  maps_key)
+
+        if drawn is not None:
+            base, pixels = drawn
+            legs = max(1, len(pixels) - 1)
+            for stop, item in enumerate(mapped):
+                if stop == 0:
+                    # The first pin is where the day starts, so there is no leg
+                    # to drive. A short hold establishes the map instead.
+                    span = (0.0, 0.0)
+                    seconds = 1.4
+                else:
+                    span = ((stop - 1) / legs, stop / legs)
+                    seconds = 1.8
+                shots.append({
+                    "image": base,
+                    "seconds": seconds,
+                    # Animated per frame rather than panned: the movement is
+                    # the car, not the camera.
+                    "animate": (
+                        lambda p, b=base, px=pixels, d=i + 1, s=span,
+                        h=str(item.get("title") or item.get("name") or ""):
+                        render_car(b, px, s[0] + (s[1] - s[0]) * _ease(p), d, h)
+                    ),
+                })
+                shots.extend(photo_shots(item))
+            # Anything Google could not place still belongs to the day; it just
+            # cannot be driven to. Compared by identity, not value: two stops
+            # can hold equal dicts, and `in` would then drop the second.
+            placed = {id(it) for it in mapped}
+            for item in items[:3]:
+                if id(item) not in placed:
+                    shots.extend(photo_shots(item))
+        else:
+            for item in items[:3]:
+                shots.extend(photo_shots(item))
     shots.append({
         "image": _fit_film(render_closing(destination)),
         "seconds": 3.4,
