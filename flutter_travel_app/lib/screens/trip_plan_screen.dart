@@ -68,6 +68,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// The day currently being scheduled, so only its button spins.
   int? _schedulingDay;
 
+  /// The trip whose interests have already been expanded into places, so a
+  /// rebuild of this screen does not fetch them again.
+  String _expandedFor = '';
+
   /// A built file waiting for the user to tap once more.
   ///
   /// Browsers only allow navigator.share() while handling a user gesture, and
@@ -125,6 +129,53 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     }
     return 'Pick a few things to do in Plan your trip, and they will be '
         'spread across your days here.';
+  }
+
+  /// Turns the chosen interests into enough real places to cover the trip.
+  ///
+  /// A category resolves to a single place, so a trip built from one or two
+  /// interests arrived mostly empty. This asks for enough places of those
+  /// kinds to give every day something, and fills only the days that have
+  /// nothing -- a day the user has already arranged is left alone.
+  ///
+  /// Runs once per trip. The guard is the destination and the interests, so
+  /// changing either expands again and a plain rebuild does not.
+  Future<void> _expandInterests(TripPlan plan, UserPreferences prefs) async {
+    final interests = prefs.selectedActivities;
+    if (interests.isEmpty) return;
+    final signature = '${plan.destination}|${interests.join('|')}';
+    if (signature == _expandedFor) return;
+
+    final emptyDays = plan.days.where((d) => d.items.isEmpty).length;
+    if (emptyDays == 0) {
+      _expandedFor = signature;
+      return;
+    }
+    _expandedFor = signature;
+
+    final already = plan.days
+        .expand((d) => d.items.map((i) => _placeName(i.title)))
+        .toSet()
+        .toList();
+    final found = await _adk.discoverPlaces(
+      city: plan.destination,
+      interests: interests,
+      exclude: already,
+      limit: emptyDays * 2,
+    );
+    if (!mounted || found == null || found.isEmpty) return;
+
+    final names = <String>[];
+    for (final place in found) {
+      final name = (place['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      names.add(name);
+      _summaries[name] = place;
+    }
+    if (names.isEmpty) return;
+
+    context.read<TripPlanProvider>().fillEmptyDays(names);
+    if (mounted) setState(() => _summarisedFor = '');
   }
 
   /// Loads the photo/rating/hours for every place currently in the plan.
@@ -383,8 +434,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     final booked = context.watch<BookedTripProvider>();
     final plan = context.watch<TripPlanProvider>().plan;
     if (plan != null && !plan.isEmpty) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _loadSummaries(plan));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _expandInterests(plan, prefs);
+        _loadSummaries(plan);
+      });
     }
 
     return Scaffold(

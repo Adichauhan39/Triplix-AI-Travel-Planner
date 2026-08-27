@@ -73,4 +73,48 @@ void main() {
     expect(p.plan!.activityCount, 2,
         reason: 'a removed place must not reappear on the next rebuild');
   });
+
+  test('fillEmptyDays covers every empty day and leaves full ones alone', () {
+    final p = TripPlanProvider()
+      ..buildFromSelection(
+        destination: 'Bhilai',
+        start: DateTime(2026, 8, 26),
+        end: DateTime(2026, 8, 29),
+        activities: ['Green Space'],
+      );
+    expect(p.plan!.days.where((d) => d.items.isEmpty), hasLength(3),
+        reason: 'one interest gives one place, so three days start empty');
+    final kept = p.plan!.days.first.items.single.title;
+
+    // Three empty days at two apiece needs six, which is what the screen
+    // requests: emptyDays * 2.
+    p.fillEmptyDays([
+      'Shaheed Udyaan',
+      'ARJUN RATH PARK',
+      'Dam View point',
+      'I Love Bhilai',
+      'Pioneer monument garden',
+      'Garden Space',
+    ]);
+
+    expect(p.plan!.days.where((d) => d.items.isEmpty), isEmpty);
+    expect(p.plan!.days.first.items.single.title, kept,
+        reason: 'a day that already had something is untouched');
+    // The category was the user's choice, so its places are not badged.
+    expect(p.plan!.days[1].items.first.addedByAssistant, isFalse);
+  });
+
+  test('fillEmptyDays never repeats a place already in the plan', () {
+    final p = TripPlanProvider()
+      ..buildFromSelection(
+        destination: 'Bhilai',
+        start: DateTime(2026, 8, 26),
+        end: DateTime(2026, 8, 27),
+        activities: ['Shaheed Udyaan'],
+      );
+    p.fillEmptyDays(['shaheed udyaan', 'Dam View point']);
+    final titles =
+        p.plan!.days.expand((d) => d.items.map((i) => i.title.toLowerCase()));
+    expect(titles.where((t) => t == 'shaheed udyaan'), hasLength(1));
+  });
 }

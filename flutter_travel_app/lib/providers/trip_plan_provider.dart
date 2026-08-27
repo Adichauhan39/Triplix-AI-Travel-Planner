@@ -168,6 +168,50 @@ class TripPlanProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Spreads [titles] across the days that have nothing on them.
+  ///
+  /// Used when a trip is built from a couple of interests: one interest
+  /// resolves to one place, so a four-day trip arrived with one place and
+  /// three empty days. Expanding the interest into several real places of
+  /// that kind is honouring the choice rather than adding to it -- someone
+  /// who ticked "Lake" asked for lakes, not for one lake.
+  ///
+  /// Not marked as assistant-added for that reason: the category was the
+  /// user's. The badge is reserved for places offered that they never asked
+  /// for.
+  void fillEmptyDays(List<String> titles, {int perDay = 2}) {
+    final plan = _plan;
+    if (plan == null || titles.isEmpty) return;
+
+    final used = plan.days
+        .expand((d) => d.items.map((i) => i.title.toLowerCase()))
+        .toSet();
+    final queue = [
+      for (final title in titles)
+        if (title.trim().isNotEmpty && !used.contains(title.trim().toLowerCase()))
+          title.trim(),
+    ];
+    if (queue.isEmpty) return;
+
+    var index = 0;
+    final days = <PlanDay>[];
+    for (final day in plan.days) {
+      if (day.items.isNotEmpty || index >= queue.length) {
+        days.add(day);
+        continue;
+      }
+      final items = <PlanItem>[];
+      while (items.length < perDay && index < queue.length) {
+        items.add(PlanItem(title: queue[index]));
+        index++;
+      }
+      days.add(day.copyWith(items: items));
+    }
+
+    _plan = TripPlan(destination: plan.destination, days: days);
+    notifyListeners();
+  }
+
   void clear() {
     if (_plan == null) return;
     _plan = null;

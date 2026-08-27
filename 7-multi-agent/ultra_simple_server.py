@@ -5509,8 +5509,14 @@ def discover_places(request: DiscoverRequest):
         # gardens rather than nightlife. The generic query is a fallback for
         # someone who ticked nothing.
         interests = [i for i in (request.interests or []) if i and i.strip()]
-        queries = [f"{i} in {city}, India" for i in interests[:3]]
+        queries = [f"{i} in {city}, India" for i in interests[:6]]
         queries.append(f"top places to visit in {city}, India")
+
+        # Round robin rather than draining each query in turn. Filling a
+        # four-day trip needs eight places, and taking them in order meant the
+        # first interest supplied all of them -- someone who ticked lakes,
+        # temples and parks got eight lakes.
+        per_pass = max(1, min(2, request.limit))
 
         excluded = {e.strip().lower() for e in (request.exclude or []) if e}
         field_mask = (
@@ -5521,9 +5527,14 @@ def discover_places(request: DiscoverRequest):
 
         found = []
         seen_ids = set()
-        for query in queries:
-            if len(found) >= max(1, min(request.limit, 8)):
+        wanted = max(1, min(request.limit, 12))
+        # Several passes, each taking a couple from every query, until the
+        # trip is full or the queries are exhausted.
+        rounds = [(q, per_pass) for _ in range(4) for q in queries]
+        for query, take in rounds:
+            if len(found) >= wanted:
                 break
+            taken_here = 0
             try:
                 resp = requests.post(
                     "https://places.googleapis.com/v1/places:searchText",
@@ -5536,7 +5547,7 @@ def discover_places(request: DiscoverRequest):
                 continue
 
             for place in (resp.get("places") or []):
-                if len(found) >= max(1, min(request.limit, 8)):
+                if len(found) >= wanted or taken_here >= take:
                     break
                 place_id = str(place.get("id") or "")
                 name = (place.get("displayName") or {}).get("text", "").strip()
@@ -5586,6 +5597,7 @@ def discover_places(request: DiscoverRequest):
                 # the day card can render it without a second lookup.
                 _photo_cache[f"summary_{name}_{city}"] = json.dumps(summary)
                 found.append(summary)
+                taken_here += 1
 
         if found:
             _save_photo_cache()
