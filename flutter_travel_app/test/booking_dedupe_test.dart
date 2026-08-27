@@ -5,10 +5,11 @@ import 'package:flutter_travel_app/models/confirmed_booking.dart';
 import 'package:flutter_travel_app/providers/booked_trip_provider.dart';
 import 'package:flutter_travel_app/services/local_store.dart';
 
-ConfirmedBooking flight(String? number, {int day = 24, String? time}) =>
+ConfirmedBooking flight(String? number,
+        {int day = 24, String? time, String to = 'Raipur'}) =>
     ConfirmedBooking(
       kind: BookingKind.flight,
-      title: 'Bangalore to Raipur',
+      title: 'Bangalore to $to',
       startDate: DateTime(2026, 8, day),
       flightNumber: number,
       departureTime: time,
@@ -45,10 +46,19 @@ void main() {
     expect(provider.flights.single.departureTime, '07:40');
   });
 
-  test('two different flights on one day both survive', () {
+  test('a second flight to the same city on one day replaces the first', () {
     final provider = BookedTripProvider()
       ..add(flight('6E 405'))
       ..add(flight('6E 986'));
+    expect(provider.flights, hasLength(1),
+        reason: 'nobody flies to one city twice in a day');
+    expect(provider.flights.single.flightNumber, '6E 986');
+  });
+
+  test('two flights on one day to different cities both survive', () {
+    final provider = BookedTripProvider()
+      ..add(flight('6E 405', to: 'Raipur'))
+      ..add(flight('6E 986', to: 'Nagpur'));
     expect(provider.flights, hasLength(2));
   });
 
@@ -80,8 +90,8 @@ void main() {
   test('duplicates already on the device are cleaned up on restore', () async {
     // Written by the version that appended without checking.
     BookedTripProvider()
-      ..add(flight('6E 405'))
-      ..add(flight('6E 986'));
+      ..add(flight('6E 405', to: 'Raipur'))
+      ..add(flight('6E 986', to: 'Nagpur'));
     await Future<void>.delayed(const Duration(milliseconds: 50));
     final stored = LocalStore.loadList(LocalStore.keyBookings);
     await LocalStore.save(LocalStore.keyBookings, [...stored, stored.first]);
@@ -89,5 +99,42 @@ void main() {
 
     final after = BookedTripProvider()..restore();
     expect(after.flights, hasLength(2));
+  });
+
+  test('changing the origin replaces the flight, it does not stack', () {
+    final provider = BookedTripProvider()
+      ..add(ConfirmedBooking(
+        kind: BookingKind.flight,
+        title: 'Bangalore to Raipur',
+        startDate: DateTime(2026, 8, 26),
+        flightNumber: '6E 6404',
+      ))
+      ..add(ConfirmedBooking(
+        kind: BookingKind.flight,
+        title: 'Varanasi to Raipur',
+        startDate: DateTime(2026, 8, 26),
+        flightNumber: 'AI 1111',
+      ));
+    expect(provider.flights, hasLength(1),
+        reason: 'nobody flies to one city twice in a day');
+    expect(provider.flights.single.flightNumber, 'AI 1111');
+  });
+
+  test('an outbound and a return on one day both survive', () {
+    final provider = BookedTripProvider()
+      ..add(ConfirmedBooking(
+        kind: BookingKind.flight,
+        title: 'Bangalore to Raipur',
+        startDate: DateTime(2026, 8, 26),
+        flightNumber: '6E 405',
+      ))
+      ..add(ConfirmedBooking(
+        kind: BookingKind.flight,
+        title: 'Raipur to Bangalore',
+        startDate: DateTime(2026, 8, 26),
+        flightNumber: '6E 406',
+      ));
+    expect(provider.flights, hasLength(2),
+        reason: 'they share a day but end in different places');
   });
 }

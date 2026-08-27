@@ -95,10 +95,36 @@ class BookedTripProvider with ChangeNotifier {
     if (!sameDay) return false;
     if (a.kind == BookingKind.hotel) return true;
 
+    // Two flights arriving at the same place on the same day are the same
+    // leg however differently they are numbered -- nobody flies to Raipur
+    // twice in one afternoon. Searching Bangalore to Raipur and then
+    // Varanasi to Raipur left both on the itinerary, because the numbers
+    // differed and the old one was never replaced.
+    //
+    // Destination rather than the whole route, so an outbound and a return
+    // on one date stay separate: those share a day but end in different
+    // places.
+    final destA = _destinationOf(a.title);
+    final destB = _destinationOf(b.title);
+    if (destA != null && destB != null) return destA == destB;
+
     final numberA = (a.flightNumber ?? '').replaceAll(' ', '').toUpperCase();
     final numberB = (b.flightNumber ?? '').replaceAll(' ', '').toUpperCase();
     if (numberA.isEmpty || numberB.isEmpty) return true;
     return numberA == numberB;
+  }
+
+  /// Where a flight title says it ends up.
+  ///
+  /// Titles are built by this app as "<origin> to <destination>", so this
+  /// reads our own format rather than guessing at arbitrary text. Returns
+  /// null when the shape does not hold, and the caller falls back to
+  /// comparing flight numbers.
+  static String? _destinationOf(String title) {
+    final parts = title.split(' to ');
+    if (parts.length < 2) return null;
+    final destination = parts.last.split(',').first.trim().toLowerCase();
+    return destination.isEmpty ? null : destination;
   }
 
   void remove(ConfirmedBooking booking) {
