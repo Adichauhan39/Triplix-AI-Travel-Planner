@@ -20,6 +20,9 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 import requests
+import math
+from urllib.parse import quote
+
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # 1080x1350 is the portrait frame that reads well both printed and on a phone,
@@ -31,6 +34,12 @@ MARGIN = 64
 # trip video actually gets shared, and a 4:5 video is letterboxed there; a PDF
 # page has no such constraint and 4:5 prints better.
 FILM_WIDTH, FILM_HEIGHT = 1080, 1920
+
+# Shown on every frame and page that carries a Google Places photograph.
+# Their terms require the credit to be displayed and never removed, hidden or
+# obscured; the map shots already carry the logo Google bakes into its tiles,
+# but the photographs carried nothing at all.
+PHOTO_CREDIT = "Photos: Google"
 
 INK = (17, 24, 39)
 MUTED = (107, 114, 128)
@@ -137,6 +146,7 @@ def render_day(day: Dict[str, Any], destination: str, day_number: int,
         y += 10
 
     items = day.get("items", [])
+    drew_photo = False
     for item in items[:3]:
         if y > HEIGHT - 260:
             break
@@ -147,6 +157,7 @@ def render_day(day: Dict[str, Any], destination: str, day_number: int,
             photo = _fetch_image(photo_url, (168, 168))
             if photo is not None:
                 canvas.paste(photo, (MARGIN, y))
+                drew_photo = True
                 text_x = MARGIN + 192
             else:
                 text_x = MARGIN
@@ -191,6 +202,14 @@ def render_day(day: Dict[str, Any], destination: str, day_number: int,
                   f"+ {len(items) - 3} more in the app", font=f_small,
                   fill=MUTED)
 
+    # Credited on any page that actually shows a photograph. A page whose
+    # places had none carries no credit, because there is nothing to credit.
+    if drew_photo:
+        draw.text(
+            (WIDTH - MARGIN - draw.textlength(PHOTO_CREDIT, font=f_small),
+             HEIGHT - 76),
+            PHOTO_CREDIT, font=f_small, fill=MUTED)
+
     return canvas
 
 
@@ -202,6 +221,7 @@ def render_title(destination: str, days: List[Dict[str, Any]],
 
     # A photo from the trip behind the title, dimmed so the words stay
     # readable. Falls back to the flat colour when there is nothing to use.
+    used_photo = False
     if include_photos:
         for day in days:
             for item in day.get("items", []):
@@ -211,10 +231,18 @@ def render_title(destination: str, days: List[Dict[str, Any]],
                     shade = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
                     canvas = Image.blend(canvas, shade, 0.55)
                     draw = ImageDraw.Draw(canvas)
+                    used_photo = True
                     break
             else:
                 continue
             break
+
+    # Credited here too: this card is a photograph like any other shot.
+    if used_photo:
+        credit = _font(22)
+        draw.text((WIDTH - MARGIN - draw.textlength(PHOTO_CREDIT, font=credit),
+                   HEIGHT - 48),
+                  PHOTO_CREDIT, font=credit, fill=(214, 214, 228))
 
     first = days[0].get("date_label", "") if days else ""
     last = days[-1].get("date_label", "") if days else ""
@@ -340,6 +368,21 @@ def render_place_layers(item: Dict[str, Any], day_number: int,
                       fill=(236, 236, 248, 255))
             y += 40
 
+    # Whose photograph this is. Google's terms require the credit to be shown
+    # and never removed, hidden or obscured, and the film had none: the only
+    # attribution anywhere was the logo Google bakes into its own map tiles,
+    # which covers the map shots and nothing else.
+    #
+    # Drawn on the overlay rather than the picture because the overlay is
+    # composited after the camera move. Painted onto the base it would be
+    # cropped away by the Ken Burns zoom on roughly half the shots, which is
+    # exactly the "obscured" the policy rules out.
+    if photo is not None:
+        credit = _font(24)
+        draw.text((w - MARGIN - draw.textlength(PHOTO_CREDIT, font=credit),
+                   h - 52),
+                  PHOTO_CREDIT, font=credit, fill=(228, 228, 240, 255))
+
     return base, overlay
 
 
@@ -378,6 +421,87 @@ def _fit_zoom(points, width: int, height: int, padding: int = 120) -> int:
     return 4
 
 
+def _decode_polyline(encoded: str):
+    """Google's encoded polyline format to [(lat, lng)].
+
+    Written out rather than pulled in as a dependency: it is twenty lines of
+    a fixed, published format, and the export already asks enough of a
+    deployment with Pillow and ffmpeg.
+    """
+    points, index, lat, lng = [], 0, 0, 0
+    while index < len(encoded):
+        for is_lat in (True, False):
+            shift, result = 0, 0
+            while True:
+                if index >= len(encoded):
+                    return points
+                b = ord(encoded[index]) - 63
+                index += 1
+                result |= (b & 0x1f) << shift
+                shift += 5
+                if b < 0x20:
+                    break
+            delta = ~(result >> 1) if result & 1 else (result >> 1)
+            if is_lat:
+                lat += delta
+            else:
+                lng += delta
+        points.append((lat / 1e5, lng / 1e5))
+    return points
+
+
+def fetch_route(points, api_key: str):
+    """The driving route through [points], as (overview_encoded, legs).
+
+    The film used to draw the day as straight lines between stops and slide the
+    car down them, which is not how anyone travels: it cut across the middle of
+    Bhilai rather than following the road. Directions gives the real geometry,
+    so the line bends the way the road bends and the car goes with it.
+
+    Legs are kept separate, each a list of coordinates, because the film times
+    the journey one hop at a time -- it drives to a stop, arrives, and cuts to
+    that place before setting off again.
+
+    Returns None when the route cannot be had; the caller then falls back to
+    straight lines rather than losing the map shot entirely.
+    """
+    if not api_key or len(points) < 2:
+        return None
+    params = {
+        "origin": f"{points[0][0]},{points[0][1]}",
+        "destination": f"{points[-1][0]},{points[-1][1]}",
+        "mode": "driving",
+        "key": api_key,
+    }
+    if len(points) > 2:
+        params["waypoints"] = "|".join(
+            f"{la},{ln}" for la, ln in points[1:-1])
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=params, timeout=15).json()
+    except Exception as e:
+        print(f"[ROUTE] {e}")
+        return None
+    if resp.get("status") != "OK" or not resp.get("routes"):
+        print(f"[ROUTE] {resp.get('status')}: "
+              f"{str(resp.get('error_message') or '')[:120]}")
+        return None
+
+    route = resp["routes"][0]
+    legs = []
+    for leg in route.get("legs", []):
+        shape = []
+        for step in leg.get("steps", []):
+            shape.extend(
+                _decode_polyline((step.get("polyline") or {}).get("points", "")))
+        legs.append(shape)
+    overview = (route.get("overview_polyline") or {}).get("points", "")
+    if not overview or not any(legs):
+        return None
+    return overview, legs
+
+
 def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
     """A map of one day's stops, plus where each sits in the image.
 
@@ -407,8 +531,20 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
     markers = "".join(
         f"&markers=color:0x0d0d82%7Clabel:{i + 1}%7C{la},{ln}"
         for i, (la, ln) in enumerate(points))
-    path = "&path=color:0x0d0d82c0%7Cweight:6%7C" + "%7C".join(
-        f"{la},{ln}" for la, ln in points)
+
+    # The real road where Directions can give us one, straight lines only as a
+    # fallback. enc: keeps the URL short -- a route can run to hundreds of
+    # coordinates, which as raw pairs would blow past the length a static map
+    # request accepts.
+    routed = fetch_route(points, api_key)
+    if routed is not None:
+        overview, legs = routed
+        path = ("&path=color:0x0d0d82c0%7Cweight:6%7Cenc:"
+                + quote(overview, safe=""))
+    else:
+        legs = None
+        path = "&path=color:0x0d0d82c0%7Cweight:6%7C" + "%7C".join(
+            f"{la},{ln}" for la, ln in points)
 
     url = (f"https://maps.googleapis.com/maps/api/staticmap"
            f"?size={req_w}x{req_h}&scale=2&maptype=roadmap"
@@ -428,10 +564,17 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
     # Where each stop falls in the returned image, before it is scaled up.
     cx, cy = _mercator(centre_lat, centre_lng, zoom)
     half_w, half_h = raw_map.width / 2, raw_map.height / 2
-    pixels = []
-    for la, ln in points:
+
+    def to_pixel(la, ln):
         px, py = _mercator(la, ln, zoom)
-        pixels.append(((px - cx) * 2 + half_w, (py - cy) * 2 + half_h))
+        return ((px - cx) * 2 + half_w, (py - cy) * 2 + half_h)
+
+    pixels = [to_pixel(la, ln) for la, ln in points]
+    # The same projection applied to the road itself, so the car can be put on
+    # the tarmac rather than on the straight line between two pins.
+    leg_pixels = (
+        [[to_pixel(la, ln) for la, ln in leg] for leg in legs]
+        if legs else None)
 
     scale = width / raw_map.width
     scaled = raw_map.resize(
@@ -457,11 +600,22 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
 
     top = (height - scaled.height) // 2
     canvas.paste(scaled, (0, top))
-    pixels = [(x * scale, y * scale + top) for x, y in pixels]
-    return canvas, pixels
+
+    def place(pt):
+        return (pt[0] * scale, pt[1] * scale + top)
+
+    pixels = [place(p) for p in pixels]
+    if leg_pixels is not None:
+        leg_pixels = [[place(p) for p in leg] for leg in leg_pixels]
+    else:
+        # No road geometry: each leg is the straight hop between two stops, so
+        # the car still animates and the shot is unchanged from before.
+        leg_pixels = [[pixels[i], pixels[i + 1]]
+                      for i in range(len(pixels) - 1)]
+    return canvas, pixels, leg_pixels
 
 
-def render_car(base: Image.Image, pixels, progress: float,
+def render_car(base: Image.Image, pixels, roads, progress: float,
                day_number: int, heading: str = "") -> Image.Image:
     """The map with the car placed along the route at [progress].
 
@@ -478,19 +632,44 @@ def render_car(base: Image.Image, pixels, progress: float,
     frame = base.copy()
     draw = ImageDraw.Draw(frame)
 
-    legs = max(1, len(pixels) - 1)
+    legs = max(1, len(roads))
     position = min(0.9999, max(0.0, progress)) * legs
-    leg = int(position)
+    leg = min(int(position), legs - 1)
     within = position - leg
-    x0, y0 = pixels[leg]
-    x1, y1 = pixels[min(leg + 1, len(pixels) - 1)]
-    x = x0 + (x1 - x0) * within
-    y = y0 + (y1 - y0) * within
 
-    # The road already travelled, drawn over the route so progress is visible.
-    travelled = [pixels[i] for i in range(leg + 1)] + [(x, y)]
+    # Along the road, not across the map. Walking the leg by distance rather
+    # than by point index keeps the speed even: a polyline is dense through
+    # bends and sparse on straights, so stepping point to point would make the
+    # car crawl round corners and jump down open road.
+    shape = roads[leg] if roads[leg] else [pixels[leg], pixels[leg + 1]]
+    spans = [
+        math.dist(shape[i], shape[i + 1]) for i in range(len(shape) - 1)]
+    total = sum(spans) or 1.0
+    target = total * within
+
+    x, y = shape[-1]
+    covered = 0.0
+    walked = [shape[0]]
+    for i, span in enumerate(spans):
+        if covered + span >= target:
+            t = (target - covered) / (span or 1.0)
+            x = shape[i][0] + (shape[i + 1][0] - shape[i][0]) * t
+            y = shape[i][1] + (shape[i + 1][1] - shape[i][1]) * t
+            break
+        covered += span
+        walked.append(shape[i + 1])
+    walked.append((x, y))
+
+    # The road already travelled, drawn over the route so progress is visible:
+    # every completed leg, then how far along this one the car has come.
+    travelled = []
+    for done in roads[:leg]:
+        travelled.extend(done or [])
+    travelled.extend(walked)
     if len(travelled) > 1:
         draw.line(travelled, fill=(214, 45, 32), width=9, joint="curve")
+
+    x1, y1 = pixels[min(leg + 1, len(pixels) - 1)]
 
     # Arrival: a ring opening out of the pin over the last fifth of the leg.
     # Without it the car simply stops, and a cut away from a stationary dot
@@ -558,6 +737,9 @@ def render_film(days: List[Dict[str, Any]], destination: str,
 
     total = len(days)
     move = 0
+    # The last stop of the previous day, so each day's route continues
+    # from where the one before it finished.
+    carried = None
     for i, day in enumerate(days):
         shots.append({
             "image": _fit_film(
@@ -605,15 +787,28 @@ def render_film(days: List[Dict[str, Any]], destination: str,
         # picture to a point on the map.
         mapped = [it for it in items
                   if it.get("lat") is not None and it.get("lng") is not None]
+
+        # Yesterday's last stop opens today's route, so the journey carries on
+        # from where it stopped instead of teleporting to a fresh corner of the
+        # map each morning. It gets no pin of its own and no photo shot -- it is
+        # only there so the road into the day is drawn.
+        lead_in = [carried] if carried is not None else []
+        route_points = lead_in + [(it["lat"], it["lng"]) for it in mapped]
+
         drawn = None
-        if maps_key and len(mapped) >= 2:
-            drawn = fetch_day_map([(it["lat"], it["lng"]) for it in mapped],
-                                  maps_key)
+        if maps_key and len(route_points) >= 2:
+            drawn = fetch_day_map(route_points, maps_key)
+        if mapped:
+            carried = (mapped[-1]["lat"], mapped[-1]["lng"])
 
         if drawn is not None:
-            base, pixels = drawn
+            base, pixels, roads = drawn
+            # The lead-in occupies the first pin and the first leg, so today's
+            # own stops start one along.
+            offset = len(lead_in)
             legs = max(1, len(pixels) - 1)
             for stop, item in enumerate(mapped):
+                stop += offset
                 if stop == 0:
                     # The first pin is where the day starts, so there is no leg
                     # to drive. A short hold establishes the map instead.
@@ -628,9 +823,10 @@ def render_film(days: List[Dict[str, Any]], destination: str,
                     # Animated per frame rather than panned: the movement is
                     # the car, not the camera.
                     "animate": (
-                        lambda p, b=base, px=pixels, d=i + 1, s=span,
+                        lambda p, b=base, px=pixels, rd=roads, d=i + 1, s=span,
                         h=str(item.get("title") or item.get("name") or ""):
-                        render_car(b, px, s[0] + (s[1] - s[0]) * _ease(p), d, h)
+                        render_car(b, px, rd,
+                                   s[0] + (s[1] - s[0]) * _ease(p), d, h)
                     ),
                 })
                 shots.extend(photo_shots(item))
@@ -652,11 +848,63 @@ def render_film(days: List[Dict[str, Any]], destination: str,
     return shots
 
 
+def render_day_map(day: Dict[str, Any], destination: str, day_number: int,
+                   maps_key: str) -> Optional[Image.Image]:
+    """A day's route as its own page: the map, then a numbered key.
+
+    Its own page rather than a strip on the day card, because that card is
+    already dense -- it can run to within 260px of the foot before the running
+    order is even placed, so a map squeezed in would be the first thing
+    dropped. A PDF page costs nothing and a full-width map is the version
+    somebody can actually navigate by.
+    """
+    items = [it for it in day.get("items", [])[:4]
+             if it.get("lat") is not None and it.get("lng") is not None]
+    if not maps_key or len(items) < 2:
+        return None
+
+    # Square, so nothing is cropped: fetch_day_map letterboxes to the size it
+    # is given, and asking for a 4:5 page would paste a 1080-tall map into a
+    # shorter box and clip the stops nearest the top and bottom edges.
+    drawn = fetch_day_map([(it["lat"], it["lng"]) for it in items], maps_key,
+                          size=(WIDTH, WIDTH))
+    if drawn is None:
+        return None
+    board = drawn[0].resize((860, 860), Image.LANCZOS)
+
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), PAPER)
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle([0, 0, WIDTH, 230], fill=ACCENT)
+    draw.text((MARGIN, 54), "YOUR ROUTE", font=_font(30),
+              fill=(255, 255, 255))
+    draw.text((MARGIN, 100), f"Day {day_number}", font=_font(64, bold=True),
+              fill=(255, 255, 255))
+
+    canvas.paste(board, ((WIDTH - board.width) // 2, 252))
+
+    y = 252 + board.height + 26
+    for n, item in enumerate(items):
+        if y > HEIGHT - 46:
+            break
+        label = f"{n + 1}.  {str(item.get('title', ''))[:46]}"
+        draw.text((MARGIN, y), label, font=_font(26), fill=INK)
+        y += 36
+    return canvas
+
+
 def render_days(days: List[Dict[str, Any]], destination: str,
-                include_photos: bool = True) -> List[Image.Image]:
+                include_photos: bool = True,
+                maps_key: str = "") -> List[Image.Image]:
+    """The PDF: each day's card, followed by its route map where we have one."""
     total = len(days)
-    return [render_day(day, destination, i + 1, total, include_photos)
-            for i, day in enumerate(days)]
+    pages: List[Image.Image] = []
+    for i, day in enumerate(days):
+        pages.append(render_day(day, destination, i + 1, total,
+                                include_photos))
+        route = render_day_map(day, destination, i + 1, maps_key)
+        if route is not None:
+            pages.append(route)
+    return pages
 
 
 def build_pdf(frames: List[Image.Image]) -> bytes:
@@ -717,8 +965,14 @@ def _kenburns(image: Image.Image, progress: float, mode: int,
 
 
 def build_video(shots, seconds_per_day: float = 3.0,
-                music_path: Optional[str] = None) -> bytes:
+                music_path: Optional[str] = None,
+                on_progress=None) -> bytes:
     """The film, rendered frame by frame and piped straight into ffmpeg.
+
+    [on_progress] is called as `on_progress(done, total)` once per shot, so a
+    caller can report a moving figure across a render that takes minutes. Shots
+    rather than frames: a frame callback would fire twenty-five times a second
+    for no extra information.
 
     [shots] may be plain images -- the old shape -- or dicts carrying their own
     duration, camera move and text overlay. Frames are generated here rather
@@ -794,7 +1048,14 @@ def build_video(shots, seconds_per_day: float = 3.0,
                                stderr=log)
     try:
         elapsed = 0.0
-        for shot in normalised:
+        for shot_index, shot in enumerate(normalised):
+            if on_progress:
+                # Guarded: a caller whose progress sink has gone away must not
+                # take the render down with it.
+                try:
+                    on_progress(shot_index, len(normalised))
+                except Exception:
+                    pass
             frames = max(1, int(fps * shot["seconds"]))
             base = shot["image"]
             for f in range(frames):

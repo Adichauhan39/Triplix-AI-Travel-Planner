@@ -77,6 +77,9 @@ import random
 import base64
 import threading
 import time
+import hashlib
+import uuid
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # MongoDB was removed: the cluster it pointed at no longer exists, and every
@@ -3714,23 +3717,198 @@ def _narrate_trip(days, destination):
         return {}
 
 
+# Google's place types for somewhere to sleep. Kept broad: a type that slips
+# through puts a stranger's hotel on someone's itinerary, while one listed in
+# error only means a hotel is not offered as a sight, which is no loss.
+_LODGING_TYPES = {
+    "lodging", "hotel", "motel", "resort_hotel", "extended_stay_hotel",
+    "bed_and_breakfast", "guest_house", "hostel", "inn", "campground",
+    "camping_cabin", "cottage", "farmstay", "private_guest_room",
+    "japanese_inn", "budget_japanese_inn", "rv_park", "mobile_home_park",
+}
+
+
+# --- Export jobs -----------------------------------------------------------
+#
+# A film takes one to three and a half minutes to render, which is far too long
+# to hold a request open: the Flutter client gave up at 180s, so a five-day
+# trip could not be exported at all. Renders therefore run on a worker and the
+# client polls.
+#
+# Deliberately an in-process dict rather than a queue or a table. It is enough
+# for one server, and the alternative is infrastructure this project does not
+# otherwise need. It does mean job ids live in this process only, which is safe
+# solely because UVICORN_WORKERS=1 -- with a second worker a poll could land on
+# the process that is not rendering, and every job would look lost.
+_export_jobs: Dict[str, Dict[str, Any]] = {}
+_export_lock = threading.Lock()
+# Two, not more: a render is CPU-bound on ffmpeg and Pillow, and letting three
+# fight over the same cores makes all three slower than running them in turn.
+_export_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="export")
+_export_dir = os.path.join(tempfile.gettempdir(), "triplix_exports")
+_EXPORT_KEEP = 10
+
+
+def _export_fingerprint(days, destination, fmt, include_photos) -> str:
+    """A stable id for one exact export request.
+
+    Lets an unchanged re-export return the finished file instead of spending
+    another two minutes producing a byte-identical one. sort_keys because dict
+    ordering must not decide whether the cache hits.
+    """
+    payload = json.dumps(
+        {"days": days, "destination": destination, "format": fmt,
+         "photos": bool(include_photos)},
+        sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _export_evict():
+    """Keeps the newest few renders and deletes the rest from disk."""
+    with _export_lock:
+        done = sorted(
+            [(j["created"], k) for k, j in _export_jobs.items()
+             if j.get("state") == "done"],
+            reverse=True)
+        stale = [k for _, k in done[_EXPORT_KEEP:]]
+        for key in stale:
+            path = (_export_jobs.pop(key, {}) or {}).get("path")
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+def _render_export(days, destination, fmt, include_photos, progress=None):
+    """Renders one export. Returns (data, media_type, filename).
+
+    Shared by the immediate and the background paths, so the two cannot drift
+    into producing different films for the same trip.
+
+    trip_export is imported here rather than at module scope: Pillow and the
+    bundled ffmpeg are only needed by this one feature, and a deployment
+    without them should still serve every other endpoint rather than failing
+    to boot.
+    """
+    def say(stage: str, fraction: float):
+        if progress:
+            try:
+                progress(stage, max(0.0, min(1.0, fraction)))
+            except Exception:
+                pass
+
+    import trip_export
+
+    # The two formats want different cuts of the same trip. A PDF is read, so
+    # one dense page per day is right. A video is watched, so it gets a title,
+    # a photo-led shot per place and a closing card -- the same information,
+    # paced for the eye rather than the page.
+    if fmt == "pdf":
+        say("Drawing your days", 0.15)
+        frames = trip_export.render_days(days, destination, include_photos,
+                                         maps_key=GOOGLE_PLACES_API_KEY)
+        if not frames:
+            return None, "", ""
+        say("Writing the PDF", 0.85)
+        return trip_export.build_pdf(frames), "application/pdf", \
+            "triplix-trip.pdf"
+
+    # Narration is attached before rendering so a shot can carry its line.
+    # Failure yields {} and the film is unchanged.
+    say("Writing the words", 0.04)
+    narration = _narrate_trip(days, destination)
+    if narration:
+        for day in days:
+            for item in (day.get("items") or []):
+                line = narration.get(str(item.get("title") or ""))
+                if line:
+                    item["narration"] = line
+
+    say("Finding your route", 0.10)
+    shots = trip_export.render_film(days, destination, include_photos,
+                                    maps_key=GOOGLE_PLACES_API_KEY)
+    if not shots:
+        return None, "", ""
+
+    # A soundtrack if one has been provided. Nothing ships with the app: the
+    # video is made to be shared, so the track has to be one you hold
+    # redistribution rights to. Drop a file in 7-multi-agent/music/ and it is
+    # picked up automatically.
+    music_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "music")
+    music_path = None
+    if os.path.isdir(music_dir):
+        for track in sorted(os.listdir(music_dir)):
+            if track.lower().endswith((".mp3", ".m4a", ".aac", ".wav")):
+                music_path = os.path.join(music_dir, track)
+                break
+    if music_path:
+        print(f"[EXPORT] scoring with {os.path.basename(music_path)}")
+
+    # Rendering frames is the long stretch, so it owns most of the bar: the
+    # figure has to keep moving through the two minutes that actually pass.
+    def frame_progress(done: int, total: int):
+        say("Rolling the film", 0.15 + 0.75 * (done / max(1, total)))
+
+    data = trip_export.build_video(shots, seconds_per_day=3.0,
+                                   music_path=music_path,
+                                   on_progress=frame_progress)
+    say("Finishing up", 0.95)
+    return data, "video/mp4", "triplix-trip.mp4"
+
+
+def _run_export_job(job_id: str, days, destination, fmt, include_photos):
+    """Worker body: renders to a file and records how far it has got."""
+    def progress(stage: str, fraction: float):
+        with _export_lock:
+            job = _export_jobs.get(job_id)
+            if job is not None:
+                job.update(state="running", stage=stage, progress=fraction)
+
+    try:
+        data, media, filename = _render_export(
+            days, destination, fmt, include_photos, progress=progress)
+        if not data:
+            raise ValueError("nothing_to_render")
+
+        os.makedirs(_export_dir, exist_ok=True)
+        path = os.path.join(_export_dir, f"{job_id}-{filename}")
+        with open(path, "wb") as handle:
+            handle.write(data)
+
+        with _export_lock:
+            job = _export_jobs.get(job_id)
+            if job is not None:
+                job.update(state="done", progress=1.0, stage="Ready",
+                           path=path, media=media, filename=filename,
+                           size=len(data))
+        print(f"[EXPORT] {job_id} done: {len(data)} bytes")
+        _export_evict()
+    except Exception as e:
+        print(f"[EXPORT] {job_id} failed: {e}")
+        with _export_lock:
+            job = _export_jobs.get(job_id)
+            if job is not None:
+                job.update(state="error", stage="Failed", message=str(e))
+
+
 @app.post("/api/itinerary/export")
 def export_itinerary(request: dict):
     """The plan as a shareable PDF or MP4.
 
-    Both come from the same day renderer in trip_export, so the two formats
-    cannot disagree about what the trip contains.
-
-    Imported inside the handler rather than at module scope: Pillow and the
-    bundled ffmpeg are only needed by this one route, and a deployment that
-    skips them should still serve every other endpoint rather than failing to
-    boot.
+    Two modes. Without "mode": "async" this renders inline and returns the file,
+    which is the original behaviour and is kept so nothing that already calls it
+    breaks. With it, the render is queued and a job id comes back at once for
+    the caller to poll -- which is what the app uses, because the wait is long
+    enough that a held-open request times out.
     """
     try:
         days = request.get("days") or []
         destination = str(request.get("destination") or "").strip()
         fmt = str(request.get("format") or "pdf").lower().strip()
         include_photos = request.get("include_photos", True) is not False
+        background = str(request.get("mode") or "").lower() == "async"
 
         if not days:
             return {"status": "error", "message": "no_days"}
@@ -3738,66 +3916,99 @@ def export_itinerary(request: dict):
             return {"status": "error", "message": "bad_format"}
 
         try:
-            import trip_export
+            import trip_export  # noqa: F401  (checked before promising a job)
         except Exception as e:
             print(f"[EXPORT] renderer unavailable: {e}")
             return {"status": "error", "message": "renderer_unavailable"}
 
-        # The two formats want different cuts of the same trip. A PDF is read,
-        # so one dense page per day is right. A video is watched, so it gets a
-        # title, a photo-led shot per place and a closing card -- the same
-        # information, paced for the eye rather than the page.
-        if fmt == "pdf":
-            frames = trip_export.render_days(days, destination, include_photos)
-            if not frames:
+        if not background:
+            data, media, filename = _render_export(
+                days, destination, fmt, include_photos)
+            if not data:
                 return {"status": "error", "message": "nothing_to_render"}
-            data = trip_export.build_pdf(frames)
-            media, name = "application/pdf", "triplix-trip.pdf"
-        else:
-            # Narration is attached before rendering so a shot can carry
-            # its line. Failure yields {} and the film is unchanged.
-            narration = _narrate_trip(days, destination)
-            if narration:
-                for day in days:
-                    for item in (day.get("items") or []):
-                        line = narration.get(str(item.get("title") or ""))
-                        if line:
-                            item["narration"] = line
-            frames = trip_export.render_film(
-                days, destination, include_photos,
-                maps_key=GOOGLE_PLACES_API_KEY)
-            if not frames:
-                return {"status": "error", "message": "nothing_to_render"}
-            # A soundtrack if one has been provided. Nothing ships with the
-            # app: the video is made to be shared, so the track has to be one
-            # you hold redistribution rights to. Drop a file in
-            # 7-multi-agent/music/ and it is picked up automatically.
-            music_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "music")
-            music_path = None
-            if os.path.isdir(music_dir):
-                for name in sorted(os.listdir(music_dir)):
-                    if name.lower().endswith((".mp3", ".m4a", ".aac", ".wav")):
-                        music_path = os.path.join(music_dir, name)
-                        break
-            if music_path:
-                print(f"[EXPORT] scoring with {os.path.basename(music_path)}")
-            data = trip_export.build_video(frames, seconds_per_day=3.0,
-                                           music_path=music_path)
-            media, name = "video/mp4", "triplix-trip.mp4"
+            from fastapi.responses import Response
+            return Response(
+                content=data,
+                media_type=media,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"'
+                },
+            )
 
-        if not data:
-            return {"status": "error", "message": "empty_output"}
+        fingerprint = _export_fingerprint(days, destination, fmt,
+                                          include_photos)
+        with _export_lock:
+            # An identical export that already finished, or is already being
+            # rendered, is handed back rather than started again. This is also
+            # what makes "start again with the new plan" cheap when the user
+            # edits back to something already rendered.
+            for key, job in _export_jobs.items():
+                if job.get("fingerprint") != fingerprint:
+                    continue
+                if job.get("state") == "done" and \
+                        os.path.exists(job.get("path") or ""):
+                    return {"status": "success", "job_id": key, "cached": True}
+                if job.get("state") in ("queued", "running"):
+                    return {"status": "success", "job_id": key,
+                            "cached": False}
 
-        from fastapi.responses import Response
-        return Response(
-            content=data,
-            media_type=media,
-            headers={"Content-Disposition": f'attachment; filename="{name}"'},
-        )
+            job_id = uuid.uuid4().hex[:12]
+            _export_jobs[job_id] = {
+                "state": "queued", "progress": 0.0, "stage": "Getting ready",
+                "message": "", "path": "", "media": "", "filename": "",
+                "fingerprint": fingerprint, "created": time.time(),
+            }
+
+        _export_pool.submit(_run_export_job, job_id, days, destination, fmt,
+                            include_photos)
+        print(f"[EXPORT] {job_id} queued ({fmt}, {len(days)} days)")
+        return {"status": "success", "job_id": job_id, "cached": False}
     except Exception as e:
         print(f"[EXPORT] failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/itinerary/export/status/{job_id}")
+def export_status(job_id: str):
+    """How far along a queued render is."""
+    with _export_lock:
+        job = _export_jobs.get(job_id)
+        if job is None:
+            return {"status": "error", "message": "unknown_job"}
+        return {
+            "status": "success",
+            "state": job.get("state"),
+            "progress": round(float(job.get("progress") or 0.0), 3),
+            "stage": job.get("stage") or "",
+            "message": job.get("message") or "",
+            "size": job.get("size") or 0,
+        }
+
+
+@app.get("/api/itinerary/export/file/{job_id}")
+def export_file(job_id: str):
+    """The finished file for a job."""
+    with _export_lock:
+        job = dict(_export_jobs.get(job_id) or {})
+    if not job:
+        return {"status": "error", "message": "unknown_job"}
+    if job.get("state") != "done":
+        return {"status": "error", "message": "not_ready"}
+    path = job.get("path") or ""
+    if not os.path.exists(path):
+        return {"status": "error", "message": "file_gone"}
+
+    from fastapi.responses import Response
+    with open(path, "rb") as handle:
+        data = handle.read()
+    return Response(
+        content=data,
+        media_type=job.get("media") or "application/octet-stream",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{job.get("filename")}"'
+        },
+    )
 
 
 @app.post("/api/itinerary/schedule")
@@ -3829,6 +4040,8 @@ def suggest_day_schedule(request: dict):
             "Allow realistic travel time between places, and say when to set off, not only when to arrive.",
             "Say roughly how long to spend at each place, and what to actually do there - use the description given for it, do not invent attractions.",
             "Name places exactly as given. Say the hotel by its name, not 'the hotel', and the place by its name, not its category.",
+            "The traveller is staying at the hotel named in 'stay'. That is the only place they sleep, check in, or return to at the end of the day.",
+            "If any other hotel appears among the places, it is somewhere they are visiting, not where they are staying. Never send them there to sleep, to check in, or for breakfast.",
             "Include meals and a rest where they naturally fall. Anchor each one to a named place - 'near <place>' or 'at <hotel name>' - so the traveller knows where to be. Do not invent a restaurant or shop name.",
             "Cover only the places listed. Do not add new places.",
             "6 to 10 lines per day, each under 120 characters, plain and practical, for example: 09:15 Set off for City Palace, about 20 minutes.",
@@ -5519,6 +5732,14 @@ def discover_places(request: DiscoverRequest):
         per_pass = max(1, min(2, request.limit))
 
         excluded = {e.strip().lower() for e in (request.exclude or []) if e}
+
+        def wants_lodging(query: str) -> bool:
+            """Whether somewhere to sleep is actually what was asked for."""
+            q = query.lower()
+            return any(w in q for w in (
+                "hotel", "resort", "stay", "lodge", "inn", "guest house",
+                "guesthouse", "hostel", "accommodation", "homestay"))
+
         field_mask = (
             "places.displayName,places.rating,places.userRatingCount,"
             "places.photos,places.regularOpeningHours,places.formattedAddress,"
@@ -5556,6 +5777,20 @@ def discover_places(request: DiscoverRequest):
                 # Excluded by name as well as id: the plan holds names, and a
                 # place already on the itinerary must not be offered again.
                 if name.lower() in excluded:
+                    continue
+
+                # Hotels are dropped unless somewhere to sleep is what was
+                # asked for. Google returns them for "top places to visit" --
+                # they are real places and they rank well -- but offering a
+                # hotel to someone who has already booked one puts a second,
+                # unrelated hotel in their day. The scheduler then has no way
+                # to tell which is theirs, and writes "breakfast at Hotel Amit
+                # Park International" for a traveller checked in to Grand
+                # Dhillon. Filtered here rather than in the prompt because the
+                # model was following its instructions: the wrong hotel should
+                # never have reached the itinerary to be described.
+                types = {str(t) for t in (place.get("types") or [])}
+                if types & _LODGING_TYPES and not wants_lodging(query):
                     continue
                 seen_ids.add(place_id)
 
