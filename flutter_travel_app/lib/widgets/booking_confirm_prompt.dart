@@ -17,7 +17,12 @@ import '../services/python_adk_service.dart';
 /// implementation. [onPartial] fires with the cached fares as soon as they
 /// arrive (~2s) so the list can render before the slower grounded schedule
 /// lands behind it.
-Future<List<Map<String, dynamic>>> _lookupFlights({
+/// Shared with the Search Flights screen, which lists the same flights
+/// before the user leaves for Aviasales. Public for that reason: two
+/// copies of the merge-and-dedupe would drift, and the two lists have to
+/// agree -- confirming a flight you were never shown is the bug this
+/// whole sheet exists to prevent.
+Future<List<Map<String, dynamic>>> lookupFlights({
   required PythonADKService adk,
   required String origin,
   required String destination,
@@ -615,7 +620,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// lookup both legs of a round trip use.
   Future<void> _loadFlightOptions() async {
     setState(() => _loadingFlights = true);
-    final merged = await _lookupFlights(
+    final merged = await lookupFlights(
       adk: _adkService,
       origin: widget.flightOrigin,
       destination: widget.flightDestination,
@@ -1776,7 +1781,7 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final merged = await _lookupFlights(
+    final merged = await lookupFlights(
       adk: _adk,
       origin: widget.origin,
       destination: widget.destination,

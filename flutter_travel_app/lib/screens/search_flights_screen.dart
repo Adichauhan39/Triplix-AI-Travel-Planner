@@ -79,6 +79,15 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
   String? _originIata;
   String? _destinationIata;
 
+  /// Flights on the chosen route and date, shown without waiting for the
+  /// button. [_previewKey] is the route and date they belong to, so a lookup
+  /// runs once per change rather than on every rebuild, and a slow reply for
+  /// an old route is discarded instead of overwriting a newer one.
+  final PythonADKService _adk = PythonADKService();
+  List<Map<String, dynamic>> _preview = const [];
+  bool _loadingPreview = false;
+  String _previewKey = '';
+
   /// Set when the chosen airport isn't in the typed city, so the substitution
   /// stays visible after the suggestion list closes.
   String? _originNote;
@@ -113,6 +122,150 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
     );
     if (picked == null) return;
     setState(() => _returnDate = picked);
+  }
+
+  /// Real flights on this route, loaded as soon as both airports are picked
+  /// rather than waiting for the button.
+  ///
+  /// Uses the same lookup as the confirmation sheet, so the two lists cannot
+  /// disagree. Cached Travelpayouts fares arrive first through [onPartial],
+  /// then the grounded schedule is merged in behind them.
+  ///
+  /// The schedule call is billable and takes ~38s on a route nobody has looked
+  /// up before, which is why this waits for both airports to be chosen: a
+  /// half-typed city is not a route worth paying for. It is cached to
+  /// .flight_schedules.json afterwards, so the second person to want that
+  /// route gets it instantly and for nothing.
+  ///
+  /// The fares alone are not enough to show: Travelpayouts holds one-way fares
+  /// only for routes recently searched through its network, and returned
+  /// nothing for Delhi-Mumbai, Mumbai-Goa or Bhopal-Raipur when measured. The
+  /// schedule is what actually puts flights on the screen.
+  Future<void> _loadPreview() async {
+    final from = _originIata, to = _destinationIata;
+    if (from == null || to == null || from == to) return;
+    if (_origin == null || _destination == null) return;
+    final key = '$from|$to|${_departDate.toIso8601String().split('T').first}';
+    if (key == _previewKey) return;
+
+    setState(() {
+      _previewKey = key;
+      _loadingPreview = true;
+      _preview = const [];
+    });
+
+    final flights = await lookupFlights(
+      adk: _adk,
+      origin: _origin!,
+      destination: _destination!,
+      originIata: from,
+      destinationIata: to,
+      date: _departDate,
+      // Whatever cached fares exist show at once, so the list is not blank for
+      // the half minute the schedule takes.
+      onPartial: (partial) {
+        if (mounted && key == _previewKey) {
+          setState(() => _preview = partial);
+        }
+      },
+    );
+    // A reply for a route the user has since changed is dropped rather than
+    // painted over the newer one.
+    if (!mounted || key != _previewKey) return;
+
+    setState(() {
+      _loadingPreview = false;
+      _preview = flights;
+    });
+  }
+
+  Widget _flightPreview() {
+    if (_originIata == null || _destinationIata == null) {
+      return const SizedBox.shrink();
+    }
+    if (_loadingPreview) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 20),
+        child: Row(children: [
+          SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 10),
+          Text('Finding flights on this route…',
+              style: TextStyle(fontSize: 13, color: Colors.black54)),
+        ]),
+      );
+    }
+    if (_preview.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Flights on this day',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.grey[800])),
+          const SizedBox(height: 8),
+          for (final f in _preview.take(6))
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          [
+                            (f['airline'] ?? '').toString(),
+                            (f['route_number'] ?? '').toString(),
+                          ].where((s) => s.isNotEmpty).join('  ·  '),
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                        if ((f['departure_time'] ?? '').toString().isNotEmpty)
+                          Text(
+                            [
+                              (f['departure_time'] ?? '').toString(),
+                              if ((f['arrival_time'] ?? '')
+                                  .toString()
+                                  .isNotEmpty)
+                                (f['arrival_time'] ?? '').toString(),
+                            ].join('  →  '),
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey[600]),
+                          ),
+                      ],
+                    ),
+                  ),
+                  // The price we hold, not a quote: fares move, and the real
+                  // number is whatever Aviasales shows at booking time.
+                  if (f['price'] != null)
+                    Text('from ₹${f['price']}',
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+          Text(
+            'Scheduled departures on this route. Any price shown is indicative '
+            '— tap Search Flights for live availability and booking.',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _search() async {
@@ -177,6 +330,11 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // After the frame, so picking an airport or a date loads the list without
+    // a further tap. _loadPreview returns immediately unless the route or the
+    // date has actually changed.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadPreview());
+
     return Scaffold(
       floatingActionButton: const PlanQuickEditButton(),
       appBar: AppBar(title: const Text('Search Flights'), centerTitle: true),
@@ -332,6 +490,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
                 ),
               ),
             ),
+            _flightPreview(),
             const SizedBox(height: 12),
             Text(
               'Opens Aviasales in your browser to complete the search and '
