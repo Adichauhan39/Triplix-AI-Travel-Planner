@@ -517,6 +517,85 @@ class PythonADKService {
     }
   }
 
+  /// Queues an export and returns its job id straight away.
+  ///
+  /// The render takes one to three and a half minutes, which is longer than
+  /// [exportPlan] will wait: a five-day film could not be exported at all,
+  /// because the request timed out at 180s while the server was still working.
+  /// Polling replaces one long request with many short ones, and gives us a
+  /// figure to show while it runs.
+  Future<Map<String, dynamic>?> startExport({
+    required List<Map<String, dynamic>> days,
+    required String format,
+    String destination = '',
+    bool includePhotos = true,
+  }) async {
+    if (days.isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/itinerary/export'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'days': days,
+              'format': format,
+              'destination': destination,
+              'include_photos': includePhotos,
+              'mode': 'async',
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) {
+        debugPrint('startExport: HTTP ${response.statusCode}');
+        return null;
+      }
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      if (body['status'] != 'success' || body['job_id'] == null) {
+        debugPrint('startExport: ${body['message']}');
+        return null;
+      }
+      return body;
+    } catch (e) {
+      debugPrint('startExport failed: $e');
+      return null;
+    }
+  }
+
+  /// How far along a queued export is: state, progress (0–1) and a stage line.
+  Future<Map<String, dynamic>?> exportStatus(String jobId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/itinerary/export/status/$jobId'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      return body['status'] == 'success' ? body : null;
+    } catch (e) {
+      debugPrint('exportStatus failed: $e');
+      return null;
+    }
+  }
+
+  /// The finished file for a job, or null if it is not ready.
+  Future<List<int>?> fetchExport(String jobId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_baseUrl/api/itinerary/export/file/$jobId'))
+          .timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) return null;
+      // An error comes back as JSON rather than a file, so a body that starts
+      // with '{' is a failure however healthy the status code looks.
+      if (response.bodyBytes.isNotEmpty && response.bodyBytes.first == 0x7B) {
+        debugPrint('fetchExport: server returned an error payload');
+        return null;
+      }
+      return response.bodyBytes;
+    } catch (e) {
+      debugPrint('fetchExport failed: $e');
+      return null;
+    }
+  }
+
   /// Answers a question about one place.
   ///
   /// [facts] should carry what we already know about it, so the common

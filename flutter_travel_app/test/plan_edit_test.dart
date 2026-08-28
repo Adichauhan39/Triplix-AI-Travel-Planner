@@ -157,6 +157,47 @@ void main() {
     expect(p.plan!.destination, 'Raipur');
   });
 
+  group('contentKey — what the export watches for', () {
+    test('changes when a place is removed', () {
+      final p = seeded();
+      final before = p.contentKey;
+      p.removeItem(0, 0);
+      expect(p.contentKey, isNot(before));
+    });
+
+    test('changes when a place is added', () {
+      final p = seeded();
+      final before = p.contentKey;
+      p.addItems(0, ['Dam View point']);
+      expect(p.contentKey, isNot(before));
+    });
+
+    test('changes when a place moves to another day', () {
+      final p = seeded();
+      final before = p.contentKey;
+      p.moveItem(0, 0, 2);
+      expect(p.contentKey, isNot(before));
+    });
+
+    test('is stable across a rebuild from the same inputs', () {
+      final p = seeded();
+      final before = p.contentKey;
+      // What the screen does on every build. If this shifted, the export
+      // would think the plan had changed and prompt on an idle screen.
+      p.buildFromSelection(
+        destination: 'Bhilai',
+        start: DateTime(2026, 8, 27),
+        end: DateTime(2026, 8, 29),
+        activities: ['Temple', 'Park', 'Garden'],
+      );
+      expect(p.contentKey, before);
+    });
+
+    test('is empty with no plan, so nothing is compared before one exists', () {
+      expect(TripPlanProvider().contentKey, isEmpty);
+    });
+  });
+
   test('an edit survives a restart and the rebuild that follows it', () async {
     seeded().removeItem(0, 0);
     await Future<void>.delayed(const Duration(milliseconds: 50));

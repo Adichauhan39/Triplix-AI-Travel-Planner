@@ -26,6 +26,24 @@ class TripPlanProvider with ChangeNotifier {
   TripPlan? get plan => _plan;
   bool get hasPlan => _plan != null && !_plan!.isEmpty;
 
+  /// What the plan currently *contains*, as a comparable string.
+  ///
+  /// Distinct from [_builtFrom], which records the inputs the plan was built
+  /// from. Removing a place, adding one or reordering a day leaves those
+  /// inputs untouched, so the build signature cannot answer "has this plan
+  /// changed since I started rendering a video of it" -- which is the question
+  /// the export needs, since the film is made of the items, not the inputs.
+  String get contentKey {
+    final plan = _plan;
+    if (plan == null) return '';
+    return [
+      plan.destination,
+      for (final day in plan.days)
+        '${day.date.toIso8601String().split('T').first}'
+            ':${day.items.map((i) => i.title).join(',')}',
+    ].join('|');
+  }
+
   /// Builds the plan from what the user chose during onboarding.
   ///
   /// Rebuilds only when the inputs actually differ, so returning to the

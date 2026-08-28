@@ -16,6 +16,43 @@ import '../providers/user_preferences_provider.dart';
 import '../services/python_adk_service.dart';
 import '../widgets/place_detail_sheet.dart';
 
+/// The positions of [names], sorted by where each is first named in [notes].
+///
+/// Top level and pure so the ordering can be tested directly: matching place
+/// names inside free text has enough edge cases -- one name contained in
+/// another, a place the schedule never mentions -- that eyeballing the day
+/// card is not evidence it is right.
+///
+/// Anything unmentioned sorts to the end, keeping its existing order rather
+/// than being dropped or shuffled.
+List<int> runningOrderIndices(List<String> names, List<String> notes) {
+  final running = notes.join('\n').toLowerCase();
+  const unmentioned = 1 << 30;
+
+  int mentionedAt(String name) {
+    final needle = name.trim().toLowerCase();
+    if (needle.isEmpty) return unmentioned;
+    final at = running.indexOf(needle);
+    return at < 0 ? unmentioned : at;
+  }
+
+  // Longest name first when two share a position: "Hotel Amit Park" contains
+  // "Amit Park", so the shorter one can match at the same index and steal the
+  // place of the longer. Preferring the longer match keeps the pair in the
+  // order the schedule actually names them.
+  final order = List<int>.generate(names.length, (i) => i);
+  order.sort((a, b) {
+    final byMention = mentionedAt(names[a]).compareTo(mentionedAt(names[b]));
+    if (byMention != 0) return byMention;
+    final byLength = names[b].length.compareTo(names[a].length);
+    if (byLength != 0 && mentionedAt(names[a]) != unmentioned) return byLength;
+    // Ties keep their original order, so the sort is stable and two places
+    // named in the same line do not swap between rebuilds.
+    return a.compareTo(b);
+  });
+  return order;
+}
+
 /// The trip, day by day, built from the activities the user chose.
 ///
 /// Shown rather than asked for: the plan is assembled from what onboarding
@@ -59,7 +96,23 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// than asking for it to be scheduled.
   Map<String, List<String>> _schedules = {};
   bool _scheduling = false;
-  bool _exporting = false;
+
+  /// The export being rendered on the server, if any.
+  ///
+  /// A film takes one to three and a half minutes, so it runs as a job the
+  /// server owns and we poll. Holding the request open instead used to time
+  /// out at 180s, which meant a five-day trip could not be exported at all.
+  String? _exportJobId;
+  double _exportProgress = 0;
+  String _exportStage = '';
+  Timer? _exportPoll;
+
+  /// The plan as it was when the current render started, and whether the user
+  /// has already been asked about the difference. Asked once per job, not once
+  /// per edit: people change several things in a row, and a dialog per change
+  /// would be unusable.
+  String _exportPlanKey = '';
+  bool _exportEditPrompted = false;
 
   /// The day currently having places found for it, so only its own button
   /// shows a spinner rather than every day at once.
@@ -84,6 +137,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
   @override
   void dispose() {
+    _exportPoll?.cancel();
     _requestController.dispose();
     super.dispose();
   }
@@ -248,10 +302,33 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         in booked.hotels.where((h) => sameDay(h.startDate, day.date))) {
       fixed.add('Check in at ${h.hotelName ?? h.title}');
     }
+
+    // Which hotel they are actually in on this date, across the whole stay
+    // rather than only on the day they check in.
+    //
+    // Without this the scheduler could only see hotels among the day's places,
+    // and a hotel suggested as somewhere to visit looked exactly like the one
+    // they had booked -- so a traveller checked in to Grand Dhillon was sent
+    // to Hotel Amit Park International for breakfast. Naming the booking makes
+    // one of them a fact and the rest just places.
+    String? stay;
+    final onDay = DateTime(day.date.year, day.date.month, day.date.day);
+    for (final h in booked.hotels) {
+      final from =
+          DateTime(h.startDate.year, h.startDate.month, h.startDate.day);
+      final end = h.endDate ?? h.startDate;
+      final until = DateTime(end.year, end.month, end.day);
+      if (!onDay.isBefore(from) && !onDay.isAfter(until)) {
+        stay = h.hotelName ?? h.title;
+        break;
+      }
+    }
+
     return {
         'date': iso(day.date),
         if (fixed.isNotEmpty) 'fixed': fixed,
-        'items': day.items.map((i) {
+        if (stay != null) 'stay': stay,
+        'items': _orderedItems(day).map((i) {
           final hours = _todayHoursFor(i.title, day.date);
           // Google's own description of the place, so a line can say what
           // there is to do there rather than just naming it. Without this the
@@ -267,6 +344,28 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           };
         }).toList(),
     };
+  }
+
+  /// The day's places in the order the running order actually visits them.
+  ///
+  /// The card listed them in the order they were added, while the schedule
+  /// underneath sent you round in a different sequence entirely -- Nehru Art
+  /// Gallery sat at the top of the list and was the last stop of the day. The
+  /// photographs then read as the shape of the day, which they were not.
+  ///
+  /// Sorted for display and for export rather than written back to the plan:
+  /// reordering the stored items would count as an edit, which would persist,
+  /// and would interrupt a running video render to ask about a change the user
+  /// never made. This way the card, the day map, the PDF and the film all show
+  /// one order without anything being rewritten behind them.
+  List<PlanItem> _orderedItems(PlanDay day) {
+    final notes = _schedules[day.date.toIso8601String().split('T').first] ??
+        const <String>[];
+    if (notes.isEmpty || day.items.length < 2) return day.items;
+
+    final order = runningOrderIndices(
+        [for (final i in day.items) _placeName(i.title)], notes);
+    return [for (final i in order) day.items[i]];
   }
 
   /// The hours line for [title] on [date]'s weekday, if we have it.
@@ -294,7 +393,13 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// same ratings, same running order.
   Future<void> _sharePlan(
       TripPlan plan, BookedTripProvider booked, String format) async {
-    setState(() => _exporting = true);
+    setState(() {
+      _exportProgress = 0;
+      _exportStage = 'Getting ready';
+      _exportBytes = null;
+      _exportEditPrompted = false;
+      _exportPlanKey = context.read<TripPlanProvider>().contentKey;
+    });
 
     bool sameDay(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day;
@@ -315,7 +420,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       return {
         'date_label': _dayLabel.format(day.date),
         if (fixed.isNotEmpty) 'fixed': fixed,
-        'items': day.items.map((i) {
+        // Ordered, so the film's map pins, its photo sequence and the PDF
+        // pages all follow the same day the card shows.
+        'items': _orderedItems(day).map((i) {
           final summary = _summaries[i.title] ?? const {};
           return {
             'title': _placeName(i.title),
@@ -326,6 +433,16 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             // rendered the same still repeatedly -- the feature only
             // ever worked when the payload was built by hand.
             if (summary['photos'] != null) 'photos': summary['photos'],
+            // The coordinates, without which the film has no map at all.
+            // render_film only treats a place as a stop when it carries both,
+            // and needs two before it draws anything -- so omitting these
+            // silently skipped the route shot and the car driving it, and the
+            // day cut straight from its card to the photos. The animation was
+            // only ever seen in tests that built this payload by hand, which
+            // is exactly what the note above says about `photos`. Same
+            // function, same mistake, twice.
+            if (summary['lat'] != null) 'lat': summary['lat'],
+            if (summary['lng'] != null) 'lng': summary['lng'],
             if (summary['description'] != null)
               'about': summary['description'],
             if (_todayHoursFor(i.title, day.date) != null)
@@ -336,24 +453,119 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       };
     }).toList();
 
-    final bytes = await _adk.exportPlan(
+    final started = await _adk.startExport(
         days: days, format: format, destination: plan.destination);
     if (!mounted) return;
 
-    if (bytes == null) {
+    if (started == null) {
       setState(() {
-        _exporting = false;
+        _exportJobId = null;
         _error = "Couldn't build the $format — check the server is running.";
       });
       return;
     }
 
     setState(() {
-      _exporting = false;
       _error = null;
       _exportFormat = format;
-      _exportBytes = Uint8List.fromList(bytes);
+      _exportJobId = started['job_id'] as String;
+      _exportStage = 'Getting ready';
     });
+    _pollExport();
+  }
+
+  /// Watches the running export and collects the file when it is done.
+  ///
+  /// Two seconds: fast enough that the figure looks live, slow enough that a
+  /// three-minute render is ~90 requests rather than thousands.
+  void _pollExport() {
+    _exportPoll?.cancel();
+    _exportPoll = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      final jobId = _exportJobId;
+      if (jobId == null) {
+        timer.cancel();
+        return;
+      }
+      final status = await _adk.exportStatus(jobId);
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      // A single failed poll is not a failed render -- the server may just be
+      // busy with the frame it is on. Keep waiting rather than throwing away
+      // work that is still going.
+      if (status == null) return;
+
+      final state = (status['state'] ?? '').toString();
+      if (state == 'error') {
+        timer.cancel();
+        setState(() {
+          _exportJobId = null;
+          _error = "Couldn't build the $_exportFormat — ${status['message']}";
+        });
+        return;
+      }
+
+      setState(() {
+        _exportProgress = (status['progress'] as num?)?.toDouble() ?? 0;
+        _exportStage = (status['stage'] ?? '').toString();
+      });
+
+      if (state != 'done') return;
+      timer.cancel();
+
+      final bytes = await _adk.fetchExport(jobId);
+      if (!mounted) return;
+      setState(() {
+        _exportJobId = null;
+        if (bytes == null) {
+          _error = 'The file was built but could not be collected.';
+        } else {
+          _error = null;
+          _exportBytes = Uint8List.fromList(bytes);
+        }
+      });
+    });
+  }
+
+  /// Asks what to do when the plan is edited while a video is being made.
+  ///
+  /// The render is of the plan as it was when it started, so an edit makes the
+  /// film that is coming out of date. Rather than silently discarding minutes
+  /// of work or silently handing over a stale video, ask -- once.
+  Future<void> _askAboutEdit(
+      TripPlan plan, BookedTripProvider booked) async {
+    _exportEditPrompted = true;
+    final format = _exportFormat;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Your plan changed'),
+        content: Text(
+          'The $_exportFormat being made is of your plan as it was a moment '
+          'ago. Start again so it matches your changes, or keep the one '
+          'already being made?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'keep'),
+            child: const Text('Keep the current one'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, 'restart'),
+            child: const Text('Start again'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice != 'restart') return;
+
+    // The old job is left to finish on the server: it may well be the cache
+    // hit for whatever they undo next, and cancelling ffmpeg part-way buys
+    // nothing back.
+    _exportPoll?.cancel();
+    setState(() => _exportJobId = null);
+    await _sharePlan(plan, booked, format);
   }
 
   /// Hands the built file to the share sheet, called straight from a tap.
@@ -432,11 +644,27 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     // The confirmed flight and hotel, when there are any. A trip with none
     // renders exactly as before: nothing is invented to fill the space.
     final booked = context.watch<BookedTripProvider>();
-    final plan = context.watch<TripPlanProvider>().plan;
+    final planProvider = context.watch<TripPlanProvider>();
+    final plan = planProvider.plan;
     if (plan != null && !plan.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _expandInterests(plan, prefs);
         _loadSummaries(plan);
+      });
+    }
+
+    // The plan changed while a video of it was being made. Ask what to do
+    // with the render that is already under way -- once per job, after the
+    // frame, since this is inside build.
+    if (_exportJobId != null &&
+        !_exportEditPrompted &&
+        _exportPlanKey.isNotEmpty &&
+        planProvider.contentKey != _exportPlanKey &&
+        plan != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _exportJobId != null && !_exportEditPrompted) {
+          _askAboutEdit(plan, booked);
+        }
       });
     }
 
@@ -448,13 +676,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         centerTitle: true,
         actions: [
           if (plan != null && !plan.isEmpty)
-            _exporting
-                ? const Padding(
-                    padding: EdgeInsets.all(16),
+            // A determinate ring, not a spinner: the wait is minutes, and a
+            // spinner that long is indistinguishable from a hang.
+            _exportJobId != null
+                ? Padding(
+                    padding: const EdgeInsets.all(16),
                     child: SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        value: _exportProgress > 0 ? _exportProgress : null,
+                      ),
                     ),
                   )
                 : PopupMenuButton<String>(
@@ -650,7 +883,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   ),
                 ]
                 else
-                  for (final item in day.items)
+                  // Ordered by the running order, so the list reads as the
+                  // shape of the day. Edits still resolve through
+                  // day.items.indexOf below, which is the real position.
+                  for (final item in _orderedItems(day))
                     // Tappable: a plan that only lists names is a list, not
                     // something you can travel with. Opening a place shows
                     // its photos, rating, reviews, hours and map position -
@@ -1326,6 +1562,47 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Deliberately not a modal: the whole point of moving the render to
+          // the server is that the trip stays usable while it runs.
+          if (_exportJobId != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${_exportStage.isEmpty ? 'Working' : _exportStage}'
+                          ' — making your ${_exportFormat.toUpperCase()}',
+                          style: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      Text('${(_exportProgress * 100).round()}%',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.black54)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: _exportProgress > 0 ? _exportProgress : null,
+                      minHeight: 5,
+                      backgroundColor: Colors.grey.shade200,
+                      valueColor: AlwaysStoppedAnimation(
+                          AppConfig.primaryColor),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text('Keep planning — we will tell you when it is done.',
+                      style: TextStyle(fontSize: 11, color: Colors.black45)),
+                ],
+              ),
+            ),
+
           // Shown until tapped: the second gesture the browser requires.
           if (_exportBytes != null)
             Padding(
