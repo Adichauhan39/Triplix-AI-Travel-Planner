@@ -1048,6 +1048,8 @@ def build_video(shots, seconds_per_day: float = 3.0,
                                stderr=log)
     try:
         elapsed = 0.0
+        broken = False
+        shot_index = 0
         for shot_index, shot in enumerate(normalised):
             if on_progress:
                 # Guarded: a caller whose progress sink has gone away must not
@@ -1096,16 +1098,34 @@ def build_video(shots, seconds_per_day: float = 3.0,
                     frame = Image.blend(
                         Image.new("RGB", frame.size, (0, 0, 0)), frame, fade)
 
-                process.stdin.write(frame.tobytes())
+                # ffmpeg having given up closes this pipe, and the write
+                # then raises BrokenPipeError. Left to propagate it escaped
+                # through the finally below, which deletes the working
+                # directory -- taking ffmpeg's log, and with it the only
+                # record of what actually went wrong. The user was told
+                # "[Errno 32] Broken pipe", which names the symptom and
+                # nothing else. Stop writing, and go and read the log.
+                try:
+                    process.stdin.write(frame.tobytes())
+                except BrokenPipeError:
+                    broken = True
+                    break
+            if broken:
+                break
             elapsed += shot["seconds"]
 
-        process.stdin.close()
+        try:
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
         process.wait(timeout=300)
         log.close()
-        if process.returncode != 0 or not os.path.exists(out_path):
+        if broken or process.returncode != 0 or not os.path.exists(out_path):
             with open(log_path, "rb") as fh:
-                tail = fh.read()[-400:].decode("utf-8", "replace")
-            raise RuntimeError(tail)
+                tail = fh.read()[-600:].decode("utf-8", "replace").strip()
+            raise RuntimeError(
+                tail or f"ffmpeg exited with code {process.returncode} "
+                        f"after {shot_index + 1} of {len(normalised)} shots")
         with open(out_path, "rb") as fh:
             return fh.read()
     finally:

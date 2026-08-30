@@ -3720,6 +3720,33 @@ def _narrate_trip(days, destination):
 # Google's place types for somewhere to sleep. Kept broad: a type that slips
 # through puts a stranger's hotel on someone's itinerary, while one listed in
 # error only means a hotel is not offered as a sight, which is no loss.
+# How far from the middle of a city a place may be and still belong to a day
+# there. Generous enough for a genuine day trip on the edge of a metro, tight
+# enough to exclude another district entirely.
+#
+# Text Search matches on name, not geography: "Ancient Fort in Bhilai" happily
+# returned a fort in Ratanpur, 175km away, and the itinerary then scheduled a
+# 30-minute visit between a lake walk and a flight -- six and a half hours of
+# driving inside a two-hour window. Places have to be in the city before
+# anything downstream can reason about the day at all.
+_CITY_RADIUS_KM = 60.0
+
+
+def _within_city(city: str, lat, lng, limit_km: float = _CITY_RADIUS_KM):
+    """Whether a coordinate is close enough to [city] to belong to it.
+
+    Unknown answers pass. A geocode we could not perform is not evidence that
+    a place is far away, and dropping real results because our own lookup
+    failed is the worse error.
+    """
+    if lat is None or lng is None:
+        return True
+    centre = _geocode_city(city)
+    if not centre:
+        return True
+    return _haversine_km(centre[0], centre[1], float(lat), float(lng)) <= limit_km
+
+
 _LODGING_TYPES = {
     "lodging", "hotel", "motel", "resort_hotel", "extended_stay_hotel",
     "bed_and_breakfast", "guest_house", "hostel", "inn", "campground",
@@ -5792,6 +5819,12 @@ def discover_places(request: DiscoverRequest):
                 types = {str(t) for t in (place.get("types") or [])}
                 if types & _LODGING_TYPES and not wants_lodging(query):
                     continue
+
+                # In the city, or not in the trip.
+                loc = place.get("location") or {}
+                if not _within_city(city, loc.get("latitude"),
+                                    loc.get("longitude")):
+                    continue
                 seen_ids.add(place_id)
 
                 photo_url = ""
@@ -5921,12 +5954,42 @@ def get_place_summaries(request: PlaceSummariesRequest):
                     timeout=8,
                 ).json()
                 places = resp.get("places") or []
+
+                # Anything in another district is not a candidate at all. Text
+                # Search matches names, so "Ancient Fort" in Bhilai returned
+                # one in Ratanpur, 175km off -- and the day was then built
+                # around a 30-minute visit three hours' drive away.
+                near = [
+                    p for p in places
+                    if _within_city(request.city,
+                                    (p.get("location") or {}).get("latitude"),
+                                    (p.get("location") or {}).get("longitude"))
+                ]
+                if not near:
+                    # Better to say nothing about this title than to place it
+                    # in the wrong city.
+                    print(f"[SUMMARY] {name!r}: no match within "
+                          f"{_CITY_RADIUS_KM:.0f}km of {request.city}")
+                    return name, None
+                places = near
+
                 place = next(
                     (p for p in places if claim(str(p.get("id") or ""))), None)
                 if place is None:
-                    # Every candidate was taken by another category. Better to
-                    # drop this one than to repeat a place already in the plan.
-                    return name, None
+                    # Every candidate was already taken by another category.
+                    #
+                    # Returning nothing left the client holding a title it
+                    # could not resolve, so the row drew as a name with a grey
+                    # box, no photo and no rating -- the "empty place". The
+                    # collision was real; hiding it only moved the damage.
+                    #
+                    # The best match is returned anyway and flagged. The client
+                    # keys its deduplication on the resolved name, so two
+                    # interests landing on one venue now collapse into a single
+                    # row instead of one of them going blank.
+                    if not places:
+                        return name, None
+                    place = places[0]
 
                 # Up to three, not one. The card shows a single thumbnail,
                 # but the trip film gives each place several seconds, and one
