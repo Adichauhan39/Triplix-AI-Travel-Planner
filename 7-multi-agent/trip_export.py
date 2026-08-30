@@ -1023,8 +1023,19 @@ def build_video(shots, seconds_per_day: float = 3.0,
         "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
     ]
     if music_path and os.path.exists(music_path):
-        cmd += ["-i", music_path, "-c:a", "aac", "-b:a", "160k",
-                "-shortest", "-af",
+        cmd += ["-stream_loop", "-1", "-i", music_path]
+        # The track loops, so the film decides the length rather than the song.
+        #
+        # -shortest ends the output when the shortest input ends, and a
+        # four-minute trip scored with a three-minute track was being cut to
+        # three minutes -- silently, because a truncated film still plays.
+        # ffmpeg then closed the frame pipe early, which surfaced as a
+        # BrokenPipeError and, since the last change, as "couldn't build the
+        # mp4" printed over libx264's ordinary success statistics.
+        #
+        # -stream_loop -1 makes the audio effectively endless, so -shortest now
+        # ends on the video, which is the intent it always had.
+        cmd += ["-c:a", "aac", "-b:a", "160k", "-shortest", "-af",
                 f"afade=t=out:st={max(0.0, total_seconds - 2):.2f}:d=2"]
     # Frames go in over a pipe, but the file comes out on disk: MP4 writes
     # its header last and then seeks back to move it, which a pipe cannot do.
@@ -1120,7 +1131,12 @@ def build_video(shots, seconds_per_day: float = 3.0,
             pass
         process.wait(timeout=300)
         log.close()
-        if broken or process.returncode != 0 or not os.path.exists(out_path):
+        # A broken pipe is not by itself a failure. ffmpeg closes stdin as soon
+        # as it has all the video it intends to write, so a perfectly good
+        # encode can end with our last frames refused. What decides the outcome
+        # is the exit code and whether a file came out -- reporting otherwise
+        # printed libx264's success statistics to the user as an error.
+        if process.returncode != 0 or not os.path.exists(out_path):
             with open(log_path, "rb") as fh:
                 tail = fh.read()[-600:].decode("utf-8", "replace").strip()
             raise RuntimeError(
