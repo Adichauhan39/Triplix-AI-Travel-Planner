@@ -574,16 +574,27 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   static const String _editSentinel = '\u0000edit';
   static const String _keepSentinel = '\u0000keep';
 
+  /// Set when Save found nothing matching what was typed, so the sheet
+  /// can say so rather than appearing to do nothing.
+  bool _noFlightMatch = false;
+
   @override
   void initState() {
     super.initState();
     if (_isFlight) {
-      // Deliberately not loaded here. The flight lookup is a grounded model
-      // call per airline — slow and billable — and firing it the instant the
-      // sheet opens meant a spinner and a half-filled list appeared before
-      // the user had done anything. It now runs when they type, or when they
-      // tap "Show flights on this route". Hotels differ because their lookup
-      // is a single fast Places call with no model involved.
+      // Loaded as soon as the sheet opens. It used to wait for a tap on "Show
+      // flights on this route", to avoid spending a billable grounded lookup
+      // before the user had done anything -- but this sheet only opens after
+      // someone has been sent to Aviasales and come back, which is the
+      // strongest signal in the app that they booked something. Waiting left
+      // the list empty at the exact moment they were asked which flight they
+      // took, so the only way to answer was to type it -- and typing is what
+      // put "indigo" on an itinerary.
+      //
+      // A cached route costs nothing and returns instantly; a cold one is the
+      // same call the tap would have made.
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _ensureFlightsLoaded());
     } else if (widget.city.isNotEmpty) {
       _loadCityHotels();
     }
@@ -771,6 +782,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// Cheap to call on every keystroke: it returns immediately unless the list
   /// is genuinely empty and no lookup is in flight or already done.
   void _ensureFlightsLoaded() {
+    if (_noFlightMatch) _noFlightMatch = false;
     if (_flightOptions.isNotEmpty || _loadingFlights || _searchedSchedule) {
       return;
     }
@@ -803,13 +815,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// the lookup was still running, because the list is empty then too — so
   /// typing an airline name lit the button up seconds before any flight
   /// appeared, and pressing it saved a number nobody had confirmed.
-  bool get _canSave => _isFlight
-      ? (_loadingFlights
-          ? false
-          : (_searchedSchedule && _flightOptions.isEmpty)
-              ? _controller.text.trim().isNotEmpty
-              : _pickedFromPlaces)
-      : _selectedHotel != null;
+  bool get _canSave =>
+      _isFlight ? _pickedFromPlaces : _selectedHotel != null;
 
   /// Marks a flight as the user's choice, the same way tapping a hotel card
   /// does. It does not save or close.
@@ -893,9 +900,15 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
 
       final candidates = _filteredFlights;
       if (candidates.isEmpty) {
-        Navigator.of(context).pop(_DetailResult(text, false));
+        // Nothing matched, so there is nothing to save. This used to pop with
+        // whatever had been typed, marked unverified -- which is how "indigo"
+        // became a flight on someone's itinerary, with no number, no time and
+        // no aircraft behind it. An itinerary is better missing a flight than
+        // holding a wrong one, and "I don't have it yet" is right there.
+        setState(() => _noFlightMatch = true);
         return;
       }
+      _noFlightMatch = false;
 
       String plain(String s) =>
           s.toLowerCase().replaceAll(RegExp(r'[\s-]'), '');
@@ -998,9 +1011,12 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               child: const Text('Edit'),
             ),
             TextButton(
-              // The route may run flights the schedule doesn't list.
+              // No longer saves the typed text: it returns to the sheet with
+              // an explanation. Kept as a way out of the dialog for someone
+              // whose flight genuinely is not listed, who can then skip with
+              // "I don't have it yet" and add it once they have the number.
               onPressed: () => Navigator.of(dialogCtx).pop(<String, dynamic>{}),
-              child: Text('Keep "$text"'),
+              child: const Text('None of these'),
             ),
           ],
         ),
@@ -1010,7 +1026,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
       // Dismissed, or "Edit": stay on the sheet so the text can be changed.
       if (chosen == null || chosen['_edit'] == true) return;
       if (chosen.isEmpty) {
-        Navigator.of(context).pop(_DetailResult(text, false));
+        // The last route by which typed text could reach the itinerary. A
+        // flight nobody picked from a real schedule is a guess, and a guess
+        // here becomes a departure time somebody plans their morning around.
+        setState(() => _noFlightMatch = true);
       } else {
         Navigator.of(context).pop(_DetailResult(
           (chosen['route_number'] ?? '').toString(),
@@ -1346,7 +1365,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                     setState(() {});
                     _onQueryChanged(value);
                   },
-            onSubmitted: (_) => _close(),
+            // Enter is the same action as the button, so it obeys the
+            // same gate. It used to call _close() directly, which walked
+            // straight past the disabled state and saved the raw text.
+            onSubmitted: (_) => _canSave ? _close() : _ensureFlightsLoaded(),
             decoration: InputDecoration(
               labelText: _isFlight
                   ? 'Flight number, time or airline'
@@ -1666,10 +1688,24 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           // Says why the button is dead. A greyed button with no explanation
           // reads as broken; naming the missing step turns it into an
           // instruction.
-          if (!_canSave && !_verifying) ...[
+          // Nothing matched what was typed. Said plainly, because the
+          // alternative the sheet used to take -- saving the text anyway --
+          // is how an itinerary ended up holding a flight that does not
+          // exist.
+          if (_noFlightMatch) ...[
+            Text(
+              'No flight on this route matches that. Tap one from the list, '
+              "or use \"I don't have it yet\" and add it later.",
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+            ),
+            const SizedBox(height: 8),
+          ] else if (!_canSave && !_verifying) ...[
             Text(
               _isFlight
-                  ? 'Tap the flight you took to enable saving'
+                  ? (_loadingFlights
+                      ? 'Finding flights on this route…'
+                      : 'Tap the flight you took to enable saving')
                   : 'Tap the hotel you booked to enable saving',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
@@ -1765,15 +1801,22 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
   bool _picked = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Loaded on open, like the outbound leg. Both were bought in the same
+    // transaction, so someone confirming the flight out is about to confirm
+    // the flight back -- leaving this list empty until a second tap meant the
+    // return leg was the one people typed by hand, which is the entry the
+    // itinerary got wrong.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _ensureLoaded());
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
-  /// Same rule as the outbound: the lookup runs on intent, not on open. It is
-  /// a grounded model call per airline, and firing two of them the moment a
-  /// round-trip sheet appears doubles the cost for someone who may be about to
-  /// dismiss it.
   void _ensureLoaded() {
     if (_options.isNotEmpty || _loading || _searched) return;
     _load();
