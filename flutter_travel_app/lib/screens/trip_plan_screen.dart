@@ -13,8 +13,10 @@ import '../models/user_preferences.dart';
 import '../providers/booked_trip_provider.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
+import '../services/local_store.dart';
 import '../services/python_adk_service.dart';
 import '../widgets/place_detail_sheet.dart';
+import 'shared_trip_screen.dart';
 
 /// The positions of [names], sorted by where each is first named in [notes].
 ///
@@ -114,6 +116,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   String _exportPlanKey = '';
   bool _exportEditPrompted = false;
 
+  /// Guards the one-time reattach, so a rebuild does not restart polling.
+  bool _resumedExport = false;
+
+  /// The plan whose days have already been ordered geographically.
+  String _arrangedFor = '';
+
   /// The day currently having places found for it, so only its own button
   /// shows a spinner rather than every day at once.
   int? _fillingDay;
@@ -124,6 +132,13 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// The trip whose interests have already been expanded into places, so a
   /// rebuild of this screen does not fetch them again.
   String _expandedFor = '';
+
+  /// Places per day. Two is the floor: one place is somewhere to eat, not
+  /// a day out. Raised only if the user says they want fuller days.
+  int _minPerDay = 2;
+
+  /// Whether the one gap question has been put to the user for this trip.
+  String _askedFor = '';
 
   /// A built file waiting for the user to tap once more.
   ///
@@ -194,14 +209,112 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   ///
   /// Runs once per trip. The guard is the destination and the interests, so
   /// changing either expands again and a plain rebuild does not.
+  /// Asks the one thing we cannot work out for ourselves, and only when it
+  /// would change the plan.
+  ///
+  /// The trip screen used to present whatever it had: one restaurant on a day,
+  /// a running order built around it, and a share button beside it. Filling
+  /// the gap needs exactly one fact -- how full a day should be -- so that is
+  /// the only thing asked. Everything else is either already known (the dates,
+  /// the hotel, the flight) or guessable from it.
+  ///
+  /// Asked once per trip and remembered on the device: a question that returns
+  /// every time the screen is opened is worse than no question at all.
+  /// Reattaches to a render that was already running.
+  ///
+  /// The job lives on the server, so coming back to this screen -- or
+  /// reopening the app -- should find the film waiting rather than starting
+  /// again. A job the server has since forgotten simply clears.
+  void _resumeExport() {
+    if (_exportJobId != null || _resumedExport) return;
+    _resumedExport = true;
+    final stored = LocalStore.load(LocalStore.keyExportJob);
+    final jobId = (stored?['job_id'] ?? '').toString();
+    if (jobId.isEmpty) return;
+    setState(() {
+      _exportJobId = jobId;
+      _exportFormat = (stored?['format'] ?? 'mp4').toString();
+      _exportStage = 'Still working';
+    });
+    _pollExport();
+  }
+
+  Future<void> _askIfThin(TripPlan plan) async {
+    final signature = '${plan.destination}|${plan.days.length}';
+    if (signature == _askedFor) return;
+
+    final stored = LocalStore.load(LocalStore.keyTripShape);
+    final remembered = (stored?['min_per_day'] as num?)?.toInt();
+    if (remembered != null) {
+      _askedFor = signature;
+      if (remembered != _minPerDay) setState(() => _minPerDay = remembered);
+      return;
+    }
+
+    // Nothing to fix, nothing to ask.
+    final provider = context.read<TripPlanProvider>();
+    if (provider.shortfall(minPerDay: 2) == 0) return;
+    _askedFor = signature;
+
+    final choice = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('How full should each day be?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Some days do not have enough to do yet. Tell us the pace and '
+              'we will fill them with real places in '
+              '${plan.destination.split(',').first}.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 2),
+            child: const Text('Relaxed · 2 a day'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 3),
+            child: const Text('Balanced · 3'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 4),
+            child: const Text('Packed · 4'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+
+    // Dismissing is an answer too: two a day is the floor either way, and
+    // nagging someone who closed the dialog is how a helpful question becomes
+    // an obstacle.
+    final perDay = choice ?? 2;
+    LocalStore.save(LocalStore.keyTripShape, {'min_per_day': perDay});
+    setState(() {
+      _minPerDay = perDay;
+      // The plan must be re-examined against the new floor.
+      _expandedFor = '';
+    });
+  }
+
   Future<void> _expandInterests(TripPlan plan, UserPreferences prefs) async {
     final interests = prefs.selectedActivities;
     if (interests.isEmpty) return;
     final signature = '${plan.destination}|${interests.join('|')}';
     if (signature == _expandedFor) return;
 
-    final emptyDays = plan.days.where((d) => d.items.isEmpty).length;
-    if (emptyDays == 0) {
+    // Every day short of the minimum, not only the wholly empty ones. A day
+    // holding one restaurant used to count as filled, so it stayed a single
+    // lunch stop with a running order built around it.
+    final provider = context.read<TripPlanProvider>();
+    final missing = provider.shortfall(minPerDay: _minPerDay);
+    if (missing == 0) {
       _expandedFor = signature;
       return;
     }
@@ -215,7 +328,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       city: plan.destination,
       interests: interests,
       exclude: already,
-      limit: emptyDays * 2,
+      // A margin over the shortfall: some results come back without a usable
+      // name, and asking for exactly enough leaves the last day short.
+      limit: missing + 2,
     );
     if (!mounted || found == null || found.isEmpty) return;
 
@@ -228,8 +343,13 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     }
     if (names.isEmpty) return;
 
-    context.read<TripPlanProvider>().fillEmptyDays(names);
-    if (mounted) setState(() => _summarisedFor = '');
+    provider.topUpDays(names, minPerDay: _minPerDay);
+    if (!mounted) return;
+    setState(() => _summarisedFor = '');
+    // The chosen interests have now given everything they can. If days are
+    // still short, the plan needs more kinds of place, and only the user can
+    // say which.
+    await _askForMoreInterests(plan);
   }
 
   /// Loads the photo/rating/hours for every place currently in the plan.
@@ -260,6 +380,77 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       _summariesFailed = false;
       _summaries = {..._summaries, ...found};
     });
+
+    // Now that titles have become real places, two of them may be the same
+    // venue. Checked here because this is the first moment it can be known.
+    if (!mounted) return;
+
+    // Keyed on the name every row actually displays, not on the place id.
+    //
+    // The two entries for one venue reach the plan by different routes: one is
+    // the interest the user picked ("Art"), which has a summary and therefore
+    // an id; the other is the resolved place name added by the top-up, which
+    // has no summary yet and therefore no id. Comparing ids put a real id
+    // against an empty string, so they never matched and the duplicate
+    // survived -- with the tell-tale missing photo, because nothing had
+    // resolved it.
+    //
+    // Names are the one identifier both routes always have. Ids are still used
+    // to collapse two spellings of the same venue onto a single name first.
+    final canonicalById = <String, String>{};
+    for (final summary in _summaries.values) {
+      final id = (summary['place_id'] ?? '').toString().trim();
+      final name = (summary['name'] ?? '').toString().trim();
+      if (id.isNotEmpty && name.isNotEmpty) {
+        canonicalById.putIfAbsent(id, () => name);
+      }
+    }
+
+    String keyFor(String title) {
+      final summary = _summaries[title];
+      final id = (summary?['place_id'] ?? '').toString().trim();
+      final name = (summary?['name'] ?? '').toString().trim();
+      final canonical =
+          id.isNotEmpty ? (canonicalById[id] ?? name) : name;
+      return (canonical.isEmpty ? title : canonical).trim().toLowerCase();
+    }
+
+    // Every item in the plan, so nothing is skipped for want of a summary.
+    final resolved = <String, String>{};
+    for (final day in plan.days) {
+      for (final item in day.items) {
+        resolved[item.title] = keyFor(item.title);
+      }
+    }
+    final provider = context.read<TripPlanProvider>();
+    final dropped = provider.dropResolvedDuplicates(resolved);
+    // A day left short by a duplicate must be filled again, so clearing
+    // the guard lets the next frame go and find replacements.
+    if (dropped > 0 && mounted) setState(() => _expandedFor = '');
+
+    // Now that the plan has coordinates, put the days in a sensible order on
+    // the ground: near things together, and each day starting close to where
+    // the last one finished. Done here because this is the first point the
+    // positions are known, and once per plan -- reshuffling on every rebuild
+    // would move places under the user's hands while they were reading.
+    final coords = <String, List<double>>{};
+    for (final entry in _summaries.entries) {
+      final lat = (entry.value['lat'] as num?)?.toDouble();
+      final lng = (entry.value['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) coords[entry.key] = [lat, lng];
+    }
+    final planKey = provider.contentKey;
+    if (planKey != _arrangedFor && coords.length >= 3) {
+      _arrangedFor = planKey;
+      final moved = provider.arrangeByProximity(coords);
+      // The running order described the old sequence.
+      if (moved > 0 && mounted) {
+        setState(() {
+          _schedules = {};
+          _arrangedFor = provider.contentKey;
+        });
+      }
+    }
   }
 
   /// Asks for a running order, handing over every fixed point we hold.
@@ -391,6 +582,17 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// The day cards are assembled here from what is already on screen, so the
   /// shared file shows exactly what the user is looking at -- same photos,
   /// same ratings, same running order.
+  /// Publishes the trip and copies a link to it.
+  ///
+  /// Separate from the PDF and the video: those are pictures of a plan at a
+  /// moment, and this is the plan itself, still changing, that somebody else
+  /// can ask to help with.
+  Future<void> _sharePlanLink(TripPlan plan) async {
+    final tripId = context.read<TripPlanProvider>().tripId;
+    if (tripId.isEmpty) return;
+    await shareTrip(context: context, tripId: tripId, plan: plan);
+  }
+
   Future<void> _sharePlan(
       TripPlan plan, BookedTripProvider booked, String format) async {
     setState(() {
@@ -465,10 +667,17 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       return;
     }
 
+    final jobId = started['job_id'] as String;
+    // Written down before polling begins. The render belongs to the server,
+    // not to this screen, so leaving the page -- or closing the app -- should
+    // not lose it. Without this, pressing Back cancelled the timer in dispose
+    // and the finished film had nowhere to arrive.
+    LocalStore.save(LocalStore.keyExportJob,
+        {'job_id': jobId, 'format': format});
     setState(() {
       _error = null;
       _exportFormat = format;
-      _exportJobId = started['job_id'] as String;
+      _exportJobId = jobId;
       _exportStage = 'Getting ready';
     });
     _pollExport();
@@ -499,6 +708,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       final state = (status['state'] ?? '').toString();
       if (state == 'error') {
         timer.cancel();
+        LocalStore.save(LocalStore.keyExportJob, null);
         setState(() {
           _exportJobId = null;
           _error = "Couldn't build the $_exportFormat — ${status['message']}";
@@ -515,6 +725,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       timer.cancel();
 
       final bytes = await _adk.fetchExport(jobId);
+      LocalStore.save(LocalStore.keyExportJob, null);
       if (!mounted) return;
       setState(() {
         _exportJobId = null;
@@ -647,7 +858,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     final planProvider = context.watch<TripPlanProvider>();
     final plan = planProvider.plan;
     if (plan != null && !plan.isEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        _resumeExport();
+        // Asked first: the answer decides how many places to go and find.
+        await _askIfThin(plan);
+        if (!mounted) return;
         _expandInterests(plan, prefs);
         _loadSummaries(plan);
       });
@@ -693,9 +908,19 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 : PopupMenuButton<String>(
                     icon: const Icon(Icons.ios_share),
                     tooltip: 'Share this trip',
-                    onSelected: (format) =>
-                        _sharePlan(plan, booked, format),
+                    onSelected: (choice) {
+                      if (choice == 'link') {
+                        _sharePlanLink(plan);
+                      } else {
+                        _sharePlan(plan, booked, choice);
+                      }
+                    },
                     itemBuilder: (_) => const [
+                      // First, because it is the one that invites somebody in
+                      // rather than handing them a finished file.
+                      PopupMenuItem(
+                          value: 'link',
+                          child: Text('Invite someone to this trip')),
                       PopupMenuItem(
                           value: 'pdf', child: Text('Share as PDF')),
                       PopupMenuItem(
@@ -1028,6 +1253,24 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       ),
                     ),
                   ),
+                  // Changes what the day is *about*. The row menu edits one
+                  // place at a time, which is the wrong tool for "make this a
+                  // temple day instead" -- that meant removing each place by
+                  // hand before adding any.
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _fillingDay == null
+                          ? () => _changeDayTheme(plan, index)
+                          : null,
+                      icon: const Icon(Icons.swap_horiz, size: 16),
+                      label: const Text('Change what this day is about'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
@@ -1296,6 +1539,247 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// interests steer the search -- someone who ticked "Lake" gets lakes and
   /// parks, not nightlife. The results are marked as suggestions, because
   /// they were offered rather than chosen.
+  /// Rebuilds one day around a different interest.
+  ///
+  /// Offers the activities the user already chose, plus anything they care to
+  /// type. Picking one replaces that day's places with ones of that kind --
+  /// nearby, because the search is anchored on the city and the places already
+  /// in the trip are excluded, so a second temple day does not repeat the
+  /// first.
+  /// Kinds of place worth offering when one interest cannot fill a trip.
+  ///
+  /// A fixed list rather than a model call: these are categories Google Places
+  /// answers well for Indian cities, and asking a model to invent category
+  /// names produces things it cannot then find.
+  static const List<String> _moreInterests = [
+    'Temple', 'Park', 'Lake', 'Museum', 'Market', 'Street food',
+    'Viewpoint', 'Fort', 'Garden', 'Cafe', 'Zoo', 'Shopping mall',
+  ];
+
+  /// Asks for more interests when the chosen ones have run out.
+  ///
+  /// One activity does not describe a week. Rather than leaving days blank --
+  /// or padding them with whatever the city happens to rank highest, which is
+  /// how a water park ended up on an art day -- this asks which other kinds of
+  /// place are wanted, then fills from those.
+  ///
+  /// Only shown when days are genuinely still short after the chosen interests
+  /// have been exhausted, and only once per trip.
+  Future<void> _askForMoreInterests(TripPlan plan) async {
+    final provider = context.read<TripPlanProvider>();
+    if (provider.shortfall(minPerDay: _minPerDay) == 0) return;
+
+    final signature = '${plan.destination}|${plan.days.length}|more';
+    if (_askedFor == signature) return;
+    _askedFor = signature;
+
+    final chosen = context
+        .read<UserPreferencesProvider>()
+        .preferences
+        .selectedActivities
+        .map((a) => a.toLowerCase())
+        .toSet();
+    final offer = [
+      for (final kind in _moreInterests)
+        if (!chosen.contains(kind.toLowerCase())) kind,
+    ];
+    if (offer.isEmpty) return;
+
+    final picked = <String>{};
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (innerContext, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('A few days still need filling',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text(
+                  'What else do you enjoy? We will find real places of these '
+                  'kinds in ${plan.destination.split(',').first}.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final kind in offer)
+                      FilterChip(
+                        label: Text(kind),
+                        selected: picked.contains(kind),
+                        onSelected: (on) => setSheetState(() {
+                          on ? picked.add(kind) : picked.remove(kind);
+                        }),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton(
+                    onPressed: picked.isEmpty
+                        ? null
+                        : () => Navigator.pop(innerContext, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppConfig.primaryColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.grey.shade300,
+                    ),
+                    child: const Text('Fill the rest of my trip'),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(innerContext, false),
+                  child: const Text('Leave them empty for now'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || confirmed != true || picked.isEmpty) return;
+
+    final already = plan.days
+        .expand((d) => d.items.map((i) => _placeName(i.title)))
+        .toSet()
+        .toList();
+    final found = await _adk.discoverPlaces(
+      city: plan.destination,
+      interests: picked.toList(),
+      exclude: already,
+      limit: provider.shortfall(minPerDay: _minPerDay) + 2,
+    );
+    if (!mounted || found == null || found.isEmpty) return;
+
+    final names = <String>[];
+    for (final place in found) {
+      final name = (place['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      names.add(name);
+      _summaries[name] = place;
+    }
+    if (names.isEmpty) return;
+    provider.topUpDays(names, minPerDay: _minPerDay);
+    setState(() => _summarisedFor = '');
+  }
+
+  Future<void> _changeDayTheme(TripPlan plan, int dayIndex) async {
+    final interests =
+        context.read<UserPreferencesProvider>().preferences.selectedActivities;
+
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('What should Day ${dayIndex + 1} be about?',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              Text(
+                'Its current places are replaced with ones of this kind.',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final interest in interests)
+                    ActionChip(
+                      label: Text(interest),
+                      onPressed: () => Navigator.pop(sheetContext, interest),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                autofocus: interests.isEmpty,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: 'Or type one — "museum", "street food", "lake"',
+                  border: OutlineInputBorder(
+                    borderRadius:
+                        BorderRadius.circular(AppConfig.radiusMedium),
+                  ),
+                ),
+                onSubmitted: (value) {
+                  final typed = value.trim();
+                  if (typed.isNotEmpty) Navigator.pop(sheetContext, typed);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || choice == null || choice.trim().isEmpty) return;
+
+    setState(() {
+      _fillingDay = dayIndex;
+      _error = null;
+    });
+
+    // Everything already in the trip is excluded, so a new theme brings new
+    // places rather than shuffling the ones already used.
+    final already = plan.days
+        .expand((d) => d.items.map((i) => _placeName(i.title)))
+        .toSet()
+        .toList();
+    final found = await _adk.discoverPlaces(
+      city: plan.destination,
+      interests: [choice.trim()],
+      exclude: already,
+      limit: _minPerDay + 2,
+    );
+    if (!mounted) return;
+    setState(() => _fillingDay = null);
+
+    if (found == null || found.isEmpty) {
+      setState(() => _error = found == null
+          ? "Couldn't look for places — check the server is running."
+          : 'Nothing found for "${choice.trim()}" in '
+              '${plan.destination.split(',').first}.');
+      return;
+    }
+
+    final names = <String>[];
+    for (final place in found.take(_minPerDay)) {
+      final name = (place['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      names.add(name);
+      _summaries[name] = place;
+    }
+    if (names.isEmpty) return;
+
+    context.read<TripPlanProvider>().replaceDayItems(dayIndex, names);
+    setState(() {
+      // The running order described a day that no longer exists.
+      _schedules = {};
+      _summarisedFor = '';
+    });
+  }
+
   Future<void> _fillDay(TripPlan plan, int dayIndex) async {
     setState(() {
       _fillingDay = dayIndex;
@@ -1317,12 +1801,15 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     );
     if (!mounted) return;
 
-    if (found == null || found.isEmpty) {
+    // A failed lookup is worth saying. An empty one is not a dead end: the
+    // city has more in it than the chosen interests describe, and the picker
+    // has a search box. Telling someone "no more places found" and stopping
+    // left them with an empty day and nothing to press -- so the sheet opens
+    // anyway, and they can name a place or a kind of place themselves.
+    if (found == null) {
       setState(() {
         _fillingDay = null;
-        _error = found == null
-            ? "Couldn't look for places — check the server is running."
-            : 'No more places found for this city.';
+        _error = "Couldn't look for places — check the server is running.";
       });
       return;
     }
@@ -1341,6 +1828,14 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       builder: (_) => _PlacePickerSheet(
         places: found,
         dayLabel: _dayLabel.format(plan.days[dayIndex].date),
+        // Shown when the interests turned nothing up, so the empty sheet
+        // reads as an invitation rather than a failure.
+        emptyHint: found.isEmpty
+            ? 'Nothing left matching your interests in '
+                '${plan.destination.split(',').first}. '
+                'Search for a place, or the kind of place you fancy — '
+                '"museum", "street food", "lake".'
+            : null,
         onSearch: (query) => _adk.discoverPlaces(
           city: plan.destination,
           interests: [query],
@@ -1692,10 +2187,15 @@ class _PlacePickerSheet extends StatefulWidget {
     required this.places,
     required this.dayLabel,
     required this.onSearch,
+    this.emptyHint,
   });
 
   final List<Map<String, dynamic>> places;
   final String dayLabel;
+
+  /// Shown in place of the list when there was nothing to suggest, so the
+  /// sheet asks for a place instead of just being blank.
+  final String? emptyHint;
 
   /// Looks up places matching typed text, so someone who already knows where
   /// they want to go is not restricted to what was suggested.
@@ -1710,6 +2210,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
   final TextEditingController _query = TextEditingController();
 
   late List<Map<String, dynamic>> _shown = widget.places;
+
   Timer? _debounce;
   bool _searching = false;
   String? _searchError;
@@ -1798,15 +2299,28 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                 style: TextStyle(fontSize: 12, color: Colors.orange[800])),
           ],
           const SizedBox(height: 12),
-          Flexible(
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  for (var i = 0; i < _shown.length; i++) _tile(i, _shown[i]),
-                ],
+          // An empty sheet with a search box and no words looks broken. Saying
+          // what to type turns it into the next step.
+          if (_shown.isEmpty && widget.emptyHint != null &&
+              _searchError == null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18),
+              child: Text(
+                widget.emptyHint!,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              ),
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < _shown.length; i++) _tile(i, _shown[i]),
+                  ],
+                ),
               ),
             ),
-          ),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,

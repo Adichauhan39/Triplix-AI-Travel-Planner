@@ -40,6 +40,13 @@ class LocalStore {
   static const String keyBookings = 'triplix.bookings';
   static const String keyTripPlan = 'triplix.trip_plan';
 
+  /// The export currently rendering on the server, so leaving the screen
+  /// -- or closing the app -- does not lose track of it.
+  static const String keyExportJob = 'triplix.export_job';
+
+  /// Answers to the gap questions, so the same one is not asked twice.
+  static const String keyTripShape = 'triplix.trip_shape';
+
   /// Stored under one key per record, with the time it changed.
   static Future<void> save(String key, Object? value) async {
     final prefs = _prefs;

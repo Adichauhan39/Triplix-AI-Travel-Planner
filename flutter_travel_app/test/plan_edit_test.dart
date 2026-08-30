@@ -74,7 +74,7 @@ void main() {
         reason: 'a removed place must not reappear on the next rebuild');
   });
 
-  test('fillEmptyDays covers every empty day and leaves full ones alone', () {
+  test('topUpDays fills every short day and leaves full ones alone', () {
     final p = TripPlanProvider()
       ..buildFromSelection(
         destination: 'Bhilai',
@@ -86,9 +86,9 @@ void main() {
         reason: 'one interest gives one place, so three days start empty');
     final kept = p.plan!.days.first.items.single.title;
 
-    // Three empty days at two apiece needs six, which is what the screen
-    // requests: emptyDays * 2.
-    p.fillEmptyDays([
+    // Three empty days plus a day holding one place: seven slots short of
+    // two apiece. Six names fills what it can.
+    p.topUpDays([
       'Shaheed Udyaan',
       'ARJUN RATH PARK',
       'Dam View point',
@@ -98,13 +98,16 @@ void main() {
     ]);
 
     expect(p.plan!.days.where((d) => d.items.isEmpty), isEmpty);
-    expect(p.plan!.days.first.items.single.title, kept,
-        reason: 'a day that already had something is untouched');
+    // The day that already held one place keeps it, first, and gains a
+    // second: one place is not a day out. This is the behaviour that
+    // replaced "only fill days that are completely empty".
+    expect(p.plan!.days.first.items.first.title, kept);
+    expect(p.plan!.days.first.items.length, 2);
     // The category was the user's choice, so its places are not badged.
     expect(p.plan!.days[1].items.first.addedByAssistant, isFalse);
   });
 
-  test('fillEmptyDays never repeats a place already in the plan', () {
+  test('topUpDays never repeats a place already in the plan', () {
     final p = TripPlanProvider()
       ..buildFromSelection(
         destination: 'Bhilai',
@@ -112,7 +115,7 @@ void main() {
         end: DateTime(2026, 8, 27),
         activities: ['Shaheed Udyaan'],
       );
-    p.fillEmptyDays(['shaheed udyaan', 'Dam View point']);
+    p.topUpDays(['shaheed udyaan', 'Dam View point']);
     final titles =
         p.plan!.days.expand((d) => d.items.map((i) => i.title.toLowerCase()));
     expect(titles.where((t) => t == 'shaheed udyaan'), hasLength(1));
@@ -212,5 +215,158 @@ void main() {
     );
     expect(after.plan!.activityCount, 2,
         reason: 'the removed place must not come back on relaunch');
+  });
+
+  test('a day holding one place is topped up to two', () {
+    final p = TripPlanProvider()
+      ..buildFromSelection(
+        destination: 'Bhilai',
+        start: DateTime(2026, 8, 26),
+        end: DateTime(2026, 8, 27),
+        activities: ['Matritva Restaurant'],
+      );
+    // The reported case: one restaurant on day one, calling itself a plan.
+    expect(p.plan!.days.first.items, hasLength(1));
+    expect(p.shortfall(minPerDay: 2), 3,
+        reason: 'one short on day one, two short on day two');
+
+    p.topUpDays(['Maitri Baag Zoo', 'Shaheed Udyaan', 'Dam View point']);
+    for (final day in p.plan!.days) {
+      expect(day.items.length, greaterThanOrEqualTo(2));
+    }
+    expect(p.plan!.days.first.items.first.title, 'Matritva Restaurant',
+        reason: 'what was already there stays, and stays first');
+  });
+
+  test('shortfall is zero when every day already meets the floor', () {
+    final p = seeded();
+    expect(p.shortfall(minPerDay: 1), 0);
+  });
+
+  test('a higher floor asks for more places', () {
+    final p = seeded();
+    expect(p.shortfall(minPerDay: 3), 6,
+        reason: '3 days holding one apiece, wanting three each');
+  });
+
+  group('two categories landing on one venue', () {
+    TripPlanProvider withTitles(List<String> titles) => TripPlanProvider()
+      ..buildFromSelection(
+        destination: 'Bhilai',
+        start: DateTime(2026, 8, 30),
+        end: DateTime(2026, 8, 30),
+        activities: titles,
+      );
+
+    test('the duplicate is dropped and the first one stays', () {
+      // The reported case: "Art" and "Cafe" both resolved to WOOWOO, which
+      // then appeared twice on Day 1 with the same photo and rating.
+      final p = withTitles(['Art', 'Cafe', 'Handicraft']);
+      expect(p.plan!.days.first.items, hasLength(3));
+
+      final dropped = p.dropResolvedDuplicates({
+        'Art': 'place_woowoo',
+        'Cafe': 'place_woowoo',
+        'Handicraft': 'place_sai',
+      });
+
+      expect(dropped, 1);
+      expect(p.plan!.days.first.items.map((i) => i.title),
+          ['Art', 'Handicraft'],
+          reason: 'the first occurrence keeps its place');
+    });
+
+    test('a place we could not identify is never dropped', () {
+      final p = withTitles(['Art', 'Cafe']);
+      // Empty ids mean "not resolved yet", not "same place".
+      expect(p.dropResolvedDuplicates({'Art': '', 'Cafe': ''}), 0);
+      expect(p.plan!.days.first.items, hasLength(2));
+    });
+
+    test('matching ignores case and spacing in the resolved name', () {
+      final p = withTitles(['Art', 'Cafe']);
+      expect(
+        p.dropResolvedDuplicates(
+            {'Art': 'WOOWOO Art House', 'Cafe': ' woowoo art house '}),
+        1,
+      );
+    });
+
+    test('distinct places are all kept', () {
+      final p = withTitles(['Art', 'Cafe']);
+      expect(p.dropResolvedDuplicates({'Art': 'a', 'Cafe': 'b'}), 0);
+      expect(p.plan!.days.first.items, hasLength(2));
+    });
+
+    test('duplicates across different days are caught too', () {
+      final p = TripPlanProvider()
+        ..buildFromSelection(
+          destination: 'Bhilai',
+          start: DateTime(2026, 8, 30),
+          end: DateTime(2026, 8, 31),
+          activities: ['Art', 'Cafe'],
+        );
+      // One per day, both the same venue.
+      expect(p.plan!.days, hasLength(2));
+      expect(p.dropResolvedDuplicates({'Art': 'same', 'Cafe': 'same'}), 1);
+      expect(p.plan!.activityCount, 1);
+    });
+  });
+
+  test('changing what a day is about replaces only that day', () {
+    final p = seeded();
+    final otherDays = [
+      for (var i = 1; i < p.plan!.days.length; i++)
+        p.plan!.days[i].items.map((x) => x.title).toList()
+    ];
+
+    p.replaceDayItems(0, ['Jagannath Temple', 'Maitri Baag Zoo']);
+
+    expect(p.plan!.days.first.items.map((i) => i.title),
+        ['Jagannath Temple', 'Maitri Baag Zoo']);
+    for (var i = 1; i < p.plan!.days.length; i++) {
+      expect(p.plan!.days[i].items.map((x) => x.title).toList(),
+          otherDays[i - 1],
+          reason: 'other days are untouched');
+    }
+    // The user chose the theme, so these are their places, not suggestions.
+    expect(p.plan!.days.first.items.first.addedByAssistant, isFalse);
+  });
+
+  test('replaceDayItems ignores an out-of-range day', () {
+    final p = seeded();
+    final before = p.contentKey;
+    p.replaceDayItems(9, ['Somewhere']);
+    p.replaceDayItems(0, const []);
+    expect(p.contentKey, before);
+  });
+
+  test('the two routes into the plan collapse onto one venue', () {
+    // Exactly the reported shape: the interest the user picked, which
+    // resolved to a real place, and the resolved name added later by the
+    // top-up, which has no summary of its own. Keyed on the name both rows
+    // display, they are the same venue.
+    final p = TripPlanProvider()
+      ..buildFromSelection(
+        destination: 'Bhilai',
+        start: DateTime(2026, 8, 30),
+        end: DateTime(2026, 8, 30),
+        activities: ['Art'],
+      );
+    p.topUpDays(['WOOWOO ART HOUSE_Bhilai', 'Sai murti and handicraft'],
+        minPerDay: 3);
+    expect(p.plan!.days.first.items, hasLength(3));
+
+    final dropped = p.dropResolvedDuplicates({
+      // "Art" resolved to the venue; the topped-up row is the venue's name.
+      'Art': 'woowoo art house_bhilai',
+      'WOOWOO ART HOUSE_Bhilai': 'woowoo art house_bhilai',
+      'Sai murti and handicraft': 'sai murti and handicraft',
+    });
+
+    expect(dropped, 1);
+    expect(p.plan!.days.first.items.map((i) => i.title),
+        ['Art', 'Sai murti and handicraft'],
+        reason: 'the interest the user picked is the one that stays');
   });
 }
