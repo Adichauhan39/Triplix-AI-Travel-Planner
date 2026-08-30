@@ -208,6 +208,12 @@
   <!-- Firebase JS SDKs -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <!-- Required because the compat SDK is included by hand above: every
+       Firebase product the app uses must be listed here. Adding
+       cloud_firestore without this left the app on its loading screen
+       forever - the plugin waits for firebase.firestore to exist, and
+       nothing ever provides it. -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
   <script src="flutter_bootstrap.js" async></script>
 </body>

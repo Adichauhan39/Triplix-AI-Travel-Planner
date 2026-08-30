@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "kdvitisharedb",
+      "rules": "firestore.rules"
+    }
+  ]
+}

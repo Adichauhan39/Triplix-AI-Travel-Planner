@@ -107,3 +107,6 @@ Desktop.ini
 
 # Cached flight schedules (see _SCHEDULE_CACHE_PATH). Regenerated on demand.
 7-multi-agent/.flight_schedules.json
+
+# The standalone Firebase CLI: 227MB, downloaded per machine, not source.
+tools/firebase.exe
