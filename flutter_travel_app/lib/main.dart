@@ -9,6 +9,7 @@ import 'firebase_options.dart';
 
 // App-level configuration, feature screens, state providers, and API bootstrap.
 import 'config/app_config.dart';
+import 'screens/shared_trip_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/search_hotels_screen.dart';
 import 'screens/swipe_screen.dart';
@@ -361,6 +362,16 @@ class MyApp extends StatelessWidget {
                   ),
                 );
               }),
+          // A trip opened from a shared link. The id is part of the path, so
+          // the link survives being pasted into a chat -- a query string gets
+          // mangled by some clients, and this is a link people forward.
+          GetPage(
+              name: '/trip/:id',
+              page: () => SelectionArea(
+                    child: SharedTripScreen(
+                      tripId: Get.parameters['id'] ?? '',
+                    ),
+                  )),
           GetPage(
               name: '/login',
               page: () => const SelectionArea(

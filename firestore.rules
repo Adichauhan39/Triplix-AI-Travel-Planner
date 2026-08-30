@@ -1,0 +1,89 @@
+rules_version = '2';
+
+// Firestore rules for Triplix shared trips.
+//
+// Paste into Firebase console > Firestore Database > Rules, or deploy with
+// `firebase deploy --only firestore:rules`.
+//
+// The model:
+//   - holding the link lets you READ a trip
+//   - being a member lets you CHANGE it
+//   - anyone else may ASK, and the owner decides
+//
+// Self-service joining was the first design and it was wrong twice over.
+// Wrong in principle, because a link forwarded on -- to a group chat, to
+// somebody's colleague -- would have handed edit rights to whoever opened it.
+// And wrong in fact: adding yourself to `members` is an update, and updates
+// required membership, so the join could never have succeeded anyway.
+//
+// Trip ids are 12 random characters from a 33-character alphabet, so they are
+// not enumerable in practice. They are still only a secret, not a password:
+// anyone the link reaches can read the trip. Nothing sensitive belongs in one.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /trips/{tripId} {
+
+      function signedIn() {
+        return request.auth != null;
+      }
+
+      function isOwner() {
+        return signedIn() && resource.data.owner == request.auth.uid;
+      }
+
+      function isMember() {
+        return signedIn()
+          && resource.data.members is list
+          && request.auth.uid in resource.data.members;
+      }
+
+      function changed() {
+        return request.resource.data.diff(resource.data).affectedKeys();
+      }
+
+      // A member editing the trip may not change who owns it, and may not
+      // remove anyone -- so a co-traveller cannot take a trip over or lock its
+      // author out. They may not quietly promote a pending request either;
+      // approving is the owner's decision.
+      function memberEdit() {
+        return isMember()
+          && request.resource.data.owner == resource.data.owner
+          && resource.data.members.toSet()
+               .difference(request.resource.data.members.toSet()).size() == 0
+          && !changed().hasAny(['members', 'requests']);
+      }
+
+      // A visitor asking for edit access. Only the `requests` list may change,
+      // they must be adding themselves, and they may not drop anyone else's
+      // pending request on the way past.
+      function asksForAccess() {
+        return signedIn()
+          && changed().hasOnly(['requests'])
+          && request.auth.uid in request.resource.data.requests
+          && resource.data.get('requests', []).toSet()
+               .difference(request.resource.data.requests.toSet()).size() == 0;
+      }
+
+      // Anyone signed in who has the link can read. Sign-in is required so an
+      // abusive client cannot scrape anonymously.
+      allow get: if signedIn();
+
+      // Never listable. Without this, one query returns every trip in the
+      // database and the unguessable id counts for nothing.
+      allow list: if false;
+
+      // First write claims the trip, and must claim it honestly.
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && request.auth.uid in request.resource.data.members;
+
+      // The owner may do anything to their own trip, including approving a
+      // request or removing someone.
+      allow update: if isOwner() || memberEdit() || asksForAccess();
+
+      allow delete: if isOwner();
+    }
+  }
+}
