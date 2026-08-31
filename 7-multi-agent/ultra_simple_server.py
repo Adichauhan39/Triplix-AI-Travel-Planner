@@ -2156,8 +2156,11 @@ def get_activity_image(
     the literal same place and photo.
     """
     cache_key = f"activity_{query}_{city}"
-    if cache_key in _photo_cache:
-        return _photo_cache[cache_key]
+    # Which place that cached photo came from. Kept beside the URL because the
+    # URL cannot be deduped against: Google's photo links carry a token and
+    # differ between requests, so two links to the same temple never compare
+    # equal. The place id does.
+    place_cache_key = f"activityplace_{query}_{city}"
 
     def claim(key: str) -> bool:
         """Registers key as used if it isn't already; returns False if taken."""
@@ -2173,6 +2176,23 @@ def get_activity_image(
             return False
         used_urls.add(key)
         return True
+
+    # A cache hit still has to claim its place. Returning early -- which is what
+    # this did -- meant the dedupe only ever ran on the very first lookup for a
+    # city. Once the cache was warm, "Shrine", "Pilgrimage" and "Religious Tour"
+    # all served the same temple, because each was answered from cache before
+    # any claim was made. Cached entries written before this existed have no
+    # recorded place, so they fall through and are looked up once more.
+    if cache_key in _photo_cache:
+        cached_place = _photo_cache.get(place_cache_key, "")
+        if cached_place and claim(cached_place):
+            return _photo_cache[cache_key]
+        if not cached_place:
+            pass  # older entry: fall through and resolve it properly
+        else:
+            # Another activity is already showing this place. Fall through and
+            # find a different one rather than repeating it.
+            _photo_cache.pop(cache_key, None)
 
     try:
         if not GOOGLE_PLACES_API_KEY:
@@ -2220,6 +2240,7 @@ def get_activity_image(
                     continue
                 if direct_url:
                     _photo_cache[cache_key] = direct_url
+                    _photo_cache[place_cache_key] = place_key
                     return direct_url
             # Claimed the place but couldn't resolve any of its photos
             # (rare) — fall through and try the next place.
@@ -2264,13 +2285,25 @@ def get_activity_images(request: ActivityImagesRequest):
 
         results: Dict[str, str] = {}
         to_fetch = []
+        # Cached activities are settled first, in the order the user sees them,
+        # so the same activity keeps the same photo between visits rather than
+        # whichever thread happened to claim the landmark first.
+        #
+        # Seeded with the place, not the photo URL. Seeding the URL -- which is
+        # what this did -- put a https://... string into a set that is only ever
+        # checked for places/... ids, so a cached activity never stopped a fresh
+        # one claiming the same place. The dedupe looked present and did nothing.
         for activity in activities:
             cache_key = f"activity_{activity}_{request.city}"
+            place_key = _photo_cache.get(
+                f"activityplace_{activity}_{request.city}", "")
             cached = _photo_cache.get(cache_key)
-            if cached:
+            if cached and place_key and place_key not in used_urls:
+                used_urls.add(place_key)
                 results[activity] = cached
-                used_urls.add(cached)
             else:
+                # No photo, no recorded place, or a place another activity is
+                # already showing: look it up so it can find a different one.
                 to_fetch.append(activity)
 
         if to_fetch:
@@ -4063,6 +4096,9 @@ def suggest_day_schedule(request: dict):
 
         rules = [
             "Use the fixed times exactly as given. A flight departure or arrival is confirmed; never move it, never invent one.",
+            "A day with no entry in 'fixed' has no known start. Do not invent clock times for it - not for the first line, and not for any line after. Say Morning, Around midday, Afternoon or Evening instead. Opening hours tell you when a place is open, not when the traveller wakes up.",
+            "Begin each day where the traveller already is: at the place in 'stay' if there is one, otherwise 'from where you are staying'. The first line is setting off, not arriving.",
+            "'stay' may be a description rather than a name - someone may have written 'I am staying in Model Town'. Read it and phrase it naturally: 'your place in Model Town', not the sentence repeated back. Never treat it as the name of a business.",
             "Only schedule a place within its opening hours when hours are given. If a place has no hours, do not state a time for it - say morning, afternoon or evening instead.",
             "Allow realistic travel time between places, and say when to set off, not only when to arrive.",
             "Say roughly how long to spend at each place, and what to actually do there - use the description given for it, do not invent attractions.",
@@ -4124,6 +4160,232 @@ def suggest_day_schedule(request: dict):
     except Exception as e:
         print(f"[SCHEDULE NOTES] failed: {e}")
         return {"status": "error", "message": str(e), "notes": {}}
+
+
+@app.post("/api/trip/map")
+def trip_map(request: dict):
+    """The whole trip on one map, pinned by day.
+
+    Per-day maps answer "where am I going today". This answers "where is this
+    trip", which is the question somebody asks before they trust a plan --
+    three days clustered in one corner and a fourth an hour away is obvious on
+    a map and invisible in a list.
+
+    Rendered server-side because the Maps key stays here. The browser gets an
+    image, not a key it could be billed for.
+
+    Labels are the day number, so a pin says which day it belongs to without a
+    legend. Static Maps allows one character, which caps clean labelling at
+    nine days; beyond that the colour still carries the grouping.
+    """
+    try:
+        days = request.get("days") or []
+        if not days:
+            return {"status": "error", "message": "no_days"}
+        if not GOOGLE_PLACES_API_KEY:
+            return {"status": "error", "message": "no_api_key"}
+
+        # Distinct enough to tell apart at a glance, and readable against a
+        # road map rather than merely different from each other.
+        palette = ["0x0d0d82", "0xd62d20", "0x008744", "0xffa700",
+                   "0x9c27b0", "0x00838f", "0x795548", "0xc2185b"]
+
+        markers = []
+        points = []
+        for index, day in enumerate(days):
+            stops = [
+                (item.get("lat"), item.get("lng"))
+                for item in (day.get("items") or [])
+                if item.get("lat") is not None and item.get("lng") is not None
+            ]
+            if not stops:
+                continue
+            colour = palette[index % len(palette)]
+            label = str(index + 1) if index < 9 else ""
+            label_part = f"label:{label}%7C" if label else ""
+            joined = "%7C".join(f"{la},{ln}" for la, ln in stops)
+            markers.append(
+                f"&markers=color:{colour}%7C{label_part}{joined}")
+            points.extend(stops)
+
+        if not points:
+            return {"status": "error", "message": "no_located_places"}
+
+        centre_lat = sum(p[0] for p in points) / len(points)
+        centre_lng = sum(p[1] for p in points) / len(points)
+
+        # No zoom: Static Maps frames the markers itself, which is right here
+        # because a trip can be tight in one suburb or spread across a district
+        # and both should fill the picture.
+        url = (
+            "https://maps.googleapis.com/maps/api/staticmap"
+            f"?size=640x480&scale=2&maptype=roadmap"
+            f"&center={centre_lat},{centre_lng}"
+            f"{''.join(markers)}&key={GOOGLE_PLACES_API_KEY}"
+        )
+        resp = requests.get(url, timeout=20)
+        if resp.status_code != 200 or "image" not in \
+                (resp.headers.get("content-type") or ""):
+            print(f"[TRIP MAP] {resp.status_code}: {resp.text[:120]}")
+            return {"status": "error", "message": "map_unavailable"}
+
+        from fastapi.responses import Response
+        return Response(content=resp.content, media_type="image/png")
+    except Exception as e:
+        print(f"[TRIP MAP] {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/place/check")
+def check_place_near_city(request: dict):
+    """How far a typed place is from the city being visited.
+
+    Someone writing where they are staying can name somewhere else entirely --
+    "friends house in banargatta" is Bangalore, a thousand kilometres from a
+    Bhilai trip. The app took it at face value and planned days that set off
+    from it.
+
+    Absence is not evidence here, which is why this reports a distance rather
+    than a yes or no: a private house never appears in Places, so failing to
+    find "my friend's house" says nothing. What is checkable is the locality --
+    Bannerghatta resolves, and resolves far away.
+    """
+    try:
+        text = str(request.get("text") or "").strip()
+        city = str(request.get("city") or "").strip()
+        if not text or not city:
+            return {"status": "success", "found": False, "km": None}
+
+        # Nothing to check unless a place is actually named.
+        #
+        # "my friend house" contains no location, but Places will happily
+        # match something anyway -- it returned a point 989km from Bhilai,
+        # which would have warned the user about a mistake they had not made.
+        # Stripping the words people use to describe a stay leaves either a
+        # place name or nothing.
+        described = {
+            "my", "our", "friend", "friends", "friend's", "house", "home",
+            "place", "staying", "stay", "stayed", "at", "in", "the", "a",
+            "with", "cousin", "cousins", "uncle", "aunt", "relative",
+            "relatives", "room", "flat", "apartment", "pg", "hostel", "i",
+            "am", "will", "be", "near", "family", "brother", "sister",
+        }
+        named = [w for w in re.findall(r"[A-Za-z]{3,}", text.lower())
+                 if w not in described]
+        if not named:
+            return {"status": "success", "found": False, "km": None}
+
+        here = _geocode_city(city)
+        there = _geocode_city(text)
+        if not here or not there:
+            # Unresolvable either way: say so plainly rather than guessing.
+            return {"status": "success", "found": False, "km": None}
+
+        km = _haversine_km(here[0], here[1], there[0], there[1])
+        return {
+            "status": "success",
+            "found": True,
+            "km": round(km, 1),
+            "near": km <= _CITY_RADIUS_KM,
+        }
+    except Exception as e:
+        print(f"[PLACE CHECK] {e}")
+        return {"status": "error", "message": str(e), "found": False,
+                "km": None}
+
+
+@app.post("/api/trip/departure")
+def extract_departure(request: dict):
+    """Pulls a departure out of something a traveller typed.
+
+    "I have the trIN AT NIGHT AT 5:00PM in last date" has to become a mode, a
+    time and a place, or nothing at all. Extraction is separated from the plan
+    adjuster because the two failures are not alike: a misread instruction
+    shuffles a day and the user sees it, while a misread departure time is a
+    number the whole last day is built backwards from. The caller shows what
+    was understood and asks before anything is changed.
+
+    Returns nulls rather than guesses. A message with no departure in it must
+    come back empty, not with a plausible time attached.
+    """
+    try:
+        text = str(request.get("text") or "").strip()
+        city = str(request.get("city") or "").strip()
+        if not text:
+            return {"status": "success", "departure": None}
+        if not GOOGLE_API_KEY:
+            return {"status": "error", "message": "no_api_key",
+                    "departure": None}
+
+        # Built as a list joined with newlines rather than one long string of
+        # escapes, because the escaping is what broke this twice.
+        prompt = "\n".join([
+            "Read this message from a traveller and extract their departure, "
+            "if it mentions one.",
+            "",
+            f"Message: {text}",
+            f"City: {city or 'unknown'}",
+            "",
+            "Rules:",
+            "- mode is one of: flight, train, bus. null if none is mentioned.",
+            "- time is 24-hour HH:MM. '5:00PM' is 17:00. null if no time.",
+            "- Trust the clock time over words like night or evening: people "
+            "write 'night' loosely, and the number is what they read off a "
+            "ticket.",
+            "- place is the station, stand or airport they leave from, exactly "
+            "as written. null if they did not say.",
+            "- day is 'last' if they said it is on the final day, 'first' for "
+            "arrival, otherwise null.",
+            "- If the message is not about leaving, return nulls for all of it.",
+            "- Never invent a time or a place that is not in the message.",
+            "",
+            'Return ONLY JSON: {"mode":...,"time":...,"place":...,"day":...}',
+        ])
+
+        from google import genai as genai_client
+        client = genai_client.Client(api_key=GOOGLE_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-3.7-flash", contents=prompt)
+
+        raw_text = (response.text or "").strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+        start, end = raw_text.find("{"), raw_text.rfind("}")
+        if start == -1 or end == -1:
+            return {"status": "success", "departure": None}
+
+        parsed = json.loads(raw_text[start:end + 1])
+        mode = str(parsed.get("mode") or "").lower().strip()
+        if mode not in ("flight", "train", "bus"):
+            return {"status": "success", "departure": None}
+
+        # Rebuilt rather than trusted, and the time is checked against a clock
+        # rather than accepted as a string.
+        time_value = str(parsed.get("time") or "").strip()
+        if not re.fullmatch(r"[0-2]?\d:[0-5]\d", time_value):
+            time_value = ""
+        else:
+            hour, minute = time_value.split(":")
+            if int(hour) > 23:
+                time_value = ""
+            else:
+                time_value = f"{int(hour):02d}:{minute}"
+
+        return {
+            "status": "success",
+            "departure": {
+                "mode": mode,
+                "time": time_value,
+                "place": str(parsed.get("place") or "").strip()[:80],
+                "day": str(parsed.get("day") or "").lower().strip(),
+            },
+        }
+    except Exception as e:
+        print(f"[DEPARTURE] {e}")
+        return {"status": "error", "message": str(e), "departure": None}
 
 
 @app.post("/api/itinerary/adjust")
