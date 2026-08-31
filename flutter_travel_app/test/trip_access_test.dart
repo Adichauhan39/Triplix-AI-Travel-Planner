@@ -58,4 +58,26 @@ void main() {
     // No name, no dates, no hint about who made it.
     expect(link.split('/').last, id);
   });
+
+  group('who is asking', () {
+    test('a name is shown when we have one', () {
+      final p = TripPerson.from('uid1', {'name': 'Priya', 'email': 'p@x.com'});
+      expect(p.label, 'Priya');
+      expect(p.subtitle, 'p@x.com',
+          reason: 'the email tells two Priyas apart');
+    });
+
+    test('the email stands in when there is no name', () {
+      final p = TripPerson.from('uid1', {'name': '', 'email': 'p@x.com'});
+      expect(p.label, 'p@x.com');
+      expect(p.subtitle, isEmpty, reason: 'never the same thing twice');
+    });
+
+    test('an unknown person is a shortened uid, not a placeholder', () {
+      // "A traveller" would make two simultaneous requests identical, and the
+      // owner is being asked to decide between them.
+      final p = TripPerson.from('abcdefghijklmnop', null);
+      expect(p.label, 'abcdefghij…');
+    });
+  });
 }

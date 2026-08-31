@@ -15,7 +15,9 @@ import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/local_store.dart';
 import '../services/python_adk_service.dart';
+import '../services/trip_sync.dart';
 import '../widgets/place_detail_sheet.dart';
+import '../widgets/trip_access_requests.dart';
 import 'shared_trip_screen.dart';
 
 /// The positions of [names], sorted by where each is first named in [notes].
@@ -122,6 +124,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// The plan whose days have already been ordered geographically.
   String _arrangedFor = '';
 
+  /// The whole-trip map, and the plan it was drawn for.
+  Uint8List? _tripMap;
+  String _tripMapFor = '';
+
   /// The day currently having places found for it, so only its own button
   /// shows a spinner rather than every day at once.
   int? _fillingDay;
@@ -136,6 +142,21 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// Places per day. Two is the floor: one place is somewhere to eat, not
   /// a day out. Raised only if the user says they want fuller days.
   int _minPerDay = 2;
+
+  /// Where the traveller sleeps, when they have no booking in the app.
+  ///
+  /// Free text on purpose -- "my cousin's place in Sector 7" is a real answer
+  /// and not a hotel. Used to name the start of each day, and to anchor the
+  /// route so the nearest place to the bed leads the morning.
+  String _stayingAt = '';
+
+  /// How the traveller leaves at the end of the trip, when they have told us.
+  ///
+  /// Holds mode, time and place. Kept apart from booked flights because this
+  /// is something typed in a sentence rather than confirmed against a real
+  /// booking -- most Indian trips end on a train, and none of those pass
+  /// through the flight sheet.
+  Map<String, dynamic>? _departure;
 
   /// Whether the one gap question has been put to the user for this trip.
   String _askedFor = '';
@@ -209,6 +230,21 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   ///
   /// Runs once per trip. The guard is the destination and the interests, so
   /// changing either expands again and a plain rebuild does not.
+  /// Whether this screen is the one the user is actually looking at.
+  ///
+  /// The trip tab lives in an IndexedStack, so it keeps building while the
+  /// user is on Bookings or Account -- and a sheet opened from here appears
+  /// over whatever is on top. It surfaced over the Account page, on top of a
+  /// sign-out dialog.
+  ///
+  /// TickerMode is set per tab by the home screen; isCurrent covers the other
+  /// half, where a dialog or a pushed page sits above the whole tab bar.
+  bool get _isVisible {
+    if (!mounted) return false;
+    if (!TickerMode.of(context)) return false;
+    return ModalRoute.of(context)?.isCurrent ?? false;
+  }
+
   /// Asks the one thing we cannot work out for ourselves, and only when it
   /// would change the plan.
   ///
@@ -239,6 +275,225 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     _pollExport();
   }
 
+  /// Draws every stop on one map, grouped by day.
+  ///
+  /// A list of days tells you what you are doing; this tells you where the
+  /// trip is. Three days clustered in one corner and a fourth an hour away is
+  /// obvious on a map and invisible in a list.
+  ///
+  /// Fetched once per plan. It is a billed map request, and redrawing it on
+  /// every rebuild would spend one per scroll.
+  Future<void> _loadTripMap(TripPlan plan, Map<String, List<double>> coords) async {
+    final key = context.read<TripPlanProvider>().contentKey;
+    if (key.isEmpty || key == _tripMapFor) return;
+    _tripMapFor = key;
+
+    final days = [
+      for (final day in plan.days)
+        {
+          'items': [
+            for (final item in day.items)
+              if (coords[item.title] != null)
+                {
+                  'lat': coords[item.title]![0],
+                  'lng': coords[item.title]![1],
+                }
+          ]
+        }
+    ];
+    if (days.every((d) => (d['items'] as List).isEmpty)) return;
+
+    final bytes = await _adk.tripMap(days);
+    if (!mounted || bytes == null) return;
+    setState(() => _tripMap = Uint8List.fromList(bytes));
+  }
+
+  /// Where the trip ends: a typed departure if there is one, otherwise the
+  /// airport when a booked flight leaves on the last day.
+  ///
+  /// A typed departure wins because it is more specific -- somebody who says
+  /// "train from Durg" has told us the exact building, where a flight only
+  /// implies the city's airport.
+  String _departurePlace(TripPlan plan) {
+    final typed = _departure;
+    if (typed != null) {
+      final place = (typed['place'] ?? '').toString().trim();
+      if (place.isNotEmpty) return place;
+      // Mode without a place: a train still means a station, not an airport.
+      final mode = (typed['mode'] ?? '').toString();
+      final city = plan.destination.split(',').first.trim();
+      if (mode == 'train') return '$city railway station';
+      if (mode == 'bus') return '$city bus stand';
+      if (mode == 'flight') return '$city airport';
+    }
+    if (_leavesByAir(plan)) {
+      return '${plan.destination.split(',').first} airport';
+    }
+    return '';
+  }
+
+  /// Whether a booked flight leaves on the trip's last day.
+  ///
+  /// Only then does the airport decide where the trip should finish. A trip
+  /// someone is driving home from has no such constraint, and pulling its
+  /// final day towards an airport would be actively wrong.
+  bool _leavesByAir(TripPlan plan) {
+    if (plan.days.isEmpty) return false;
+    final last = plan.days.last.date;
+    return context.read<BookedTripProvider>().flights.any((f) =>
+        f.startDate.year == last.year &&
+        f.startDate.month == last.month &&
+        f.startDate.day == last.day);
+  }
+
+  /// A named place as a point on the map.
+  ///
+  /// Resolved through the same summaries call as everywhere else, and cached
+  /// in [_summaries] so a trip costs one lookup rather than one per rebuild.
+  Future<List<double>?> _resolvePoint(String key, String destination) async {
+    if (key.isEmpty || destination.isEmpty) return null;
+    final cached = _summaries[key];
+    final clat = (cached?['lat'] as num?)?.toDouble();
+    final clng = (cached?['lng'] as num?)?.toDouble();
+    if (clat != null && clng != null) return [clat, clng];
+
+    final found =
+        await _adk.placeSummaries(city: destination, names: [key]);
+    final resolved = found?[key];
+    if (resolved == null) return null;
+    _summaries[key] = resolved;
+    final lat = (resolved['lat'] as num?)?.toDouble();
+    final lng = (resolved['lng'] as num?)?.toDouble();
+    return (lat != null && lng != null) ? [lat, lng] : null;
+  }
+
+  /// Where the traveller sleeps on this trip: their booking if they made
+  /// one through the app, otherwise whatever they told us.
+  String _stayFor(TripPlan plan) {
+    final booked = context.read<BookedTripProvider>().hotels;
+    if (booked.isNotEmpty) {
+      return (booked.first.hotelName ?? booked.first.title).trim();
+    }
+    return _stayingAt.trim();
+  }
+
+  /// Asks where they are staying, when no booking tells us.
+  ///
+  /// Without it a day reads "set off from where you are staying", which is
+  /// honest but vague, and the route starts from whichever place happens to be
+  /// listed first rather than from the bed. One question, once, and only when
+  /// there is no hotel booked for the trip.
+  Future<void> _askWhereStaying(TripPlan plan, BookedTripProvider booked) async {
+    if (_stayingAt.isNotEmpty || booked.hotels.isNotEmpty) return;
+
+    final stored = LocalStore.load(LocalStore.keyTripShape);
+    final storedDeparture = stored?['departure'];
+    if (_departure == null && storedDeparture is Map<String, dynamic>) {
+      _departure = storedDeparture;
+    }
+    final remembered = (stored?['staying_at'] ?? '').toString();
+    if (remembered.isNotEmpty) {
+      setState(() => _stayingAt = remembered);
+      return;
+    }
+    // Asked once per trip, and only while the trip tab is on screen.
+    final signature = '${plan.destination}|stay';
+    if (_askedFor == signature || !_isVisible) return;
+    _askedFor = signature;
+
+    final controller = TextEditingController();
+    final answer = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Where are you staying?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'So each day can start from the right place, and the order of '
+              'stops can begin near you.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'A hotel, or a friend or family home',
+              ),
+              onSubmitted: (value) =>
+                  Navigator.pop(dialogContext, value.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, ''),
+            child: const Text('Skip'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || answer == null || answer.isEmpty) return;
+
+    // Somewhere far from the trip is almost certainly a mistake -- a stay in
+    // Bannerghatta on a Bhilai trip is a thousand kilometres of driving a day.
+    // Queried rather than assumed, and only warned about when we can actually
+    // locate it: a private house resolves to nothing, and that is not evidence
+    // of anything.
+    final away = await _adk.distanceFromCity(
+        text: answer, city: plan.destination);
+    if (!mounted) return;
+    if (away != null && away > 60) {
+      final keep = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('That looks a long way off'),
+          content: Text(
+            'That appears to be about ${away.round()} km from '
+            '${plan.destination.split(',').first}. Days planned from there '
+            'would start with a very long drive.\n\n'
+            'Use it anyway, or enter somewhere closer?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Let me change it'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Use it anyway'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (keep != true) {
+        // Asked again next time rather than silently dropped.
+        _askedFor = '';
+        return;
+      }
+    }
+
+    final shape = Map<String, dynamic>.from(
+        LocalStore.load(LocalStore.keyTripShape) ?? const {});
+    shape['staying_at'] = answer;
+    LocalStore.save(LocalStore.keyTripShape, shape);
+    setState(() {
+      _stayingAt = answer;
+      // The running order described days that began somewhere else.
+      _schedules = {};
+      // And the route was chained from a different starting point.
+      _arrangedFor = '';
+    });
+  }
+
   Future<void> _askIfThin(TripPlan plan) async {
     final signature = '${plan.destination}|${plan.days.length}';
     if (signature == _askedFor) return;
@@ -254,6 +509,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     // Nothing to fix, nothing to ask.
     final provider = context.read<TripPlanProvider>();
     if (provider.shortfall(minPerDay: 2) == 0) return;
+    // Not while the user is somewhere else. The question keeps until they
+    // come back rather than being asked over another page.
+    if (!_isVisible) return;
     _askedFor = signature;
 
     final choice = await showDialog<int>(
@@ -439,10 +697,50 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       final lng = (entry.value['lng'] as num?)?.toDouble();
       if (lat != null && lng != null) coords[entry.key] = [lat, lng];
     }
+    // Where they sleep, resolved to a point on the map, so the route can be
+    // chained outward from the bed. Looked up through the same summaries call
+    // as everywhere else -- free text like a hotel name or a neighbourhood
+    // usually resolves; when it does not, the route simply falls back to
+    // starting at their first chosen place.
+    List<double>? anchor;
+    final stayName = _stayFor(plan);
+    if (stayName.isNotEmpty) {
+      final cached = _summaries[stayName];
+      final lat = (cached?['lat'] as num?)?.toDouble();
+      final lng = (cached?['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        anchor = [lat, lng];
+      } else {
+        final found = await _adk
+            .placeSummaries(city: plan.destination, names: [stayName]);
+        final resolved = found?[stayName];
+        if (resolved != null) {
+          _summaries[stayName] = resolved;
+          final rlat = (resolved['lat'] as num?)?.toDouble();
+          final rlng = (resolved['lng'] as num?)?.toDouble();
+          if (rlat != null && rlng != null) anchor = [rlat, rlng];
+        }
+      }
+    }
+    if (!mounted) return;
+
+    // If the trip ends with a flight, the last stops should be the ones
+    // nearest the airport -- otherwise the plan cheerfully sends someone
+    // across the city with their luggage an hour before departure.
+    List<double>? finish;
+    final leavingFrom = _departurePlace(plan);
+    if (leavingFrom.isNotEmpty) {
+      finish = await _resolvePoint(leavingFrom, plan.destination);
+      if (!mounted) return;
+    }
+
+    _loadTripMap(plan, coords);
+
     final planKey = provider.contentKey;
     if (planKey != _arrangedFor && coords.length >= 3) {
       _arrangedFor = planKey;
-      final moved = provider.arrangeByProximity(coords);
+      final moved =
+          provider.arrangeByProximity(coords, from: anchor, to: finish);
       // The running order described the old sequence.
       if (moved > 0 && mounted) {
         setState(() {
@@ -514,6 +812,33 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         break;
       }
     }
+    // No booking covering this date: fall back to whatever they told us.
+    stay ??= _stayingAt.isEmpty ? null : _stayingAt;
+
+    // A typed departure is a fixed point exactly like a confirmed flight: the
+    // day has to be built backwards from it. Added only to the day it falls
+    // on -- 'last' is the only one the extractor reports, and putting a
+    // departure on every day would wreck the whole trip.
+    final departure = _departure;
+    if (departure != null) {
+      final plan = context.read<TripPlanProvider>().plan;
+      final isLastDay = plan != null &&
+          plan.days.isNotEmpty &&
+          _sameDate(plan.days.last.date, day.date);
+      if (isLastDay) {
+        final mode = (departure['mode'] ?? '').toString();
+        final time = (departure['time'] ?? '').toString();
+        final place = (departure['place'] ?? '').toString();
+        if (mode.isNotEmpty) {
+          final where = place.isEmpty ? '' : ' from $place';
+          // The time leads, because that is the part the day is planned
+          // around. No time means the mode still shapes the evening.
+          fixed.add(time.isEmpty
+              ? 'A $mode$where on this day, time unknown'
+              : '$mode departs$where at $time');
+        }
+      }
+    }
 
     return {
         'date': iso(day.date),
@@ -559,6 +884,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     return [for (final i in order) day.items[i]];
   }
 
+  /// Whether two DateTimes fall on the same calendar day.
+  static bool _sameDate(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
   /// The hours line for [title] on [date]'s weekday, if we have it.
   String? _todayHoursFor(String title, DateTime date) {
     final hours = (_summaries[title]?['hours'] as List?) ?? const [];
@@ -587,10 +916,76 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// Separate from the PDF and the video: those are pictures of a plan at a
   /// moment, and this is the plan itself, still changing, that somebody else
   /// can ask to help with.
+  /// Applies a suggestion the owner accepted, then republishes.
+  ///
+  /// Goes through TripPlanProvider like every other edit, so an accepted
+  /// suggestion is indistinguishable from one the owner made -- it persists,
+  /// it re-triggers the summaries and the ordering, and it survives a restart.
+  /// Republishing afterwards is what lets the person who suggested it see
+  /// their change land.
+  Future<void> _applyProposal(TripProposal proposal) async {
+    final provider = context.read<TripPlanProvider>();
+    final plan = provider.plan;
+    if (plan == null) return;
+    if (proposal.dayIndex < 0 || proposal.dayIndex >= plan.days.length) return;
+
+    if (proposal.isAdd) {
+      provider.addItems(proposal.dayIndex, [proposal.title]);
+    } else {
+      final items = plan.days[proposal.dayIndex].items;
+      final at = items.indexWhere(
+          (i) => _placeName(i.title).toLowerCase() ==
+              proposal.title.toLowerCase());
+      if (at >= 0) provider.removeItem(proposal.dayIndex, at);
+    }
+
+    final updated = provider.plan;
+    if (updated == null) return;
+    await TripSync().publish(
+      tripId: provider.tripId,
+      plan: updated,
+      notes: _schedules,
+      fixed: _fixedByDate(updated),
+    );
+    if (mounted) setState(() => _summarisedFor = '');
+  }
+
   Future<void> _sharePlanLink(TripPlan plan) async {
     final tripId = context.read<TripPlanProvider>().tripId;
     if (tripId.isEmpty) return;
-    await shareTrip(context: context, tripId: tripId, plan: plan);
+    await shareTrip(
+      context: context,
+      tripId: tripId,
+      plan: plan,
+      notes: _schedules,
+      fixed: _fixedByDate(plan),
+    );
+  }
+
+  /// The confirmed flights and hotels for each day, keyed by ISO date.
+  ///
+  /// Rebuilt from the same booking data _dayPayload uses, so what a guest
+  /// reads and what the scheduler was told cannot disagree.
+  Map<String, List<String>> _fixedByDate(TripPlan plan) {
+    final booked = context.read<BookedTripProvider>();
+    final out = <String, List<String>>{};
+    for (final day in plan.days) {
+      final lines = <String>[];
+      for (final f in booked.flights) {
+        if (!_sameDate(f.startDate, day.date)) continue;
+        final t = f.departureTime;
+        lines.add('${f.flightNumber ?? f.title}'
+            '${t == null || t.isEmpty ? '' : '  ·  $t'}');
+      }
+      for (final h in booked.hotels) {
+        if (!_sameDate(h.startDate, day.date)) continue;
+        lines.add('Check in  ·  ${h.hotelName ?? h.title}');
+      }
+      if (lines.isNotEmpty) {
+        out[day.date.toIso8601String().split('T').first] = lines;
+      }
+    }
+    return out;
   }
 
   Future<void> _sharePlan(
@@ -813,6 +1208,65 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     }
   }
 
+  /// Reads a departure out of a typed message and confirms it before use.
+  ///
+  /// Confirmed rather than applied, because this is a number the whole last
+  /// day gets built backwards from. A misread "5:00PM" as 05:00 would quietly
+  /// rearrange a day around the wrong hour, and nothing on screen would say
+  /// so. One tap is a cheap price for that.
+  Future<void> _captureDeparture(String request, TripPlan plan) async {
+    // Cheap gate: most prompts are not about leaving, and this saves a model
+    // call on every "move the palace to Day 2".
+    final lower = request.toLowerCase();
+    const words = ['train', 'bus', 'flight', 'depart', 'leave', 'leaving'];
+    if (!words.any(lower.contains)) return;
+
+    final found = await _adk.extractDeparture(
+        text: request, city: plan.destination);
+    if (!mounted || found == null) return;
+
+    final mode = (found['mode'] ?? '').toString();
+    final time = (found['time'] ?? '').toString();
+    final place = (found['place'] ?? '').toString();
+    if (mode.isEmpty) return;
+
+    final where = place.isEmpty ? '' : ' from $place';
+    final when = time.isEmpty ? '' : ' at $time';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Is this right?'),
+        content: Text(
+          'You have a $mode$when$where on your last day.\n\n'
+          'The last day will be planned around it, ending near where you '
+          'leave from.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('No, ignore that'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    final shape = Map<String, dynamic>.from(
+        LocalStore.load(LocalStore.keyTripShape) ?? const {});
+    shape['departure'] = found;
+    LocalStore.save(LocalStore.keyTripShape, shape);
+    setState(() {
+      _departure = found;
+      // The running order and the route were both built without knowing this.
+      _schedules = {};
+      _arrangedFor = '';
+    });
+  }
+
   Future<void> _applyRequest() async {
     final request = _requestController.text.trim();
     final plan = context.read<TripPlanProvider>().plan;
@@ -822,6 +1276,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       _applying = true;
       _error = null;
     });
+
+    // Checked first, because a departure changes the shape of the last day
+    // and the plan adjuster knows nothing about times or stations.
+    await _captureDeparture(request, plan);
+    if (!mounted) return;
 
     final updated = await _adk.adjustPlan(
       days: plan.toJson(),
@@ -860,6 +1319,8 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     if (plan != null && !plan.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         _resumeExport();
+        await _askWhereStaying(plan, booked);
+        if (!mounted) return;
         // Asked first: the answer decides how many places to go and find.
         await _askIfThin(plan);
         if (!mounted) return;
@@ -937,6 +1398,49 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 // is a model call, and most openings of this screen are
                 // someone checking their trip rather than asking for it to
                 // be scheduled.
+                // Above the plan, because a person waiting on you is more
+                // urgent than anything below it. Renders nothing when nobody
+                // is waiting.
+                if (_tripMap != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Your whole trip',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.grey[800])),
+                        const SizedBox(height: 2),
+                        Text('Pins are numbered and coloured by day.',
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey[600])),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius:
+                              BorderRadius.circular(AppConfig.radiusMedium),
+                          child: Image.memory(_tripMap!,
+                              width: double.infinity, fit: BoxFit.cover),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: TripAccessRequests(
+                    tripId: context.watch<TripPlanProvider>().tripId,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                  child: TripProposalReview(
+                    tripId: context.watch<TripPlanProvider>().tripId,
+                    onAccept: _applyProposal,
+                  ),
+                ),
+
                 if (_schedules.isEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1571,6 +2075,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
     final signature = '${plan.destination}|${plan.days.length}|more';
     if (_askedFor == signature) return;
+    if (!_isVisible) return;
     _askedFor = signature;
 
     final chosen = context
@@ -1586,6 +2091,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     if (offer.isEmpty) return;
 
     final picked = <String>{};
+    // Re-checked immediately before opening: the places lookup above is a
+    // network call, and the user can change tab while it is in flight.
+    if (!_isVisible) {
+      _askedFor = '';
+      return;
+    }
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,

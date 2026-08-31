@@ -52,7 +52,7 @@ service cloud.firestore {
           && request.resource.data.owner == resource.data.owner
           && resource.data.members.toSet()
                .difference(request.resource.data.members.toSet()).size() == 0
-          && !changed().hasAny(['members', 'requests']);
+          && !changed().hasAny(['members', 'requests', 'profiles']);
       }
 
       // A visitor asking for edit access. Only the `requests` list may change,
@@ -60,10 +60,17 @@ service cloud.firestore {
       // pending request on the way past.
       function asksForAccess() {
         return signedIn()
-          && changed().hasOnly(['requests'])
+          // 'profiles' too: a request carries the asker's name so the owner
+          // sees a person rather than a uid. They may only add their own
+          // entry -- writing somebody else's name into the trip would let a
+          // stranger impersonate a friend in the approval list.
+          && changed().hasOnly(['requests', 'profiles'])
           && request.auth.uid in request.resource.data.requests
           && resource.data.get('requests', []).toSet()
-               .difference(request.resource.data.requests.toSet()).size() == 0;
+               .difference(request.resource.data.requests.toSet()).size() == 0
+          && request.resource.data.get('profiles', {})
+               .diff(resource.data.get('profiles', {}))
+               .affectedKeys().hasOnly([request.auth.uid]);
       }
 
       // Anyone signed in who has the link can read. Sign-in is required so an
@@ -84,6 +91,41 @@ service cloud.firestore {
       allow update: if isOwner() || memberEdit() || asksForAccess();
 
       allow delete: if isOwner();
+
+      // Suggested changes, waiting on the trip's owner.
+      //
+      // The trip document is the master copy and only its owner writes to it.
+      // Everyone else proposes, and the owner accepts or rejects -- so there is
+      // no concurrent write to the plan, no conflict to resolve, and no rule
+      // that has to work out which parts of a document a collaborator touched.
+      match /proposals/{proposalId} {
+
+        function tripOwner() {
+          return signedIn()
+            && get(/databases/$(database)/documents/trips/$(tripId))
+                 .data.owner == request.auth.uid;
+        }
+
+        // Readable by anyone who can read the trip, so a contributor can see
+        // that their suggestion is still waiting rather than resubmitting it.
+        allow read: if signedIn();
+
+        // Anyone signed in who has the link may suggest a change, and must
+        // sign it with their own uid. Opening as anything but 'open' would
+        // let somebody file a change already marked accepted.
+        allow create: if signedIn()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.state == 'open'
+          && request.resource.data.kind in ['add', 'remove'];
+
+        // Only the owner decides. A contributor cannot approve their own
+        // suggestion, which is the entire point of the model.
+        allow update: if tripOwner();
+
+        // Withdrawing your own suggestion is allowed; deleting someone
+        // else's is not.
+        allow delete: if tripOwner() || resource.data.by == request.auth.uid;
+      }
     }
   }
 }

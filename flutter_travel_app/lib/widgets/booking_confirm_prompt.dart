@@ -815,8 +815,15 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
   /// the lookup was still running, because the list is empty then too — so
   /// typing an airline name lit the button up seconds before any flight
   /// appeared, and pressing it saved a number nobody had confirmed.
-  bool get _canSave =>
-      _isFlight ? _pickedFromPlaces : _selectedHotel != null;
+  /// Either leg is enough to save.
+  ///
+  /// This required the outbound, so somebody who had only booked their return
+  /// -- or who was adding it later, having skipped the outbound earlier --
+  /// found the button dead with nothing on screen explaining why. The two legs
+  /// are separate bookings to the traveller even though they share one sheet.
+  bool get _canSave => _isFlight
+      ? (_pickedFromPlaces || (_returnNumber ?? '').isNotEmpty)
+      : _selectedHotel != null;
 
   /// Marks a flight as the user's choice, the same way tapping a hotel card
   /// does. It does not save or close.
@@ -867,7 +874,10 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
 
     // Blank entries, and anything already chosen from a list, need no second
     // look.
-    if (text.isEmpty || _pickedFromPlaces) {
+    // A return-only save has no outbound text to verify, so it takes the
+    // same straight-through path as a picked outbound.
+    if (text.isEmpty || _pickedFromPlaces ||
+        (_returnNumber ?? '').isNotEmpty) {
       if (!mounted) return;
       Navigator.of(context).pop(_DetailResult(
         text,
@@ -1705,7 +1715,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               _isFlight
                   ? (_loadingFlights
                       ? 'Finding flights on this route…'
-                      : 'Tap the flight you took to enable saving')
+                      : 'Tap the flight you took — either leg is enough')
                   : 'Tap the hotel you booked to enable saving',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),

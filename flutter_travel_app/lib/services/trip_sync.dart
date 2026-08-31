@@ -5,6 +5,70 @@ import 'package:flutter/foundation.dart';
 
 import '../models/trip_plan.dart';
 
+/// Somebody involved in a trip, named where the name is known.
+class TripPerson {
+  const TripPerson({required this.uid, required this.name, required this.email});
+
+  factory TripPerson.from(String uid, Map<String, dynamic>? profile) =>
+      TripPerson(
+        uid: uid,
+        name: (profile?['name'] ?? '').toString().trim(),
+        email: (profile?['email'] ?? '').toString().trim(),
+      );
+
+  final String uid;
+  final String name;
+  final String email;
+
+  /// What to put on screen. Falls back through name, email, then a shortened
+  /// uid -- never an invented placeholder, because two anonymous requests
+  /// reading "A traveller" cannot be told apart.
+  String get label {
+    if (name.isNotEmpty) return name;
+    if (email.isNotEmpty) return email;
+    return uid.length > 10 ? '${uid.substring(0, 10)}…' : uid;
+  }
+
+  /// Shown under the name when we have both, so the owner can tell two people
+  /// with the same first name apart.
+  String get subtitle => name.isNotEmpty && email.isNotEmpty ? email : '';
+}
+
+/// One suggested change to a trip, waiting on its owner.
+class TripProposal {
+  const TripProposal({
+    required this.id,
+    required this.kind,
+    required this.dayIndex,
+    required this.title,
+    required this.by,
+  });
+
+  factory TripProposal.fromDoc(String id, Map<String, dynamic> data) =>
+      TripProposal(
+        id: id,
+        kind: (data['kind'] ?? '').toString(),
+        dayIndex: (data['day'] as num?)?.toInt() ?? 0,
+        title: (data['title'] ?? '').toString(),
+        by: (data['by'] ?? '').toString(),
+      );
+
+  final String id;
+
+  /// 'add' or 'remove'.
+  final String kind;
+  final int dayIndex;
+  final String title;
+  final String by;
+
+  bool get isAdd => kind == 'add';
+
+  /// How the change reads to the person deciding on it.
+  String get summary => isAdd
+      ? 'Add $title to Day ${dayIndex + 1}'
+      : 'Remove $title from Day ${dayIndex + 1}';
+}
+
 /// What the signed-in user may do with a trip.
 ///
 /// Reading is deliberately open to anyone holding the link -- that is what
@@ -80,23 +144,64 @@ class TripSync {
   ///
   /// The owner is recorded once and never overwritten: a co-traveller saving a
   /// change must not become the owner of somebody else's trip.
+  /// [notes] is the running order per ISO date, and [fixed] the confirmed
+  /// flights and hotels per ISO date.
+  ///
+  /// Published because they are the plan. A day carries only its date and its
+  /// places, so without these a guest opened the link and saw a list of names
+  /// -- not when to set off, not which hotel, not the flight. The part worth
+  /// sharing was the part that never left the owner's screen.
   Future<bool> publish({
     required String tripId,
     required TripPlan plan,
     String? title,
+    Map<String, List<String>> notes = const {},
+    Map<String, List<String>> fixed = const {},
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty) return false;
     try {
-      await _trips.doc(tripId).set({
+      final doc = _trips.doc(tripId);
+      final existing = await doc.get();
+
+      if (!existing.exists) {
+        // Plain values, not FieldValue transforms.
+        //
+        // Security rules cannot see the result of arrayUnion, increment or
+        // serverTimestamp: transforms are applied after the rule runs, so
+        // `request.resource.data.members` reads as absent. The create rule
+        // requires the author to be in members, so writing members with
+        // arrayUnion made that rule permanently unsatisfiable -- every first
+        // publish was rejected, which is why sharing did nothing at all.
+        await doc.set({
+          'destination': plan.destination,
+          'title': title ?? plan.destination,
+          'days': plan.toJson(),
+          'notes': notes,
+          'fixed': fixed,
+          'owner': uid,
+          'members': [uid],
+          'requests': <String>[],
+          'created_at': FieldValue.serverTimestamp(),
+          'updated_at': FieldValue.serverTimestamp(),
+          'updated_by': uid,
+        });
+        return true;
+      }
+
+      // Re-publishing touches the plan and nothing else. Members and requests
+      // are deliberately absent: re-sending the whole document would wipe the
+      // people who had been approved, and the rules forbid a member changing
+      // them at all.
+      await doc.update({
         'destination': plan.destination,
         'title': title ?? plan.destination,
         'days': plan.toJson(),
-        'owner': uid,
-        'members': FieldValue.arrayUnion([uid]),
+        'notes': notes,
+        'fixed': fixed,
         'updated_at': FieldValue.serverTimestamp(),
         'updated_by': uid,
-      }, SetOptions(merge: true));
+      });
       return true;
     } catch (e) {
       debugPrint('TripSync.publish failed: $e');
@@ -117,8 +222,42 @@ class TripSync {
     final uid = _uid;
     if (uid == null || tripId.isEmpty) return false;
     try {
-      await _trips.doc(tripId).update({
-        'requests': FieldValue.arrayUnion([uid]),
+      // Read, extend, write the whole list -- not arrayUnion.
+      //
+      // The person asking is not the owner, so their write has to satisfy the
+      // rule that they are adding themselves and removing nobody. That rule
+      // reads request.resource.data.requests, which does not contain the
+      // result of a transform, so an arrayUnion write could never pass it.
+      //
+      // Owner-side calls (approve, deny, removeMember) may keep using
+      // transforms: the owner is allowed outright and no rule inspects what
+      // they wrote.
+      final doc = _trips.doc(tripId);
+      final snapshot = await doc.get();
+      if (!snapshot.exists) return false;
+
+      final existing = [
+        for (final entry in (snapshot.data()?['requests'] as List?) ?? const [])
+          entry.toString()
+      ];
+      if (existing.contains(uid)) return true;
+
+      // The asker's name travels with the request. The owner was being shown
+      // a raw uid and asked to decide whether to trust it, which is not a
+      // decision anybody can make. Written from the signed-in account, and the
+      // rules allow each person to write only their own entry -- so a name in
+      // this list cannot be somebody else's.
+      final user = _auth.currentUser;
+      final profiles =
+          Map<String, dynamic>.from(snapshot.data()?['profiles'] as Map? ?? {});
+      profiles[uid] = {
+        'name': (user?.displayName ?? '').trim(),
+        'email': (user?.email ?? '').trim(),
+      };
+
+      await doc.update({
+        'requests': [...existing, uid],
+        'profiles': profiles,
       });
       return true;
     } catch (e) {
@@ -192,14 +331,18 @@ class TripSync {
     return TripAccess.viewer;
   }
 
-  /// The people waiting on the owner, so the trip screen can show them.
-  Stream<List<String>> pendingRequests(String tripId) {
-    if (tripId.isEmpty) return const Stream<List<String>>.empty();
+  /// The people waiting on the owner, named where we know the name.
+  Stream<List<TripPerson>> pendingRequests(String tripId) {
+    if (tripId.isEmpty) return const Stream<List<TripPerson>>.empty();
     return _trips.doc(tripId).snapshots().map((snapshot) {
       final data = snapshot.data() ?? const <String, dynamic>{};
+      final profiles = (data['profiles'] as Map?) ?? const {};
       return [
-        for (final uid in (data['requests'] as List?) ?? const [])
-          uid.toString()
+        for (final entry in (data['requests'] as List?) ?? const [])
+          TripPerson.from(
+            entry.toString(),
+            (profiles[entry.toString()] as Map?)?.cast<String, dynamic>(),
+          )
       ];
     }).handleError((Object e) {
       debugPrint('TripSync.pendingRequests failed: $e');
@@ -247,6 +390,106 @@ class TripSync {
   bool isForeignEdit(Map<String, dynamic> data) {
     final by = (data['updated_by'] ?? '').toString();
     return by.isNotEmpty && by != _uid;
+  }
+
+  // --- Proposals ------------------------------------------------------
+  //
+  // Changes from anyone other than the owner are proposed, not applied. The
+  // trip document is the master copy and only its owner writes to it; a
+  // collaborator writes a proposal, and the owner accepts or rejects it.
+  //
+  // Item-level, not a whole-document diff. "Add Maitri Baag Zoo to Day 2" is
+  // something an owner can judge on its own and accept while rejecting the
+  // rest. A diff of the entire plan is all-or-nothing, and unreadable in the
+  // one place it needs to be read.
+  //
+  // This is also a simpler security story than shared write access: nobody but
+  // the owner can alter the plan, so there is no conflict to resolve and no
+  // rule that has to reason about which parts of a document changed.
+
+  CollectionReference<Map<String, dynamic>> _proposalsOf(String tripId) =>
+      _trips.doc(tripId).collection('proposals');
+
+  /// Suggests adding a place to a day.
+  Future<bool> proposeAdd({
+    required String tripId,
+    required int dayIndex,
+    required String title,
+  }) =>
+      _propose(tripId, {
+        'kind': 'add',
+        'day': dayIndex,
+        'title': title.trim(),
+      });
+
+  /// Suggests dropping a place from a day.
+  Future<bool> proposeRemove({
+    required String tripId,
+    required int dayIndex,
+    required String title,
+  }) =>
+      _propose(tripId, {
+        'kind': 'remove',
+        'day': dayIndex,
+        'title': title.trim(),
+      });
+
+  Future<bool> _propose(String tripId, Map<String, dynamic> change) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty) return false;
+    if ((change['title'] ?? '').toString().isEmpty) return false;
+    try {
+      await _proposalsOf(tripId).add({
+        ...change,
+        'by': uid,
+        'state': 'open',
+        'created_at': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.propose failed: $e');
+      return false;
+    }
+  }
+
+  /// Everything still awaiting the owner, oldest first.
+  Stream<List<TripProposal>> openProposals(String tripId) {
+    if (tripId.isEmpty) return const Stream<List<TripProposal>>.empty();
+    return _proposalsOf(tripId)
+        .where('state', isEqualTo: 'open')
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => TripProposal.fromDoc(doc.id, doc.data()))
+            .toList()
+          ..sort((a, b) => a.dayIndex.compareTo(b.dayIndex)))
+        .handleError((Object e) {
+      debugPrint('TripSync.openProposals failed: $e');
+    });
+  }
+
+  /// Marks a proposal accepted or rejected.
+  ///
+  /// The plan itself is changed by the caller through TripPlanProvider and
+  /// then republished, so an accepted proposal goes through exactly the same
+  /// path as an edit the owner made themselves -- one way for the plan to
+  /// change, whoever suggested it.
+  Future<bool> settleProposal({
+    required String tripId,
+    required String proposalId,
+    required bool accepted,
+  }) async {
+    if (tripId.isEmpty || proposalId.isEmpty) return false;
+    try {
+      await _proposalsOf(tripId).doc(proposalId).update({
+        'state': accepted ? 'accepted' : 'rejected',
+        'settled_at': FieldValue.serverTimestamp(),
+        'settled_by': _uid,
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.settleProposal failed: $e');
+      return false;
+    }
   }
 
   /// The link to give someone. Deliberately the trip id and nothing else: it

@@ -420,7 +420,16 @@ class TripPlanProvider with ChangeNotifier {
   ///
   /// Returns the number of places that changed day, so a caller can tell
   /// whether anything actually moved.
-  int arrangeByProximity(Map<String, List<double>> coords) {
+  /// [from] is where the traveller sleeps, when it is known. The route is
+  /// chained outward from there instead of from whichever place happens to be
+  /// listed first, so a day starts with what is nearest the bed rather than
+  /// with a stop across town.
+  /// [to] is where the trip has to finish -- the airport, when the last day
+  /// ends in a flight. The route is optimised to arrive near it, so the final
+  /// stops are the ones closest to departure instead of leaving a cross-city
+  /// dash with luggage.
+  int arrangeByProximity(Map<String, List<double>> coords,
+      {List<double>? from, List<double>? to}) {
     final plan = _plan;
     if (plan == null) return 0;
 
@@ -439,7 +448,30 @@ class TripPlanProvider with ChangeNotifier {
     if (remaining.length < 3) return 0;
 
     final chain = <PlanItem>[];
-    var cursor = coords[remaining.first.title]!;
+    // Anchored on the bed where we know it. Falling back to the first place
+    // keeps the user's own first choice leading the trip, which is what
+    // happened before a stay was ever recorded.
+    var cursor = (from != null && from.length == 2)
+        ? from
+        : coords[remaining.first.title]!;
+
+    // With a real anchor the first stop is chosen too, rather than assumed:
+    // the nearest place to the hotel leads the day.
+    if (from != null && from.length == 2) {
+      var nearest = 0;
+      var best = double.infinity;
+      for (var i = 0; i < remaining.length; i++) {
+        final c = coords[remaining[i].title]!;
+        final d = _km(cursor[0], cursor[1], c[0], c[1]);
+        if (d < best) {
+          best = d;
+          nearest = i;
+        }
+      }
+      final first = remaining.removeAt(nearest);
+      chain.add(first);
+      cursor = coords[first.title]!;
+    }
     while (remaining.isNotEmpty) {
       var best = 0;
       var bestDistance = double.infinity;
@@ -472,6 +504,16 @@ class TripPlanProvider with ChangeNotifier {
       return _km(p1[0], p1[1], p2[0], p2[1]);
     }
 
+    // The cost of finishing at a place, which is zero unless the trip has to
+    // end somewhere in particular. Including it in the 2-opt means the search
+    // optimises the whole journey -- bed to airport -- rather than just the
+    // hops between stops.
+    double tail(PlanItem x) {
+      if (to == null || to.length != 2) return 0.0;
+      final p = coords[x.title]!;
+      return _km(p[0], p[1], to[0], to[1]);
+    }
+
     var improved = true;
     var passes = 0;
     while (improved && passes < 50) {
@@ -480,9 +522,13 @@ class TripPlanProvider with ChangeNotifier {
       for (var i = 1; i < chain.length - 1; i++) {
         for (var j = i + 1; j < chain.length; j++) {
           final before = hop(chain[i - 1], chain[i]) +
-              (j + 1 < chain.length ? hop(chain[j], chain[j + 1]) : 0.0);
+              (j + 1 < chain.length
+                  ? hop(chain[j], chain[j + 1])
+                  : tail(chain[j]));
           final after = hop(chain[i - 1], chain[j]) +
-              (j + 1 < chain.length ? hop(chain[i], chain[j + 1]) : 0.0);
+              (j + 1 < chain.length
+                  ? hop(chain[i], chain[j + 1])
+                  : tail(chain[i]));
           // The epsilon stops a pair of equal-length routes swapping forever.
           if (after < before - 1e-9) {
             chain.setRange(i, j + 1, chain.sublist(i, j + 1).reversed.toList());

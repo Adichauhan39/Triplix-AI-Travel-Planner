@@ -212,4 +212,83 @@ void main() {
     p.arrangeByProximity(_coords);
     expect(p.plan!.days.first.items.first.title, titles.first);
   });
+
+  group('starting from where you sleep', () {
+    test('the day begins with the place nearest the bed', () {
+      final p = tripOf(_coords.keys.toList(), 3);
+      // A stay right beside Dam View point, which is listed fourth.
+      p.arrangeByProximity(_coords, from: const [21.1730, 81.3313]);
+      expect(p.plan!.days.first.items.first.title, 'Dam View point');
+    });
+
+    test('without a stay, the first choice picked still leads', () {
+      final titles = _coords.keys.toList();
+      final p = tripOf(titles, 3);
+      p.arrangeByProximity(_coords);
+      expect(p.plan!.days.first.items.first.title, titles.first);
+    });
+
+    test('anchoring does not lose or duplicate anywhere', () {
+      final p = tripOf(_coords.keys.toList(), 3);
+      p.arrangeByProximity(_coords, from: const [21.1730, 81.3313]);
+      final all = [
+        for (final d in p.plan!.days) ...d.items.map((i) => i.title)
+      ];
+      expect(all.toSet(), _coords.keys.toSet());
+      expect(all, hasLength(_coords.length));
+    });
+
+    test('a malformed anchor is ignored rather than throwing', () {
+      final p = tripOf(_coords.keys.toList(), 3);
+      expect(() => p.arrangeByProximity(_coords, from: const [21.0]),
+          returnsNormally);
+    });
+  });
+
+  group('finishing near the airport', () {
+    // Raipur airport, the one a Bhilai trip actually flies from.
+    const airport = [21.1804, 81.7388];
+
+    test('the last stop of the trip is the one nearest departure', () {
+      final p = tripOf(_coords.keys.toList(), 3);
+      p.arrangeByProximity(_coords, to: airport);
+
+      final last = p.plan!.days.last.items.last.title;
+      final lastDistance = km(_coords[last]!, airport);
+      for (final entry in _coords.entries) {
+        expect(lastDistance, lessThanOrEqualTo(km(entry.value, airport) + 0.001),
+            reason: 'ended at $last, but ${entry.key} is closer to the airport');
+      }
+    });
+
+    test('the whole journey including the airport run gets shorter', () {
+      double toAirport(TripPlanProvider p) {
+        final order = [
+          for (final d in p.plan!.days) ...d.items.map((i) => i.title)
+        ].where(_coords.containsKey).toList();
+        var total = 0.0;
+        for (var i = 0; i < order.length - 1; i++) {
+          total += km(_coords[order[i]]!, _coords[order[i + 1]]!);
+        }
+        return total + km(_coords[order.last]!, airport);
+      }
+
+      final plain = tripOf(_coords.keys.toList(), 3)..arrangeByProximity(_coords);
+      final aimed = tripOf(_coords.keys.toList(), 3)
+        ..arrangeByProximity(_coords, to: airport);
+      expect(toAirport(aimed), lessThanOrEqualTo(toAirport(plain)));
+    });
+
+    test('a start and a finish can both be honoured', () {
+      final p = tripOf(_coords.keys.toList(), 3);
+      p.arrangeByProximity(_coords,
+          from: const [21.1730, 81.3313], to: airport);
+      // Begins beside the bed, ends nearest the airport.
+      expect(p.plan!.days.first.items.first.title, 'Dam View point');
+      final all = [
+        for (final d in p.plan!.days) ...d.items.map((i) => i.title)
+      ];
+      expect(all.toSet(), _coords.keys.toSet(), reason: 'nothing lost');
+    });
+  });
 }

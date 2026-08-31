@@ -55,9 +55,23 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: const PlanQuickEditButton(),
       body: Stack(
         children: [
+          // Each tab is told whether it is the one on screen.
+          //
+          // IndexedStack keeps every tab mounted and building, so a tab can
+          // act while the user is looking at another one -- the trip planner
+          // opened a "days still need filling" sheet over the Account page,
+          // on top of a sign-out dialog. TickerMode is the standard channel
+          // for this: a hidden tab reads TickerMode.of(context) as false and
+          // can hold back anything that interrupts.
           IndexedStack(
             index: _selectedIndex,
-            children: _screens,
+            children: [
+              for (var i = 0; i < _screens.length; i++)
+                TickerMode(
+                  enabled: i == _selectedIndex,
+                  child: _screens[i],
+                ),
+            ],
           ),
           Positioned(
             top: 10,

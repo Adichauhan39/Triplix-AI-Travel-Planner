@@ -596,6 +596,87 @@ class PythonADKService {
     }
   }
 
+  /// The whole trip on one map, pinned and coloured by day.
+  ///
+  /// Returns the image itself rather than a URL: the Maps key stays on the
+  /// server, so the browser is handed a picture and never something it could
+  /// be billed for.
+  Future<List<int>?> tripMap(List<Map<String, dynamic>> days) async {
+    if (days.isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/trip/map'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'days': days}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode != 200) return null;
+      // An error comes back as JSON rather than an image.
+      if (response.bodyBytes.isNotEmpty && response.bodyBytes.first == 0x7B) {
+        return null;
+      }
+      return response.bodyBytes;
+    } catch (e) {
+      debugPrint('tripMap failed: $e');
+      return null;
+    }
+  }
+
+  /// How far a typed place is from the city being visited, in km.
+  ///
+  /// Returns null when neither can be located, which is not the same as
+  /// "close by" -- the caller has to keep those apart.
+  Future<double?> distanceFromCity({
+    required String text,
+    required String city,
+  }) async {
+    if (text.trim().isEmpty || city.trim().isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/place/check'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'text': text, 'city': city}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      if (body['found'] != true) return null;
+      return (body['km'] as num?)?.toDouble();
+    } catch (e) {
+      debugPrint('distanceFromCity failed: $e');
+      return null;
+    }
+  }
+
+  /// Pulls a departure out of something the traveller typed.
+  ///
+  /// Returns null when the message is not about leaving, which is the common
+  /// case -- the prompt box is mostly used for "move the palace to Day 2".
+  Future<Map<String, dynamic>?> extractDeparture({
+    required String text,
+    String city = '',
+  }) async {
+    if (text.trim().isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/trip/departure'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'text': text, 'city': city}),
+          )
+          .timeout(const Duration(seconds: 25));
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      final departure = body['departure'];
+      return departure is Map<String, dynamic> ? departure : null;
+    } catch (e) {
+      debugPrint('extractDeparture failed: $e');
+      return null;
+    }
+  }
+
   /// Answers a question about one place.
   ///
   /// [facts] should carry what we already know about it, so the common
