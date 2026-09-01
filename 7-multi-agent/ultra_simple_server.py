@@ -80,6 +80,7 @@ import time
 import hashlib
 import uuid
 import tempfile
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # MongoDB was removed: the cluster it pointed at no longer exists, and every
@@ -4200,8 +4201,22 @@ def trip_map(request: dict):
             ]
             if not stops:
                 continue
-            colour = palette[index % len(palette)]
-            label = str(index + 1) if index < 9 else ""
+            # The day's own number, not its position in this request.
+            #
+            # Rendering one day sends a list of one, so position was always 0:
+            # every day drew a "1" in the first colour, and Day 6's pins came
+            # back blue while its key was teal. The caller says which day it is
+            # and that is what gets drawn.
+            number = day.get("day")
+            number = index if not isinstance(number, int) else number
+
+            colour = palette[number % len(palette)]
+            # Static Maps allows one character, so days run 1-9 then A, B, C.
+            # A blank pin past the ninth day left a twelve-day trip with three
+            # unmarked colours and no way to tell them apart on the map.
+            label = (str(number + 1) if number < 9
+                     else chr(ord('A') + number - 9) if number < 35
+                     else "")
             label_part = f"label:{label}%7C" if label else ""
             joined = "%7C".join(f"{la},{ln}" for la, ln in stops)
             markers.append(
@@ -4211,17 +4226,53 @@ def trip_map(request: dict):
         if not points:
             return {"status": "error", "message": "no_located_places"}
 
+        # A route line, when a single day is being looked at. The whole trip
+        # gets pins only: twelve days of overlapping lines is a scribble, and
+        # the question there is "where is this trip", not "what is the drive".
+        path = ""
+        if request.get("route") is True and len(points) >= 2:
+            try:
+                params = {
+                    "origin": f"{points[0][0]},{points[0][1]}",
+                    "destination": f"{points[-1][0]},{points[-1][1]}",
+                    "mode": "driving",
+                    "key": GOOGLE_PLACES_API_KEY,
+                }
+                if len(points) > 2:
+                    params["waypoints"] = "|".join(
+                        f"{la},{ln}" for la, ln in points[1:-1])
+                directions = requests.get(
+                    "https://maps.googleapis.com/maps/api/directions/json",
+                    params=params, timeout=15).json()
+                if directions.get("status") == "OK" and directions.get("routes"):
+                    encoded = (directions["routes"][0]
+                               .get("overview_polyline", {}).get("points", ""))
+                    if encoded:
+                        # enc: keeps the URL short; a route runs to hundreds of
+                        # coordinates and raw pairs exceed what Static Maps
+                        # will accept.
+                        path = ("&path=color:0xd62d20c0%7Cweight:5%7Cenc:"
+                                + quote(encoded, safe=""))
+            except Exception as e:
+                # No line is a smaller loss than no map.
+                print(f"[TRIP MAP] route unavailable: {e}")
+
         centre_lat = sum(p[0] for p in points) / len(points)
         centre_lng = sum(p[1] for p in points) / len(points)
 
         # No zoom: Static Maps frames the markers itself, which is right here
         # because a trip can be tight in one suburb or spread across a district
         # and both should fill the picture.
+        # A map meant to be pinched into needs the detail present in the
+        # image: zooming a raster cannot invent labels that were never drawn.
+        # 640x640 at scale=2 is the most Static Maps will return.
+        detailed = request.get("detailed") is True
+        size = "640x640" if detailed else "640x480"
         url = (
             "https://maps.googleapis.com/maps/api/staticmap"
-            f"?size=640x480&scale=2&maptype=roadmap"
+            f"?size={size}&scale=2&maptype=roadmap"
             f"&center={centre_lat},{centre_lng}"
-            f"{''.join(markers)}&key={GOOGLE_PLACES_API_KEY}"
+            f"{''.join(markers)}{path}&key={GOOGLE_PLACES_API_KEY}"
         )
         resp = requests.get(url, timeout=20)
         if resp.status_code != 200 or "image" not in \
@@ -4234,6 +4285,60 @@ def trip_map(request: dict):
     except Exception as e:
         print(f"[TRIP MAP] {e}")
         return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/place/suggest")
+def suggest_places_near_city(request: dict):
+    """Real places matching what someone is typing, near the city they visit.
+
+    The stay was a free text box, so it stored whatever was typed -- "I am
+    staying in model town bhilai" went into the plan as a sentence and came
+    back out of the scheduler as one. Offering the real localities lets the
+    stored value be "Model Town, Bhilai": a name that resolves, that anchors
+    the route, and that reads properly in a running order.
+
+    Lodging is deliberately not filtered here, unlike discovery: a hotel is a
+    perfectly good answer to "where are you staying".
+    """
+    try:
+        text = str(request.get("text") or "").strip()
+        city = str(request.get("city") or "").strip()
+        if len(text) < 3 or not city:
+            return {"status": "success", "places": []}
+        if not GOOGLE_PLACES_API_KEY:
+            return {"status": "error", "message": "no_api_key", "places": []}
+
+        resp = requests.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            headers=_google_headers(
+                "places.displayName,places.formattedAddress,places.location"),
+            json={"textQuery": f"{text} in {city}, India",
+                  "maxResultCount": 8},
+            timeout=8,
+        ).json()
+
+        out = []
+        for place in (resp.get("places") or []):
+            loc = place.get("location") or {}
+            lat, lng = loc.get("latitude"), loc.get("longitude")
+            # Somewhere in another district is not where they are staying.
+            if not _within_city(city, lat, lng):
+                continue
+            name = (place.get("displayName") or {}).get("text", "").strip()
+            if not name:
+                continue
+            out.append({
+                "name": name,
+                "address": place.get("formattedAddress", ""),
+                "lat": lat,
+                "lng": lng,
+            })
+            if len(out) >= 5:
+                break
+        return {"status": "success", "places": out}
+    except Exception as e:
+        print(f"[SUGGEST] {e}")
+        return {"status": "error", "message": str(e), "places": []}
 
 
 @app.post("/api/place/check")

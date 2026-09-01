@@ -275,6 +275,73 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     _pollExport();
   }
 
+  /// Opens the whole trip full screen, pinnable and zoomable.
+  ///
+  /// A pinch-zoomable image rather than a live map: the Maps key stays on the
+  /// server, and a static render is one billed request instead of a tile
+  /// stream. Google Maps itself is one tap away for anyone who wants to
+  /// actually navigate, which is the thing a picture cannot do.
+  Future<void> _openTripMap(TripPlan plan) async {
+    final image = _tripMap;
+    if (image == null) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _TripMapDialog(
+        plan: plan,
+        initialImage: image,
+        adk: _adk,
+        coords: _mapCoords(plan),
+        placeName: _placeName,
+        onOpenInMaps: () => _openWholeTripInMaps(plan),
+      ),
+    );
+  }
+
+  /// Each place in the plan as a point, for asking the server to redraw one
+  /// day. Built from the summaries already loaded, so switching days costs a
+  /// map request and nothing else.
+  Map<String, List<double>> _mapCoords(TripPlan plan) {
+    final coords = <String, List<double>>{};
+    for (final entry in _summaries.entries) {
+      final lat = (entry.value['lat'] as num?)?.toDouble();
+      final lng = (entry.value['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) coords[entry.key] = [lat, lng];
+    }
+    return coords;
+  }
+
+  /// The pin colour for a day. Mirrors the server palette, so the key on
+  /// screen and the pins on the map cannot disagree.
+  Color _dayColour(int dayIndex) {
+    const palette = [
+      Color(0xFF0D0D82), Color(0xFFD62D20), Color(0xFF008744),
+      Color(0xFFFFA700), Color(0xFF9C27B0), Color(0xFF00838F),
+      Color(0xFF795548), Color(0xFFC2185B),
+    ];
+    return palette[dayIndex % palette.length];
+  }
+
+  /// Hands the whole trip to Google Maps, where it can actually be navigated.
+  Future<void> _openWholeTripInMaps(TripPlan plan) async {
+    final stops = [
+      for (final day in plan.days)
+        for (final item in day.items) _placeName(item.title)
+    ].where((s) => s.isNotEmpty).toList();
+    if (stops.isEmpty) return;
+
+    // Maps takes an origin, a destination and waypoints between them.
+    final params = <String, String>{
+      'api': '1',
+      'origin': stops.first,
+      'destination': stops.last,
+      if (stops.length > 2)
+        'waypoints': stops.sublist(1, stops.length - 1).take(8).join('|'),
+    };
+    await launchUrl(Uri.https('www.google.com', '/maps/dir/', params),
+        mode: LaunchMode.externalApplication);
+  }
+
   /// Draws every stop on one map, grouped by day.
   ///
   /// A list of days tells you what you are doing; this tells you where the
@@ -401,45 +468,35 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     if (_askedFor == signature || !_isVisible) return;
     _askedFor = signature;
 
-    final controller = TextEditingController();
-    final answer = await showDialog<String>(
+    // A picker, not a text box.
+    //
+    // Free text stored whatever was typed: "I am staying in model town bhilai"
+    // went into the plan as a sentence and came back out of the running order
+    // as one, and could not be resolved to a point to anchor the route on.
+    // Choosing a real place stores "Model Town" -- a name that reads properly
+    // and locates itself.
+    //
+    // Typing something with no match is still allowed. Somebody staying at a
+    // relative's house has a real answer that Places has never heard of, and
+    // refusing it would be worse than storing it plainly.
+    final picked = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Where are you staying?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'So each day can start from the right place, and the order of '
-              'stops can begin near you.',
-              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: 'A hotel, or a friend or family home',
-              ),
-              onSubmitted: (value) =>
-                  Navigator.pop(dialogContext, value.trim()),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, ''),
-            child: const Text('Skip'),
-          ),
-          ElevatedButton(
-            onPressed: () =>
-                Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
+      builder: (dialogContext) => _StayPickerDialog(
+        city: plan.destination,
+        adk: _adk,
       ),
     );
+    if (!mounted || picked == null) return;
+
+    final answer = (picked['name'] ?? '').toString().trim();
+    // Coordinates come back with the choice, so anchoring the route needs no
+    // second lookup.
+    final lat = (picked['lat'] as num?)?.toDouble();
+    final lng = (picked['lng'] as num?)?.toDouble();
+    if (answer.isNotEmpty && lat != null && lng != null) {
+      _summaries[answer] = {'name': answer, 'lat': lat, 'lng': lng};
+    }
+
     if (!mounted || answer == null || answer.isEmpty) return;
 
     // Somewhere far from the trip is almost certainly a mistake -- a stay in
@@ -447,8 +504,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     // Queried rather than assumed, and only warned about when we can actually
     // locate it: a private house resolves to nothing, and that is not evidence
     // of anything.
-    final away = await _adk.distanceFromCity(
-        text: answer, city: plan.destination);
+    // Only for a freehand answer: anything chosen from the list was already
+    // filtered to the city before it was offered.
+    final away = (lat != null && lng != null)
+        ? null
+        : await _adk.distanceFromCity(text: answer, city: plan.destination);
     if (!mounted) return;
     if (away != null && away > 60) {
       final keep = await showDialog<bool>(
@@ -1351,6 +1411,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             : 'Your trip'),
         centerTitle: true,
         actions: [
+          if (plan != null && !plan.isEmpty && _tripMap != null)
+            IconButton(
+              icon: const Icon(Icons.map_outlined),
+              tooltip: 'See the whole trip on a map',
+              onPressed: () => _openTripMap(plan),
+            ),
           if (plan != null && !plan.isEmpty)
             // A determinate ring, not a spinner: the wait is minutes, and a
             // spinner that long is indistinguishable from a hang.
@@ -1401,32 +1467,6 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 // Above the plan, because a person waiting on you is more
                 // urgent than anything below it. Renders nothing when nobody
                 // is waiting.
-                if (_tripMap != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Your whole trip',
-                            style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.grey[800])),
-                        const SizedBox(height: 2),
-                        Text('Pins are numbered and coloured by day.',
-                            style: TextStyle(
-                                fontSize: 11, color: Colors.grey[600])),
-                        const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius:
-                              BorderRadius.circular(AppConfig.radiusMedium),
-                          child: Image.memory(_tripMap!,
-                              width: double.infinity, fit: BoxFit.cover),
-                        ),
-                      ],
-                    ),
-                  ),
-
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                   child: TripAccessRequests(
@@ -2937,3 +2977,380 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
     );
   }
 }
+
+/// Asks where somebody is staying, offering real places as they type.
+///
+/// Separate widget because the dialog has to hold its own search state, and a
+/// showDialog builder cannot.
+class _StayPickerDialog extends StatefulWidget {
+  const _StayPickerDialog({required this.city, required this.adk});
+
+  final String city;
+  final PythonADKService adk;
+
+  @override
+  State<_StayPickerDialog> createState() => _StayPickerDialogState();
+}
+
+class _StayPickerDialogState extends State<_StayPickerDialog> {
+  final TextEditingController _controller = TextEditingController();
+  Timer? _debounce;
+  List<Map<String, dynamic>> _matches = const [];
+  bool _searching = false;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String value) {
+    _debounce?.cancel();
+    if (value.trim().length < 3) {
+      setState(() => _matches = const []);
+      return;
+    }
+    // Waits for a pause in typing: a Places call per keystroke is billed per
+    // keystroke.
+    _debounce = Timer(const Duration(milliseconds: 350), () async {
+      setState(() => _searching = true);
+      final found =
+          await widget.adk.suggestPlaces(text: value, city: widget.city);
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _matches = found ?? const [];
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final typed = _controller.text.trim();
+    return AlertDialog(
+      title: const Text('Where are you staying?'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'So each day starts from the right place, and the stops are '
+              'ordered from near you.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              onChanged: _onChanged,
+              decoration: InputDecoration(
+                hintText: 'Area, hotel, or landmark',
+                suffixIcon: _searching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final match in _matches)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.place_outlined, size: 18),
+                title: Text((match['name'] ?? '').toString(),
+                    style: const TextStyle(fontSize: 14)),
+                subtitle: (match['address'] ?? '').toString().isEmpty
+                    ? null
+                    : Text((match['address'] ?? '').toString(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11)),
+                onTap: () => Navigator.pop(context, match),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Skip'),
+        ),
+        // Kept enabled for somewhere Places has never heard of, like a
+        // relative's house.
+        TextButton(
+          onPressed:
+              typed.isEmpty ? null : () => Navigator.pop(context, {'name': typed}),
+          child: const Text('Use what I typed'),
+        ),
+      ],
+    );
+  }
+}
+
+/// The trip on a map, either whole or one day at a time.
+///
+/// Stateful because choosing a day fetches a different picture. A day on its
+/// own also gets its driving route drawn, which the whole trip does not:
+/// twelve days of overlapping lines is a scribble, and the question there is
+/// "where is this trip", not "what is Tuesday's drive".
+class _TripMapDialog extends StatefulWidget {
+  const _TripMapDialog({
+    required this.plan,
+    required this.initialImage,
+    required this.adk,
+    required this.coords,
+    required this.placeName,
+    required this.onOpenInMaps,
+  });
+
+  final TripPlan plan;
+  final Uint8List initialImage;
+  final PythonADKService adk;
+  final Map<String, List<double>> coords;
+  final String Function(String) placeName;
+  final VoidCallback onOpenInMaps;
+
+  @override
+  State<_TripMapDialog> createState() => _TripMapDialogState();
+}
+
+class _TripMapDialogState extends State<_TripMapDialog> {
+  late Uint8List _image = widget.initialImage;
+
+  /// null means the whole trip.
+  int? _day;
+  bool _loading = false;
+
+  /// Maps already fetched, so going back to a day is instant and unbilled.
+  final Map<int, Uint8List> _cache = {};
+
+  Future<void> _show(int? day) async {
+    if (day == _day) return;
+    final cached = _cache[day ?? -1];
+    if (cached != null) {
+      setState(() {
+        _day = day;
+        _image = cached;
+      });
+      return;
+    }
+
+    setState(() {
+      _day = day;
+      _loading = true;
+    });
+    final indices = day == null
+        ? [for (var i = 0; i < widget.plan.days.length; i++) i]
+        : [day];
+    final payload = [
+      for (final i in indices)
+        {
+          // Sent so a day drawn on its own still gets its own number and
+          // colour, matching the key beneath the map.
+          'day': i,
+          'items': [
+            for (final item in widget.plan.days[i].items)
+              if (widget.coords[item.title] != null)
+                {
+                  'lat': widget.coords[item.title]![0],
+                  'lng': widget.coords[item.title]![1],
+                }
+          ]
+        }
+    ];
+    final bytes = await widget.adk.tripMap(payload, route: day != null);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (bytes != null) {
+        final image = Uint8List.fromList(bytes);
+        _cache[day ?? -1] = image;
+        _image = image;
+      }
+    });
+  }
+
+  /// How many of a day's places we can actually put on a map.
+  int _locatedCount(int day) => widget.plan.days[day].items
+      .where((i) => widget.coords[i.title] != null)
+      .length;
+
+  Color _colour(int day) {
+    const palette = [
+      Color(0xFF0D0D82), Color(0xFFD62D20), Color(0xFF008744),
+      Color(0xFFFFA700), Color(0xFF9C27B0), Color(0xFF00838F),
+      Color(0xFF795548), Color(0xFFC2185B),
+    ];
+    return palette[day % palette.length];
+  }
+
+  String _mark(int day) {
+    if (day < 9) return '${day + 1}';
+    if (day < 35) return String.fromCharCode(65 + day - 9);
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final days = widget.plan.days;
+    return Dialog(
+      insetPadding: const EdgeInsets.all(10),
+      child: SizedBox(
+        width: MediaQuery.of(context).size.width * 0.96,
+        height: MediaQuery.of(context).size.height * 0.92,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _day == null
+                              ? 'Your whole trip'
+                              : 'Day ${_day! + 1}',
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          _day == null
+                              ? 'Pinch to zoom. Tap a day below for its route.'
+                              : _locatedCount(_day!) < 2
+                                  // A single stop has no drive. Saying so
+                                  // beats showing one pin and letting the
+                                  // reader wonder where the line went.
+                                  ? 'Only one place on this day, so there is '
+                                      'no route to draw.'
+                                  : 'The drive for this day, in order.',
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[600]),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Container(
+                color: Colors.grey.shade100,
+                width: double.infinity,
+                child: Stack(
+                  children: [
+                    InteractiveViewer(
+                      maxScale: 8,
+                      clipBehavior: Clip.hardEdge,
+                      child: Center(
+                          child: Image.memory(_image, fit: BoxFit.contain)),
+                    ),
+                    if (_loading)
+                      const Center(child: CircularProgressIndicator()),
+                  ],
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            SizedBox(
+              height: 150,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_day != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: TextButton.icon(
+                          onPressed: () => _show(null),
+                          icon: const Icon(Icons.arrow_back, size: 15),
+                          label: const Text('Back to the whole trip',
+                              style: TextStyle(fontSize: 12)),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ),
+                    for (var d = 0; d < days.length; d++)
+                      if (days[d].items.isNotEmpty)
+                        InkWell(
+                          onTap: () => _show(d),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            color: _day == d
+                                ? Colors.blue.shade50
+                                : Colors.transparent,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 18,
+                                  height: 18,
+                                  alignment: Alignment.center,
+                                  margin: const EdgeInsets.only(top: 1),
+                                  decoration: BoxDecoration(
+                                    color: _colour(d),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Text(_mark(d),
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white)),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Day ${d + 1}  ·  '
+                                    '${days[d].items.map((i) => widget.placeName(i.title)).join(', ')}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right,
+                                    size: 16, color: Colors.grey[400]),
+                              ],
+                            ),
+                          ),
+                        ),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: widget.onOpenInMaps,
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Open in Google Maps'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+

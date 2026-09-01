@@ -596,19 +596,52 @@ class PythonADKService {
     }
   }
 
+  /// Real places near a city matching what is being typed.
+  ///
+  /// Used where an answer has to resolve later -- somewhere the route will be
+  /// anchored on, or a name a schedule has to read aloud.
+  Future<List<Map<String, dynamic>>?> suggestPlaces({
+    required String text,
+    required String city,
+  }) async {
+    if (text.trim().length < 3 || city.trim().isEmpty) return const [];
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/place/suggest'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'text': text, 'city': city}),
+          )
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return null;
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      return [
+        for (final place in (body['places'] as List?) ?? const [])
+          if (place is Map<String, dynamic>) place
+      ];
+    } catch (e) {
+      debugPrint('suggestPlaces failed: $e');
+      return null;
+    }
+  }
+
   /// The whole trip on one map, pinned and coloured by day.
   ///
   /// Returns the image itself rather than a URL: the Maps key stays on the
   /// server, so the browser is handed a picture and never something it could
   /// be billed for.
-  Future<List<int>?> tripMap(List<Map<String, dynamic>> days) async {
+  Future<List<int>?> tripMap(
+    List<Map<String, dynamic>> days, {
+    bool route = false,
+  }) async {
     if (days.isEmpty) return null;
     try {
       final response = await http
           .post(
             Uri.parse('$_baseUrl/api/trip/map'),
             headers: {'Content-Type': 'application/json'},
-            body: json.encode({'days': days}),
+            body: json.encode(
+                {'days': days, 'detailed': true, 'route': route}),
           )
           .timeout(const Duration(seconds: 30));
       if (response.statusCode != 200) return null;
