@@ -1426,6 +1426,36 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               style: TextStyle(fontSize: 11, color: Colors.grey[600]),
             ),
           ],
+          // Shown while the lookup runs, not only once it returns.
+          //
+          // Flights are fetched when the sheet opens, but a route nobody has
+          // looked up before takes tens of seconds -- and with nothing in this
+          // space until they arrived, the sheet looked empty and people
+          // started typing to make something happen. The typing was not what
+          // fetched them; the wait simply had no face.
+          if (_isFlight && _flightOptions.isEmpty && _loadingFlights) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Finding flights on this route…',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'A route we have not seen before takes a few seconds.',
+              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            ),
+          ],
+
           if (_isFlight && _flightOptions.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
