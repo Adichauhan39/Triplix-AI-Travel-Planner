@@ -6534,13 +6534,6 @@ class _BudgetTabState extends State<BudgetTab>
         backgroundColor: AppConfig.primaryColor,
         foregroundColor: Colors.white,
         elevation: 0,
-        actions: [
-          IconButton(
-            tooltip: 'Invite someone to share these costs',
-            icon: const Icon(Icons.person_add_alt),
-            onPressed: _shareBudgetLink,
-          ),
-        ],
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: Colors.white,
@@ -6553,12 +6546,56 @@ class _BudgetTabState extends State<BudgetTab>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: Column(
         children: [
-          _buildChatTab(),
-          _buildOverviewTab(),
-          _buildExpensesTab(),
+          // A bar, not an app-bar action.
+          //
+          // The icon lived in the app bar and could never be seen: the home
+          // screen paints an "Account" chip at top: 10, right: 12 across every
+          // tab, exactly where the action sits. It was rendered and covered.
+          //
+          // On every tab rather than only Expenses, because somebody wanting
+          // to invite a friend does not first think "that will be under
+          // Expenses" -- and this is the thing people kept failing to find.
+          Material(
+            color: Colors.blue.shade50,
+            child: InkWell(
+              onTap: _shareBudgetLink,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.person_add_alt,
+                        size: 18, color: AppConfig.primaryColor),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Invite someone to share these costs',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Text('Copy link',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppConfig.primaryColor)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildChatTab(),
+                _buildOverviewTab(),
+                _buildExpensesTab(),
+              ],
+            ),
+          ),
         ],
       ),
       floatingActionButton: _tabController.index == 2
