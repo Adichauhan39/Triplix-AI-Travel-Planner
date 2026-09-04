@@ -218,7 +218,7 @@ def book_accommodation(accommodation_name: str, location: str, check_in: str, ch
     }
 
 hotel_booking = Agent(
-    model="gemini-2.5-flash",
+    model="gemini-3.7-flash",
     name="hotel_booking",
     description="Specialized agent for booking hotels and hostels with comprehensive options from CSV data and swipe-to-discover feature",
     instruction="""You are an accommodation booking assistant for India specializing in Hotels and Hostels.

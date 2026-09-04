@@ -519,7 +519,7 @@ def _run_dynamic_replan(
         itinerary_text=itinerary_text,
     )
 
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.7-flash')
     response_obj = model.generate_content(
         _build_dynamic_replan_prompt(message, itinerary_text, refreshed_state, recent_chat)
     )
@@ -1739,7 +1739,7 @@ Return JSON with 'results' array. Each {mode} must have:
 
 Format: {{"results": [{{"id": "FL001", "provider": "Air India", ...}}]}}"""
 
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.7-flash')
     response = model.generate_content(prompt)
     text = response.text
 
@@ -2518,7 +2518,7 @@ async def analyze_photo(request: Request):
 
 Return ONLY the JSON object, no markdown or extra text."""
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
 
         if USE_VERTEX_AI:
             image_part = Part.from_data(data=image_bytes, mime_type="image/jpeg")
@@ -2575,7 +2575,7 @@ def handle_agent_request(request: AgentRequest):
         print(f"   Page: {page}")
         
         # Simple conversational response using Gemini
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         
         # Build context for Gemini
         user_prefs = context.get('user_preferences', {})
@@ -2938,7 +2938,7 @@ Return a JSON array of destination cities. Each must have:
 Return ONLY the JSON array, no markdown."""
 
             try:
-                dest_model = genai.GenerativeModel('gemini-2.5-flash')
+                dest_model = genai.GenerativeModel('gemini-3.7-flash')
                 dest_response = dest_model.generate_content(dest_prompt)
                 dest_text = dest_response.text.strip()
                 if dest_text.startswith("```"):
@@ -3159,7 +3159,7 @@ Return ONLY the JSON array, no markdown."""
                 
                 if translate_city:
                     try:
-                        t_model = genai.GenerativeModel('gemini-2.5-flash')
+                        t_model = genai.GenerativeModel('gemini-3.7-flash')
                         t_prompt = f"""Generate 8 essential travel survival phrases for {translate_city}, India.
 Return as a formatted list with: English | Local translation | Pronunciation
 Categories: greeting, food, directions, emergency, shopping"""
@@ -3192,7 +3192,7 @@ Categories: greeting, food, directions, emergency, shopping"""
                     # Check if asking for packing list
                     if 'pack' in message_lower:
                         try:
-                            p_model = genai.GenerativeModel('gemini-2.5-flash')
+                            p_model = genai.GenerativeModel('gemini-3.7-flash')
                             p_prompt = f"""Create a smart packing list for a trip to {insight_city}, India. 
 Be concise. Group by: Essentials, Clothing, Destination-specific items. Use bullet points."""
                             p_resp = p_model.generate_content(p_prompt)
@@ -3210,7 +3210,7 @@ Be concise. Group by: Essentials, Clothing, Destination-specific items. Use bull
                             print(f"   Packing list error: {e}")
                     else:
                         try:
-                            i_model = genai.GenerativeModel('gemini-2.5-flash')
+                            i_model = genai.GenerativeModel('gemini-3.7-flash')
                             i_prompt = f"""Best time to visit {insight_city}, India. Be concise (5-6 lines max).
 Include: best months, avoid months, weather summary, one budget tip."""
                             i_resp = i_model.generate_content(i_prompt)
@@ -3231,7 +3231,7 @@ Include: best months, avoid months, weather summary, one budget tip."""
             is_comparison = any(k in message_lower for k in ['vs', 'versus', 'compare', 'which is better', 'difference between', 'or should i', 'better option'])
             if is_comparison:
                 try:
-                    c_model = genai.GenerativeModel('gemini-2.5-flash')
+                    c_model = genai.GenerativeModel('gemini-3.7-flash')
                     c_prompt = f"""Compare the following for a traveler planning a trip in India.
 
 User's question: {message}
@@ -3418,7 +3418,26 @@ def handle_manager_request(request: AgentRequest):
             allocation = budget_info.get('allocation', {})
             spent_by_category = budget_info.get('spent_by_category', {})
 
-            budget_prompt = f"""You are Triplix Budget Manager AI. You ONLY help with budget and expense management. Do NOT generate itineraries or travel plans.
+            # What was already said. Without it every message was judged on its
+            # own, and a reply to a question could not be understood as one --
+            # "for cab" is meaningless unless you can see the line above it.
+            history = context.get('history') or []
+            transcript = "\n".join(
+                f"{'Traveller' if str(h.get('role')) == 'user' else 'You'}: "
+                f"{str(h.get('text') or '')[:300]}"
+                for h in history[-8:]
+                if str(h.get('text') or '').strip()
+            )
+
+            conversation = (
+                f"\n\nThe conversation so far:\n{transcript}\n\n"
+                "Read it before replying. If the traveller has already given "
+                "an amount or a category, do not ask for it again -- take it "
+                "from what they said and confirm what you recorded.\n"
+                if transcript else ""
+            )
+
+            budget_prompt = f"""{conversation}You are Triplix Budget Manager AI. You ONLY help with budget and expense management. Do NOT generate itineraries or travel plans.
 
 User message: "{message}"
 
@@ -3445,7 +3464,7 @@ Instructions:
 Respond as a budget assistant only:"""
 
             print(f"   [BUDGET PAGE] Handling budget-specific request")
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.7-flash')
             response_obj = model.generate_content(budget_prompt)
             ai_response = response_obj.text
 
@@ -3576,7 +3595,7 @@ Respond as a budget assistant only:"""
 Provide the COMPLETE UPDATED itinerary (not just the changes). Make sure it's well-formatted."""
 
             print(f"   Updating existing itinerary...")
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.7-flash')
             response_obj = model.generate_content(prompt)
             ai_response = response_obj.text
 
@@ -3624,7 +3643,7 @@ Format it in a clear, easy-to-read structure with emojis for visual appeal."""
 
             print(f"   Creating new itinerary from {from_location} to {to_location}...")
 
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.7-flash')
             response_obj = model.generate_content(prompt)
             ai_response = response_obj.text
 
@@ -5156,7 +5175,7 @@ Return JSON with 'hotels' array. Each hotel must have:
 
 Format: {{"hotels": [{{"name": "...", "type": "...", "price_per_night": 5000, "rating": 4.2, "amenities": ["WiFi", "Pool"], "description": "...", "why_recommended": "...", "nearby_attractions": ["Attraction1", "Attraction2"]}}]}}"""
         
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         text = response.text
         
@@ -5215,7 +5234,7 @@ def get_hotel_images(request: HotelSearchRequest):
         Format: ["luxury hotel lobby {city}", "{hotel_name} presidential suite", "{hotel_name} infinity pool", ...]
         """
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         text = response.text
 
@@ -5401,7 +5420,7 @@ Format your response in a friendly, conversational tone."""
         print(f"   📝 Generated prompt with {len(message_parts)} preference points")
         
         # Call Gemini AI for analysis
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         ai_response = response.text
         
@@ -5496,7 +5515,7 @@ Budget context: {budget_range}
 - If budget is "luxury/high": Premium flights, AC First class trains, luxury buses"""
 
         # Call Gemini AI
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-3.7-flash")
         response = model.generate_content(transport_prompt)
         response_text = response.text.strip()
         
@@ -6724,7 +6743,7 @@ def translate_text(request: dict):
             prompt = f"""Translate the following text to {target_lang}. Return ONLY the translation, nothing else.
 
 Text: {text}"""
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.7-flash')
             response = model.generate_content(prompt)
             return {
                 "status": "success",
@@ -6750,7 +6769,7 @@ Return JSON format:
 Categories: greeting, food, directions, emergency, shopping, transport, hotel
 Include phrases for: hello, thank you, how much, where is, help, water, food, bathroom, hotel, train station, airport, too expensive, delicious, please, goodbye"""
 
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.7-flash')
             response = model.generate_content(prompt)
             text_resp = response.text
             if '```json' in text_resp:
@@ -6803,7 +6822,7 @@ Return JSON: {{"document_type": "visa/passport/hotel_confirmation/etc", "key_inf
         prompt = prompts.get(analysis_type, prompts['landmark'])
 
         # Use Gemini multimodal with image URL
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
 
         # Download image for Gemini
         import urllib.request
@@ -6858,7 +6877,7 @@ Return JSON:
   "avg_daily_budget": {{"budget": "₹1500-2500", "mid_range": "₹3000-6000", "luxury": "₹8000-15000"}}
 }}"""
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         text_resp = response.text
         if '```json' in text_resp:
@@ -6900,7 +6919,7 @@ Return JSON:
   "pro_tips": ["tip1", "tip2"]
 }}"""
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         text_resp = response.text
         if '```json' in text_resp:
@@ -6973,7 +6992,7 @@ Example format:
 
 Return ONLY the JSON array, no markdown."""
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         text_resp = response.text
         if '```json' in text_resp:
@@ -7088,7 +7107,7 @@ Example for Goa:
 - "Nightlife" (icon: nightlife): ["Club", "Pub", "Beach Shack", "Casino", "Live Music"]
 """
 
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-3.7-flash")
         response = model.generate_content(prompt)
         text = response.text.strip()
 
@@ -7267,7 +7286,7 @@ RULES:
 - For Indian cities, include the state (e.g., "Hyderabad, Telangana, India")
 """
 
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-3.7-flash")
         response = model.generate_content(prompt)
         text = response.text.strip()
 
@@ -7376,7 +7395,7 @@ def get_destination_suggestions(
                 )
 
                 def _generate_ai_suggestions():
-                    model = genai.GenerativeModel("gemini-2.5-flash")
+                    model = genai.GenerativeModel("gemini-3.7-flash")
                     return model.generate_content(ai_prompt)
 
                 # Hard timeout so typing does not feel blocked by LLM latency.
@@ -7722,7 +7741,7 @@ Return a JSON array of objects, each with these fields:
 
 Return ONLY the JSON array, no markdown."""
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.7-flash')
         response = model.generate_content(prompt)
         text = response.text.strip()
         if text.startswith("```"):

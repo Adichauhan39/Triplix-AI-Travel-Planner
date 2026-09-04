@@ -223,7 +223,7 @@ def get_destinations(location: str, tool_context: Any) -> dict:
 
 # Create the destination info agent
 destination_info = Agent(
-    model="gemini-2.5-flash",
+    model="gemini-3.7-flash",
     name="destination_info",
     description="Comprehensive destination planning agent with swipe-to-discover feature for exploring Indian destinations",
     instruction="""You are a knowledgeable travel planning guide specializing in Indian destinations with comprehensive planning information from a detailed CSV database.

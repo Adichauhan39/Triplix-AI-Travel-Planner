@@ -6174,6 +6174,22 @@ class _BudgetTabState extends State<BudgetTab>
         context: {
           'page': 'budget',
           'action': 'budget_chat',
+          // The conversation so far, which was not being sent at all.
+          //
+          // Each turn arrived alone, so "for cab" reached the model with no
+          // memory of "i paid 500 rs" one line earlier, and the only sensible
+          // thing left to ask was how much the cab had cost. The model was not
+          // being forgetful; it had never been told.
+          //
+          // The last eight turns, not the whole history: a budget conversation
+          // refers back a line or two, and sending an hour of chat on every
+          // message costs tokens for context nobody is using.
+          'history': [
+            for (final m in _chatMessages
+                .sublist(_chatMessages.length > 8 ? _chatMessages.length - 8 : 0))
+              {'role': m['sender'] == 'user' ? 'user' : 'assistant',
+               'text': m['message'] ?? ''}
+          ],
           'budget_info': {
             'total_budget': _totalBudget,
             'group_size': _groupSize,
