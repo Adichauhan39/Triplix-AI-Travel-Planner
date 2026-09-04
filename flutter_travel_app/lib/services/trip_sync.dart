@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/trip_plan.dart';
@@ -32,6 +31,63 @@ class TripPerson {
   /// Shown under the name when we have both, so the owner can tell two people
   /// with the same first name apart.
   String get subtitle => name.isNotEmpty && email.isNotEmpty ? email : '';
+}
+
+/// Something one traveller paid for.
+class TripExpense {
+  const TripExpense({
+    required this.id,
+    required this.by,
+    required this.byName,
+    required this.paise,
+    required this.note,
+    required this.category,
+    required this.at,
+    this.status = 'approved',
+  });
+
+  factory TripExpense.fromDoc(String id, Map<String, dynamic> data) {
+    final stamp = data['at'];
+    return TripExpense(
+      id: id,
+      by: (data['by'] ?? '').toString(),
+      byName: (data['by_name'] ?? '').toString().trim(),
+      paise: (data['paise'] as num?)?.toInt() ?? 0,
+      note: (data['note'] ?? '').toString(),
+      category: (data['category'] ?? 'Other').toString(),
+      // Rows written before approval existed are treated as approved: they
+      // were already counted, and quietly un-counting them would change what
+      // people believe they owe.
+      status: (data['status'] ?? 'approved').toString(),
+      // A row written on this device has no server time for a moment. Treated
+      // as "just now" so it sorts to the top rather than to 1970.
+      at: stamp is Timestamp ? stamp.toDate() : DateTime.now(),
+    );
+  }
+
+  final String id;
+  final String by;
+  final String byName;
+  final int paise;
+  final String note;
+  final String category;
+  final DateTime at;
+
+  /// 'pending', 'approved' or 'rejected'.
+  final String status;
+
+  bool get isApproved => status == 'approved';
+  bool get isPending => status == 'pending';
+
+  double get rupees => paise / 100;
+
+  /// Who to show as having paid. Falls back to a shortened uid rather than an
+  /// invented name, so two unnamed people stay distinguishable.
+  String label(String? currentUid) {
+    if (by == currentUid) return 'You';
+    if (byName.isNotEmpty) return byName;
+    return by.length > 8 ? '${by.substring(0, 8)}…' : by;
+  }
 }
 
 /// One suggested change to a trip, waiting on its owner.
@@ -104,26 +160,18 @@ enum TripAccess {
 /// talking to each other while they do it.
 class TripSync {
   TripSync({FirebaseFirestore? store, FirebaseAuth? auth})
-      : _store = store ?? defaultStore(),
+      : _store = store ?? FirebaseFirestore.instance,
         _auth = auth ?? FirebaseAuth.instance;
 
-  /// The database this project actually has.
-  ///
-  /// Firestore was created as a *named* database rather than the unnamed
-  /// `(default)` one, and `FirebaseFirestore.instance` is hard-wired to
-  /// `(default)`. Pointing at the wrong database does not raise: reads simply
-  /// return nothing and writes go somewhere nobody looks, which is the kind of
-  /// failure that gets diagnosed as "sharing doesn't work" for a week.
-  ///
-  /// Named here so it is one line to change, and so the name lives beside the
-  /// explanation of why it is needed.
-  static const String databaseId = 'kdvitisharedb';
-
-  static FirebaseFirestore defaultStore() =>
-      FirebaseFirestore.instanceFor(
-        app: Firebase.app(),
-        databaseId: databaseId,
-      );
+  // No databaseId here on purpose.
+  //
+  // The first project's Firestore was created as a *named* database, so this
+  // had to call instanceFor(databaseId: ...) -- and pointing at the wrong
+  // database raises nothing at all: reads return empty and writes go where
+  // nobody looks. The project this now runs against uses the unnamed
+  // `(default)` database, which FirebaseFirestore.instance already resolves,
+  // so the special case is gone rather than left lying around to be got wrong
+  // later.
 
   final FirebaseFirestore _store;
   final FirebaseAuth _auth;
@@ -218,7 +266,7 @@ class TripSync {
   ///
   /// Reading needs no request. Someone sent a link can look at the trip
   /// immediately; asking is only for changing it.
-  Future<bool> requestAccess(String tripId) async {
+  Future<bool> requestAccess(String tripId, {String nickname = ''}) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty) return false;
     try {
@@ -251,7 +299,12 @@ class TripSync {
       final profiles =
           Map<String, dynamic>.from(snapshot.data()?['profiles'] as Map? ?? {});
       profiles[uid] = {
-        'name': (user?.displayName ?? '').trim(),
+        // What they asked to be called wins over the Google account name:
+        // half a group is "Aditya Chauhan" to Google and "Adi" to everybody
+        // who knows them, and the owner is about to read this in a list.
+        'name': nickname.trim().isNotEmpty
+            ? nickname.trim()
+            : (user?.displayName ?? '').trim(),
         'email': (user?.email ?? '').trim(),
       };
 
@@ -390,6 +443,154 @@ class TripSync {
   bool isForeignEdit(Map<String, dynamic> data) {
     final by = (data['updated_by'] ?? '').toString();
     return by.isNotEmpty && by != _uid;
+  }
+
+  // --- Expenses -------------------------------------------------------
+  //
+  // Written directly, unlike plan changes. Recording what you paid is a fact
+  // about you, not a request about somebody else's trip.
+
+  CollectionReference<Map<String, dynamic>> _expensesOf(String tripId) =>
+      _trips.doc(tripId).collection('expenses');
+
+  /// Records something somebody paid for.
+  Future<bool> addExpense({
+    required String tripId,
+    required int paise,
+    required String note,
+    String category = 'Other',
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty || paise <= 0) return false;
+    try {
+      final user = _auth.currentUser;
+      // The owner's own rows need no approval: waiting for yourself checks
+      // nothing. Everyone else's wait.
+      final trip = await fetch(tripId);
+      final isOwner = (trip?['owner'] ?? '').toString() == uid;
+      await _expensesOf(tripId).add({
+        'by': uid,
+        // The payer's name travels with the row, so a settlement can say
+        // "Priya owes you" without a second lookup per line.
+        'by_name': (user?.displayName ?? '').trim(),
+        'paise': paise,
+        'note': note.trim(),
+        'category': category,
+        'status': isOwner ? 'approved' : 'pending',
+        'at': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.addExpense failed: $e');
+      return false;
+    }
+  }
+
+  /// What this person wants to be called on this trip.
+  ///
+  /// Google's account name is a reasonable default and a poor answer for a
+  /// group of friends -- half of them are "Aditya Chauhan" to Google and
+  /// "Adi" to everybody else. Stored per trip, because the right nickname
+  /// depends on who else is in it.
+  Future<bool> setNickname({
+    required String tripId,
+    required String nickname,
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty || nickname.trim().isEmpty) return false;
+    try {
+      final doc = _trips.doc(tripId);
+      final snapshot = await doc.get();
+      if (!snapshot.exists) return false;
+      final profiles =
+          Map<String, dynamic>.from(snapshot.data()?['profiles'] as Map? ?? {});
+      final existing =
+          Map<String, dynamic>.from(profiles[uid] as Map? ?? const {});
+      existing['name'] = nickname.trim();
+      profiles[uid] = existing;
+      // Only this person's entry changes, which is what the rules allow.
+      await doc.update({'profiles': profiles});
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.setNickname failed: $e');
+      return false;
+    }
+  }
+
+  /// The name this person goes by on this trip, if they have set one.
+  Future<String> nickname(String tripId) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty) return '';
+    final data = await fetch(tripId);
+    final profiles = (data?['profiles'] as Map?) ?? const {};
+    final mine = (profiles[uid] as Map?)?.cast<String, dynamic>();
+    return (mine?['name'] ?? '').toString().trim();
+  }
+
+  /// Accepts or rejects somebody's expense. Owner only; the rules agree.
+  Future<bool> settleExpense({
+    required String tripId,
+    required String expenseId,
+    required bool approved,
+  }) async {
+    if (tripId.isEmpty || expenseId.isEmpty) return false;
+    try {
+      await _expensesOf(tripId)
+          .doc(expenseId)
+          .update({'status': approved ? 'approved' : 'rejected'});
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.settleExpense failed: $e');
+      return false;
+    }
+  }
+
+  /// Whether the signed-in person owns this trip.
+  Future<bool> isOwnerOf(String tripId) async {
+    final data = await fetch(tripId);
+    return data != null && (data['owner'] ?? '').toString() == _uid;
+  }
+
+  Future<bool> removeExpense(String tripId, String expenseId) async {
+    if (tripId.isEmpty || expenseId.isEmpty) return false;
+    try {
+      await _expensesOf(tripId).doc(expenseId).delete();
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.removeExpense failed: $e');
+      return false;
+    }
+  }
+
+  /// Every expense on the trip, newest first, updating live.
+  Stream<List<TripExpense>> expenses(String tripId) {
+    if (tripId.isEmpty) return const Stream<List<TripExpense>>.empty();
+    return _expensesOf(tripId).snapshots().map((snapshot) {
+      final rows = snapshot.docs
+          .map((doc) => TripExpense.fromDoc(doc.id, doc.data()))
+          .toList();
+      // Sorted here rather than in the query: a serverTimestamp is null for a
+      // moment on the device that wrote it, and ordering on it server-side
+      // makes a row people just added jump about as it settles.
+      rows.sort((a, b) => b.at.compareTo(a.at));
+      return rows;
+    }).handleError((Object e) {
+      debugPrint('TripSync.expenses failed: $e');
+    });
+  }
+
+  /// Who is sharing the cost: everyone with edit access, including the owner.
+  Future<List<TripPerson>> members(String tripId) async {
+    final data = await fetch(tripId);
+    if (data == null) return const [];
+    final profiles = (data['profiles'] as Map?) ?? const {};
+    return [
+      for (final uid in (data['members'] as List?) ?? const [])
+        TripPerson.from(
+          uid.toString(),
+          (profiles[uid.toString()] as Map?)?.cast<String, dynamic>(),
+        )
+    ];
   }
 
   // --- Proposals ------------------------------------------------------

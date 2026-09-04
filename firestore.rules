@@ -39,6 +39,24 @@ service cloud.firestore {
           && request.auth.uid in resource.data.members;
       }
 
+      // Used by both sub-collections below, so it lives at the trip level
+      // rather than being declared twice and drifting.
+      function tripOwner() {
+        return signedIn()
+          && get(/databases/$(database)/documents/trips/$(tripId))
+               .data.owner == request.auth.uid;
+      }
+
+      // Membership read from the trip document, for use inside the
+      // sub-collections. isMember() above cannot serve there: in a
+      // sub-collection `resource` is the expense, not the trip.
+      function tripMember() {
+        return signedIn()
+          && request.auth.uid in
+               get(/databases/$(database)/documents/trips/$(tripId))
+                 .data.members;
+      }
+
       function changed() {
         return request.resource.data.diff(resource.data).affectedKeys();
       }
@@ -88,7 +106,20 @@ service cloud.firestore {
 
       // The owner may do anything to their own trip, including approving a
       // request or removing someone.
-      allow update: if isOwner() || memberEdit() || asksForAccess();
+      // Setting your own name on the trip. Separate from asking for access:
+      // somebody already approved still needs to be able to say what they are
+      // called, and memberEdit deliberately forbids touching profiles so an
+      // editor cannot rename anybody else.
+      function setsOwnName() {
+        return signedIn()
+          && changed().hasOnly(['profiles'])
+          && request.resource.data.profiles
+               .diff(resource.data.get('profiles', {}))
+               .affectedKeys().hasOnly([request.auth.uid]);
+      }
+
+      allow update: if isOwner() || memberEdit() || asksForAccess()
+        || setsOwnName();
 
       allow delete: if isOwner();
 
@@ -98,13 +129,70 @@ service cloud.firestore {
       // Everyone else proposes, and the owner accepts or rejects -- so there is
       // no concurrent write to the plan, no conflict to resolve, and no rule
       // that has to work out which parts of a document a collaborator touched.
-      match /proposals/{proposalId} {
+      // What people spent, and who paid it.
+      //
+      // Deliberately not proposals. A change to somebody else's plan needs
+      // their agreement; "I paid 800 for the taxi" is a fact about the person
+      // writing it, and making them wait for approval to record their own
+      // spending would be absurd. So anyone in the trip may add a row, and
+      // may only touch their own.
+      match /expenses/{expenseId} {
 
-        function tripOwner() {
-          return signedIn()
-            && get(/databases/$(database)/documents/trips/$(tripId))
-                 .data.owner == request.auth.uid;
+        function paidByCaller() {
+          return request.resource.data.by == request.auth.uid;
         }
+
+        allow read: if signedIn();
+
+        // Nobody approves their own money.
+        //
+        // Membership already limits who can post, but a member's account can
+        // be taken over, and an expense that lands straight in the settlement
+        // changes what everybody else owes. The owner sees each one first, so
+        // a wrong or invented row is caught before it moves any money.
+        //
+        // The owner's own rows are approved as they are written: waiting for
+        // yourself is not a check on anything.
+
+        // Only somebody in the split may add to it.
+        //
+        // signedIn() alone let anyone holding the link file an expense, while
+        // the settlement divides the total between members only -- so their
+        // money would be shared out among everybody else and never come back
+        // to them. Reading a trip is open; putting money into its accounts is
+        // not.
+        //
+        // Signed with the author's own uid, and a positive amount: a negative
+        // expense is a refund, which is a different thing and not one this
+        // settles.
+        allow create: if tripMember()
+          && paidByCaller()
+          && request.resource.data.paise is int
+          && request.resource.data.paise > 0
+          && (request.resource.data.status == 'pending'
+              || (tripOwner()
+                  && request.resource.data.status == 'approved'));
+
+        // Your own row, and it stays yours -- reassigning an expense to
+        // somebody else would change what they owe without their knowing.
+        // The owner decides an expense's fate. Anyone else may correct their
+        // own row, but cannot approve it -- the status is the one field they
+        // may not touch, which is the whole point.
+        allow update: if tripOwner()
+          || (tripMember()
+              && resource.data.by == request.auth.uid
+              && request.resource.data.by == resource.data.by
+              && request.resource.data.status == resource.data.status
+              && request.resource.data.paise is int
+              && request.resource.data.paise > 0);
+
+        // The trip owner can also remove a row, so a trip is not stuck with
+        // an entry from somebody who has left.
+        allow delete: if signedIn()
+          && (resource.data.by == request.auth.uid || tripOwner());
+      }
+
+      match /proposals/{proposalId} {
 
         // Readable by anyone who can read the trip, so a contributor can see
         // that their suggestion is still waiting rather than resubmitting it.

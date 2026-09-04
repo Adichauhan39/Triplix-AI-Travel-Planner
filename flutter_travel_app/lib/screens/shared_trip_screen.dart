@@ -138,9 +138,56 @@ class _SharedTripScreenState extends State<SharedTripScreen> {
     ));
   }
 
+  /// Asks what to be called, then asks the owner for access.
+  ///
+  /// The name comes first because it is what the owner sees when deciding,
+  /// and what every expense will be filed under afterwards. A list of Google
+  /// account names is not how a group of friends refers to itself.
+  Future<String?> _askNickname() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('What should we call you?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Shown to the trip owner, and beside anything you pay for.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: 'Adi'),
+              onSubmitted: (v) => Navigator.pop(dialogContext, v.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, ''),
+            child: const Text('Use my account name'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _requestAccess() async {
+    final nickname = await _askNickname();
+    // Dismissed rather than answered: they have not asked for anything yet.
+    if (!mounted || nickname == null) return;
+
     setState(() => _asking = true);
-    final ok = await _sync.requestAccess(widget.tripId);
+    final ok = await _sync.requestAccess(widget.tripId, nickname: nickname);
     if (!mounted) return;
     setState(() => _asking = false);
     if (ok) {

@@ -13,10 +13,15 @@ import '../models/hotel.dart';
 import '../services/python_adk_service.dart';
 import '../services/voice_input_service.dart';
 import '../services/trip_photo_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
+import '../services/trip_sync.dart';
+import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../widgets/triplix_logo.dart';
 import 'trip_plan_screen.dart';
 import '../widgets/plan_quick_edit.dart';
+import '../widgets/trip_expenses.dart';
 import 'bookings_screen.dart';
 import 'mock_booking_screen.dart';
 import 'route_map_screen.dart';
@@ -6513,6 +6518,13 @@ class _BudgetTabState extends State<BudgetTab>
         backgroundColor: AppConfig.primaryColor,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'Invite someone to share these costs',
+            icon: const Icon(Icons.person_add_alt),
+            onPressed: _shareBudgetLink,
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: Colors.white,
@@ -6916,7 +6928,83 @@ class _BudgetTabState extends State<BudgetTab>
   }
 
   // ─── Expenses Tab ───
+  /// Copies the link that lets other people join this trip and its spending.
+  ///
+  /// In the app bar rather than inside the Expenses tab: somebody wanting to
+  /// invite a friend does not think "that will be under Expenses", and an
+  /// action hidden one tab deep may as well not exist.
+  Future<void> _shareBudgetLink() async {
+    final tripId = context.read<TripPlanProvider>().tripId;
+    if (tripId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Plan a trip first - spending is shared per trip.'),
+      ));
+      return;
+    }
+    if (FirebaseAuth.instance.currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Sign in first, so people know whose trip this is.'),
+      ));
+      return;
+    }
+
+    // Published as part of sharing, so the link leads somewhere. Without it
+    // the first person to open it finds nothing there.
+    final plan = context.read<TripPlanProvider>().plan;
+    if (plan != null) {
+      await TripSync().publish(tripId: tripId, plan: plan);
+    }
+    await Clipboard.setData(ClipboardData(text: TripSync.shareLink(tripId)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Link copied. They are asked their name, then you '
+          'approve them before anything counts.'),
+    ));
+  }
+
   Widget _buildExpensesTab() {
+    // Shared spending first: it is the part other people can see and add to,
+    // and the part that answers who owes whom. The list below it is whatever
+    // this device logged through the chat, which nobody else can see.
+    final tripId = context.watch<TripPlanProvider>().tripId;
+    if (tripId.isNotEmpty) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          TripExpenses(tripId: tripId),
+          if (_expenses.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            const Text('Logged on this device',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              'Added through the chat, and not shared with anyone.',
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 8),
+            for (final e in _expenses)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        (e['title'] ?? e['category'] ?? 'Expense').toString(),
+                      ),
+                    ),
+                    Text(
+                      'RS ' +
+                          ((e['amount'] as num?) ?? 0).toStringAsFixed(2),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      );
+    }
+
     if (_expenses.isEmpty) {
       return Center(
         child: Column(
