@@ -1,8 +1,19 @@
 {
-  "firestore": [
-    {
-      "database": "kdvitisharedb",
-      "rules": "firestore.rules"
-    }
-  ]
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "hosting": {
+    "public": "flutter_travel_app/build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
 }

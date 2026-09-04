@@ -27,46 +27,46 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyABpbx_kAtJ7rwcZ0uONIUoebgOvEmNIXM',
-    appId: '1:966084332372:web:53c3883b85e4b4504756c1',
-    messagingSenderId: '966084332372',
-    projectId: 'triplix-831cc',
-    authDomain: 'triplix-831cc.firebaseapp.com',
-    storageBucket: 'triplix-831cc.firebasestorage.app',
-    measurementId: 'G-L1BQQHZS66',
+    apiKey: 'AIzaSyAmkY4Ax_cpbHZnDcM5hMbemyydo1AwZsY',
+    appId: '1:444257486007:web:7fe54d56a994424396f932',
+    messagingSenderId: '444257486007',
+    projectId: 'triplix-ai',
+    authDomain: 'triplix-ai.firebaseapp.com',
+    storageBucket: 'triplix-ai.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAkl_3cuB3eFKoy6wPjqVJARlJXCGhrTr0',
-    appId: '1:966084332372:android:9c9c02ff8b4e1fc54756c1',
-    messagingSenderId: '966084332372',
-    projectId: 'triplix-831cc',
-    storageBucket: 'triplix-831cc.firebasestorage.app',
+    apiKey: 'AIzaSyCS6hU858PM84_88pNbBrb3_JmhE2XjmeA',
+    appId: '1:444257486007:android:fcc35b045149410796f932',
+    messagingSenderId: '444257486007',
+    projectId: 'triplix-ai',
+    storageBucket: 'triplix-ai.firebasestorage.app',
   );
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyAVX1mHaWq9lzVbctOO6_RTyn1fBV3uvCg',
-    appId: '1:966084332372:ios:d300eca0c36023fa4756c1',
-    messagingSenderId: '966084332372',
-    projectId: 'triplix-831cc',
-    storageBucket: 'triplix-831cc.firebasestorage.app',
+    apiKey: 'AIzaSyAALFmznubu3-rYgZCJeNGiidGS0dVtkWQ',
+    appId: '1:444257486007:ios:0e120520afa6389596f932',
+    messagingSenderId: '444257486007',
+    projectId: 'triplix-ai',
+    storageBucket: 'triplix-ai.firebasestorage.app',
+    iosClientId: '444257486007-5fado9d54tjes3r67kp5dcei1f88qj4h.apps.googleusercontent.com',
     iosBundleId: 'com.example.flutterTravelApp',
   );
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyAVX1mHaWq9lzVbctOO6_RTyn1fBV3uvCg',
-    appId: '1:966084332372:ios:d300eca0c36023fa4756c1',
-    messagingSenderId: '966084332372',
-    projectId: 'triplix-831cc',
-    storageBucket: 'triplix-831cc.firebasestorage.app',
+    apiKey: 'AIzaSyAALFmznubu3-rYgZCJeNGiidGS0dVtkWQ',
+    appId: '1:444257486007:ios:0e120520afa6389596f932',
+    messagingSenderId: '444257486007',
+    projectId: 'triplix-ai',
+    storageBucket: 'triplix-ai.firebasestorage.app',
+    iosClientId: '444257486007-5fado9d54tjes3r67kp5dcei1f88qj4h.apps.googleusercontent.com',
     iosBundleId: 'com.example.flutterTravelApp',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyABpbx_kAtJ7rwcZ0uONIUoebgOvEmNIXM',
-    appId: '1:966084332372:web:c2f2c9cc868212674756c1',
-    messagingSenderId: '966084332372',
-    projectId: 'triplix-831cc',
-    authDomain: 'triplix-831cc.firebaseapp.com',
-    storageBucket: 'triplix-831cc.firebasestorage.app',
-    measurementId: 'G-K62LB1N6EH',
+    apiKey: 'AIzaSyAmkY4Ax_cpbHZnDcM5hMbemyydo1AwZsY',
+    appId: '1:444257486007:web:d3cc5050a3e425d796f932',
+    messagingSenderId: '444257486007',
+    projectId: 'triplix-ai',
+    authDomain: 'triplix-ai.firebaseapp.com',
+    storageBucket: 'triplix-ai.firebasestorage.app',
   );
 }

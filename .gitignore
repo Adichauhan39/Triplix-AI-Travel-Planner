@@ -110,3 +110,6 @@ Desktop.ini
 
 # The standalone Firebase CLI: 227MB, downloaded per machine, not source.
 tools/firebase.exe
+
+# Firebase CLI deploy cache.
+.firebase/
