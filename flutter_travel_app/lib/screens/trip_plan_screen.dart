@@ -18,7 +18,6 @@ import '../services/python_adk_service.dart';
 import '../services/trip_sync.dart';
 import '../widgets/place_detail_sheet.dart';
 import '../widgets/trip_access_requests.dart';
-import '../widgets/trip_expenses.dart';
 import 'shared_trip_screen.dart';
 
 /// The positions of [names], sorted by where each is first named in [notes].
@@ -1474,16 +1473,15 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                     tripId: context.watch<TripPlanProvider>().tripId,
                   ),
                 ),
-                // Shared spending, beside the plan it belongs to. A separate
-                // budget screen would ask people to remember a second place
-                // to go; the taxi they just paid for is on their mind while
-                // they are looking at the day it belonged to.
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                  child: TripExpenses(
-                    tripId: context.watch<TripPlanProvider>().tripId,
-                  ),
-                ),
+                // Spending lives in the Budget tab, not here.
+                //
+                // It was put beside the plan on the reasoning that the taxi
+                // someone just paid for is on their mind while they look at
+                // the day it belonged to. That holds where there is nowhere
+                // else -- but there is a Budget tab one tap away in the nav
+                // bar, so the ledger rendered twice, and the itinerary opened
+                // onto somebody's arithmetic instead of their trip. Approvals
+                // stay: a person waiting on you is about the plan.
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
                   child: TripProposalReview(
