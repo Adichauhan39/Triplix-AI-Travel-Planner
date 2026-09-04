@@ -258,6 +258,7 @@ class _TripExpensesState extends State<TripExpenses> {
               const SizedBox(height: 8),
               for (final row in approved) _row(row),
               const SizedBox(height: 10),
+              _breakdown(approved),
               _settlement(approved),
             ],
           ],
@@ -305,7 +306,7 @@ class _TripExpensesState extends State<TripExpenses> {
                 children: [
                   Expanded(
                     child: Text(
-                      '${row.note}  ·  ${row.label(_uid)} paid '
+                      '${row.note}  ·  ${_nameOf(row.by, row.byName)} paid '
                       'RS ${row.rupees.toStringAsFixed(2)}',
                       style: const TextStyle(fontSize: 12),
                     ),
@@ -352,7 +353,7 @@ class _TripExpensesState extends State<TripExpenses> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(expense.note, style: const TextStyle(fontSize: 13)),
-                Text('${expense.label(_uid)} paid',
+                Text('${_nameOf(expense.by, expense.byName)} paid',
                     style:
                         TextStyle(fontSize: 11, color: Colors.grey[600])),
               ],
@@ -384,6 +385,151 @@ class _TripExpensesState extends State<TripExpenses> {
     );
   }
 
+  /// One name per person, everywhere on this screen.
+  ///
+  /// TripExpense.label falls back to `by_name` -- the Google account name
+  /// copied onto the row when it was written. The settlement used the trip
+  /// profile instead, so the same person read as "Aditya Chauhan paid" on one
+  /// line and "arjun owes You" three lines below. The nickname they chose for
+  /// this trip wins: it is what the group calls them, and it is what the owner
+  /// approved them under.
+  String _nameOf(String uid, [String fallback = '']) {
+    if (uid == _uid) return 'You';
+    for (final person in _people) {
+      if (person.uid == uid && person.name.isNotEmpty) return person.name;
+    }
+    if (fallback.isNotEmpty) return fallback;
+    for (final person in _people) {
+      if (person.uid == uid) return person.label;
+    }
+    return uid.length > 8 ? '${uid.substring(0, 8)}…' : uid;
+  }
+
+  /// Money as people write it: whole where it is whole, grouped Indian-style.
+  String _rupees(int paise) {
+    final value = paise.abs() / 100;
+    final text = value == value.roundToDouble()
+        ? value.round().toString()
+        : value.toStringAsFixed(2);
+    final parts = text.split('.');
+    var whole = parts[0];
+    if (whole.length > 3) {
+      final last3 = whole.substring(whole.length - 3);
+      var rest = whole.substring(0, whole.length - 3);
+      final groups = <String>[];
+      while (rest.length > 2) {
+        groups.insert(0, rest.substring(rest.length - 2));
+        rest = rest.substring(0, rest.length - 2);
+      }
+      if (rest.isNotEmpty) groups.insert(0, rest);
+      whole = '${groups.join(',')},$last3';
+    }
+    return '₹$whole${parts.length > 1 ? '.${parts[1]}' : ''}';
+  }
+
+  /// The split, shown as columns.
+  ///
+  /// "arjun owes You 900" is a conclusion; this is the working behind it. A
+  /// group splitting a bill wants to check the arithmetic, and a single
+  /// sentence gives them nothing to check.
+  ///
+  /// Balance is what this person has put in beyond their share: positive means
+  /// the group owes them, negative means they owe the group. Every balance
+  /// sums to zero, which is the property that makes the settlement below it
+  /// trustworthy.
+  Widget _breakdown(List<TripExpense> rows) {
+    if (_people.length < 2) return const SizedBox.shrink();
+
+    final paid = <String, int>{};
+    for (final row in rows) {
+      paid[row.by] = (paid[row.by] ?? 0) + row.paise;
+    }
+    final total = rows.fold<int>(0, (sum, r) => sum + r.paise);
+    final shares = fairShares(total, [for (final p in _people) p.uid]);
+
+    // The people who paid most first: the ones owed money are the ones who
+    // care most about this table being right.
+    final people = [..._people]..sort((a, b) =>
+        (paid[b.uid] ?? 0).compareTo(paid[a.uid] ?? 0));
+
+    Widget cell(String text,
+            {bool bold = false, Color? color, TextAlign align = TextAlign.right}) =>
+        Text(
+          text,
+          textAlign: align,
+          style: TextStyle(
+            fontSize: 12,
+            color: color,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+          ),
+        );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Table(
+        columnWidths: const {
+          0: FlexColumnWidth(2.2),
+          1: FlexColumnWidth(1.4),
+          2: FlexColumnWidth(1.4),
+          3: FlexColumnWidth(1.5),
+        },
+        children: [
+          TableRow(
+            children: [
+              cell('Who', bold: true, align: TextAlign.left),
+              cell('Paid', bold: true),
+              cell('Share', bold: true),
+              cell('Balance', bold: true),
+            ],
+          ),
+          for (final person in people)
+            TableRow(
+              children: () {
+                final put = paid[person.uid] ?? 0;
+                final share = shares[person.uid] ?? 0;
+                final balance = put - share;
+                final color = balance == 0
+                    ? Colors.grey.shade600
+                    : balance > 0
+                        ? Colors.green.shade700
+                        : Colors.red.shade700;
+                return [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: cell(_nameOf(person.uid), align: TextAlign.left),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: cell(_rupees(put)),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: cell(_rupees(share)),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: cell(
+                      balance == 0
+                          ? '—'
+                          : '${balance > 0 ? '+' : '−'}${_rupees(balance)}',
+                      bold: true,
+                      color: color,
+                    ),
+                  ),
+                ];
+              }(),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Who owes whom, or nothing at all when it is already even.
   Widget _settlement(List<TripExpense> rows) {
     if (_people.length < 2) {
@@ -403,11 +549,7 @@ class _TripExpensesState extends State<TripExpenses> {
       people: [for (final p in _people) p.uid],
     );
 
-    String name(String uid) {
-      if (uid == _uid) return 'You';
-      final person = _people.where((p) => p.uid == uid);
-      return person.isEmpty ? 'Someone' : person.first.label;
-    }
+    String name(String uid) => _nameOf(uid);
 
     return Container(
       padding: const EdgeInsets.all(10),

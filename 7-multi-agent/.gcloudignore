@@ -1,0 +1,32 @@
+# What not to send to Cloud Build.
+#
+# Without this the upload is 361MB, almost all of it a local virtualenv the
+# container has no use for -- the image installs its own from requirements.txt.
+
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Secrets. These are passed to the service as environment variables instead, so
+# they are never baked into an image that others can pull.
+.env
+.env.*
+
+# The soundtrack. 4.8MB, and its redistribution licence is still unconfirmed --
+# a film rendered on the server would be silent rather than infringing. Put it
+# back deliberately once the licence is checked.
+music/
+
+# Warm caches. They rebuild themselves on the server, and shipping a snapshot
+# would mean the container serves photo URLs that expired before it deployed.
+.photo_cache.json
+.flight_schedules.json
+*.log
+
+# Local scratch
+*.mp4
+*.png
+*.pdf
