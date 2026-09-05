@@ -559,6 +559,40 @@ class TripSync {
     }
   }
 
+  /// Corrects an amount or a note on an expense.
+  ///
+  /// Yours to correct if you wrote it; anything, if you own the trip. A
+  /// member's correction goes back to 'pending': the amount is what the
+  /// settlement divides, so changing it after approval would move money the
+  /// owner never agreed to. Theirs stay approved -- they are the approver.
+  Future<bool> editExpense({
+    required String tripId,
+    required String expenseId,
+    required int paise,
+    required String note,
+    String? category,
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
+    if (paise <= 0) return false;
+    try {
+      final trip = await fetch(tripId);
+      final isOwner = (trip?['owner'] ?? '').toString() == uid;
+      await _expensesOf(tripId).doc(expenseId).update({
+        'paise': paise,
+        'note': note.trim(),
+        if (category != null) 'category': category,
+        // Written explicitly rather than left alone, because the rule for a
+        // member requires exactly this value.
+        if (!isOwner) 'status': 'pending',
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.editExpense failed: $e');
+      return false;
+    }
+  }
+
   /// Whether the signed-in person owns this trip.
   Future<bool> isOwnerOf(String tripId) async {
     final data = await fetch(tripId);

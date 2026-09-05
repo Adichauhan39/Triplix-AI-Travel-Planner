@@ -178,11 +178,17 @@ service cloud.firestore {
         // The owner decides an expense's fate. Anyone else may correct their
         // own row, but cannot approve it -- the status is the one field they
         // may not touch, which is the whole point.
+        //
+        // A member's correction lands as 'pending' rather than keeping the
+        // status it had. Requiring the status merely to be unchanged let
+        // somebody have 1,000 approved and then quietly make it 10,000: the
+        // settlement moved, and the owner never saw the new number. A changed
+        // amount is a changed claim, so it goes back into the queue.
         allow update: if tripOwner()
           || (tripMember()
               && resource.data.by == request.auth.uid
               && request.resource.data.by == resource.data.by
-              && request.resource.data.status == resource.data.status
+              && request.resource.data.status == 'pending'
               && request.resource.data.paise is int
               && request.resource.data.paise > 0);
 

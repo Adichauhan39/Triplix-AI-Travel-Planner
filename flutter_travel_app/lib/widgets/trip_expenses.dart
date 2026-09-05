@@ -352,7 +352,6 @@ class _TripExpensesState extends State<TripExpenses> {
   }
 
   Widget _row(TripExpense expense) {
-    final mine = expense.by == _uid;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
@@ -371,16 +370,151 @@ class _TripExpensesState extends State<TripExpenses> {
           Text('₹${expense.rupees.toStringAsFixed(2)}',
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w600)),
-          // Only your own rows are yours to remove; the rules enforce the
-          // same thing, so a hidden button is not the only guard.
-          if (mine)
-            IconButton(
-              icon: Icon(Icons.close, size: 16, color: Colors.grey[500]),
-              onPressed: () =>
-                  _sync.removeExpense(widget.tripId, expense.id),
-            ),
+          // Edit as well as delete, and the owner may act on anyone's row.
+          //
+          // This was a bare cross that deleted immediately, so a wrong amount
+          // could only be destroyed and retyped -- and destroying it changes
+          // what everybody owes. The menu offers the correction first, and
+          // asks before removing anything.
+          if (_expenseMenu(expense) case final menu?) menu,
         ],
       ),
+    );
+  }
+
+  /// Corrects an expense. Yours if you wrote it; anything if you own the trip.
+  Future<void> _editExpense(TripExpense row) async {
+    final amount =
+        TextEditingController(text: (row.paise / 100).toStringAsFixed(2));
+    final note = TextEditingController(text: row.note);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Correct this expense'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: note,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'What was it'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: amount,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  labelText: 'Amount', prefixText: '₹ '),
+              onSubmitted: (_) => Navigator.pop(dialogContext, true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || saved != true) return;
+
+    final rupees = double.tryParse(amount.text.trim());
+    if (rupees == null || rupees <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Enter an amount greater than zero.'),
+      ));
+      return;
+    }
+
+    final tidy = await _confirmNote(
+        note.text.trim().isEmpty ? 'Expense' : note.text.trim());
+    if (!mounted || tidy == null) return;
+
+    final ok = await _sync.editExpense(
+      tripId: widget.tripId,
+      expenseId: row.id,
+      paise: rupeesToPaise(rupees),
+      note: tidy.note,
+      category: tidy.category,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (_isOwner
+              ? 'Updated.'
+              : 'Updated. A changed amount goes back to the owner.')
+          : 'That could not be saved. Check your connection.'),
+    ));
+  }
+
+  /// Removes an expense, after asking.
+  ///
+  /// Confirmed because it is other people's arithmetic too: a row vanishing
+  /// changes what everybody owes, and there is no undo.
+  Future<void> _deleteExpense(TripExpense row) async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete this expense?'),
+        content: const Text(
+            'This changes what everyone owes, and it cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep it'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || sure != true) return;
+    final ok = await _sync.removeExpense(widget.tripId, row.id);
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('That could not be deleted. Check your connection.'),
+    ));
+  }
+
+  /// The edit/delete menu, shown only to people the rules would actually let
+  /// through: the row's author, or the trip's owner. Offering it to anybody
+  /// else would produce a button that fails.
+  Widget? _expenseMenu(TripExpense row) {
+    final mine = row.by == _uid;
+    if (!mine && !_isOwner) return null;
+    return PopupMenuButton<String>(
+      tooltip: 'Change this expense',
+      icon: Icon(Icons.more_vert, size: 16, color: Colors.grey.shade600),
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'edit',
+          child: Row(children: [
+            Icon(Icons.edit_outlined, size: 17),
+            SizedBox(width: 10),
+            Text('Edit'),
+          ]),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: Row(children: [
+            Icon(Icons.delete_outline, size: 17, color: Colors.red),
+            SizedBox(width: 10),
+            Text('Delete', style: TextStyle(color: Colors.red)),
+          ]),
+        ),
+      ],
+      onSelected: (choice) =>
+          choice == 'edit' ? _editExpense(row) : _deleteExpense(row),
     );
   }
 
@@ -532,60 +666,80 @@ class _TripExpensesState extends State<TripExpenses> {
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
         border: Border.all(color: Colors.grey.shade200),
       ),
-      child: Table(
-        columnWidths: const {
-          0: FlexColumnWidth(2.2),
-          1: FlexColumnWidth(1.4),
-          2: FlexColumnWidth(1.4),
-          3: FlexColumnWidth(1.5),
-        },
-        children: [
-          TableRow(
+      // One column per person, rather than one row each.
+      //
+      // A group reads this by comparing people, and columns put the two
+      // numbers being compared side by side under a name. It also scales the
+      // right way for a phone: another traveller is another narrow column,
+      // where another row pushed the table taller than the screen.
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: MediaQuery.of(context).size.width - 60,
+          ),
+          child: Table(
+            defaultColumnWidth: const IntrinsicColumnWidth(flex: 1),
+            columnWidths: const {0: IntrinsicColumnWidth()},
             children: [
-              cell('Who', bold: true, align: TextAlign.left),
-              cell('Paid', bold: true),
-              cell('Share', bold: true),
-              cell('Balance', bold: true),
+              TableRow(
+                children: [
+                  cell('', align: TextAlign.left),
+                  for (final person in people)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: cell(_nameOf(person.uid), bold: true),
+                    ),
+                ],
+              ),
+              TableRow(
+                children: [
+                  cell('Paid', bold: true, align: TextAlign.left),
+                  for (final person in people)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: cell(_rupees(paid[person.uid] ?? 0)),
+                    ),
+                ],
+              ),
+              TableRow(
+                children: [
+                  cell('Share', bold: true, align: TextAlign.left),
+                  for (final person in people)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: cell(_rupees(shares[person.uid] ?? 0)),
+                    ),
+                ],
+              ),
+              TableRow(
+                children: [
+                  cell('Balance', bold: true, align: TextAlign.left),
+                  for (final person in people)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: () {
+                        final balance = (paid[person.uid] ?? 0) -
+                            (shares[person.uid] ?? 0);
+                        return cell(
+                          balance == 0
+                              ? '—'
+                              : '${balance > 0 ? '+' : '−'}'
+                                  '${_rupees(balance)}',
+                          bold: true,
+                          color: balance == 0
+                              ? Colors.grey.shade600
+                              : balance > 0
+                                  ? Colors.green.shade700
+                                  : Colors.red.shade700,
+                        );
+                      }(),
+                    ),
+                ],
+              ),
             ],
           ),
-          for (final person in people)
-            TableRow(
-              children: () {
-                final put = paid[person.uid] ?? 0;
-                final share = shares[person.uid] ?? 0;
-                final balance = put - share;
-                final color = balance == 0
-                    ? Colors.grey.shade600
-                    : balance > 0
-                        ? Colors.green.shade700
-                        : Colors.red.shade700;
-                return [
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: cell(_nameOf(person.uid), align: TextAlign.left),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: cell(_rupees(put)),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: cell(_rupees(share)),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: cell(
-                      balance == 0
-                          ? '—'
-                          : '${balance > 0 ? '+' : '−'}${_rupees(balance)}',
-                      bold: true,
-                      color: color,
-                    ),
-                  ),
-                ];
-              }(),
-            ),
-        ],
+        ),
       ),
     );
   }

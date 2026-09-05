@@ -751,6 +751,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               decoration: rejected ? TextDecoration.lineThrough : null,
             ),
           ),
+          if (_expenseMenu(row) case final menu?) menu,
         ],
       ),
     );
@@ -768,6 +769,142 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     ));
   }
 
+
+  /// Corrects an expense. Yours if you wrote it; anything if you own the trip.
+  Future<void> _editExpense(TripExpense row) async {
+    final amount =
+        TextEditingController(text: (row.paise / 100).toStringAsFixed(2));
+    final note = TextEditingController(text: row.note);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Correct this expense'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: note,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'What was it'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: amount,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  labelText: 'Amount', prefixText: '₹ '),
+              onSubmitted: (_) => Navigator.pop(dialogContext, true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || saved != true) return;
+
+    final rupees = double.tryParse(amount.text.trim());
+    if (rupees == null || rupees <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Enter an amount greater than zero.'),
+      ));
+      return;
+    }
+
+    final tidy = await _confirmNote(
+        note.text.trim().isEmpty ? 'Expense' : note.text.trim());
+    if (!mounted || tidy == null) return;
+
+    final ok = await _sync.editExpense(
+      tripId: widget.tripId,
+      expenseId: row.id,
+      paise: rupeesToPaise(rupees),
+      note: tidy.note,
+      category: tidy.category,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? ((_access == TripAccess.owner)
+              ? 'Updated.'
+              : 'Updated. A changed amount goes back to the owner.')
+          : 'That could not be saved. Check your connection.'),
+    ));
+  }
+
+  /// Removes an expense, after asking.
+  ///
+  /// Confirmed because it is other people's arithmetic too: a row vanishing
+  /// changes what everybody owes, and there is no undo.
+  Future<void> _deleteExpense(TripExpense row) async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete this expense?'),
+        content: Text(
+            'This changes what everyone owes, and it cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep it'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || sure != true) return;
+    final ok = await _sync.removeExpense(widget.tripId, row.id);
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('That could not be deleted. Check your connection.'),
+    ));
+  }
+
+  /// The edit/delete menu, shown only to people the rules would actually let
+  /// through: the row's author, or the trip's owner. Offering it to anybody
+  /// else would produce a button that fails.
+  Widget? _expenseMenu(TripExpense row) {
+    final mine = row.by == FirebaseAuth.instance.currentUser?.uid;
+    if (!mine && !(_access == TripAccess.owner)) return null;
+    return PopupMenuButton<String>(
+      tooltip: 'Change this expense',
+      icon: Icon(Icons.more_vert, size: 16, color: Colors.grey.shade600),
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'edit',
+          child: Row(children: [
+            Icon(Icons.edit_outlined, size: 17),
+            SizedBox(width: 10),
+            Text('Edit'),
+          ]),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: Row(children: [
+            Icon(Icons.delete_outline, size: 17, color: Colors.red),
+            SizedBox(width: 10),
+            Text('Delete', style: TextStyle(color: Colors.red)),
+          ]),
+        ),
+      ],
+      onSelected: (choice) =>
+          choice == 'edit' ? _editExpense(row) : _deleteExpense(row),
+    );
+  }
 
   /// Offers a spelling correction before an expense is filed.
   ///
