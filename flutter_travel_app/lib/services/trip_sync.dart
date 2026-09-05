@@ -468,11 +468,18 @@ class TripSync {
       _trips.doc(tripId).collection('expenses');
 
   /// Records something somebody paid for.
+  /// Records what somebody paid.
+  ///
+  /// [onBehalfOf] lets the trip's owner enter what another traveller paid --
+  /// one person usually ends up holding the whole group's receipts, and
+  /// requiring each of them to type their own rows means the ledger is never
+  /// finished. Only the owner may do it, and the row still says whose it is.
   Future<bool> addExpense({
     required String tripId,
     required int paise,
     required String note,
     String category = 'Other',
+    String? onBehalfOf,
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || paise <= 0) return false;
@@ -482,15 +489,35 @@ class TripSync {
       // nothing. Everyone else's wait.
       final trip = await fetch(tripId);
       final isOwner = (trip?['owner'] ?? '').toString() == uid;
+
+      // Somebody else's row is the owner's to write and nobody else's. Asked
+      // for by a member, the write would be refused by the rules; refusing it
+      // here means they are told rather than left watching a silent failure.
+      final payer = (onBehalfOf != null && onBehalfOf.isNotEmpty && isOwner)
+          ? onBehalfOf
+          : uid;
+      if (onBehalfOf != null && onBehalfOf.isNotEmpty && !isOwner) return false;
+
+      // The name that travels with the row has to be the payer's, not the
+      // typist's -- otherwise the owner entering Bulla's taxi would file it
+      // under their own name and the settlement would read back wrongly.
+      final profiles = (trip?['profiles'] as Map?) ?? const {};
+      final payerName = payer == uid
+          ? (user?.displayName ?? '').trim()
+          : ((profiles[payer] as Map?)?['name'] ?? '').toString().trim();
+
       await _expensesOf(tripId).add({
-        'by': uid,
+        'by': payer,
         // The payer's name travels with the row, so a settlement can say
         // "Priya owes you" without a second lookup per line.
-        'by_name': (user?.displayName ?? '').trim(),
+        'by_name': payerName,
         'paise': paise,
         'note': note.trim(),
         'category': category,
         'status': isOwner ? 'approved' : 'pending',
+        // Kept so a row entered by somebody else is not mistaken later for
+        // one the payer typed themselves.
+        if (payer != uid) 'entered_by': uid,
         'at': FieldValue.serverTimestamp(),
       });
       return true;

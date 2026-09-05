@@ -15,6 +15,8 @@ import '../services/voice_input_service.dart';
 import '../services/trip_photo_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
+import '../services/expense_message.dart';
+import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
@@ -6211,7 +6213,7 @@ class _BudgetTabState extends State<BudgetTab>
       _tryParseBudgetFromMessage(message);
       // Check if AI detected an expense
       final expenseBefore = _expenses.length;
-      _tryParseExpenseFromMessage(message);
+      unawaited(_tryParseExpenseFromMessage(message));
       final expenseAdded = _expenses.length > expenseBefore;
 
       setState(() {
@@ -6243,7 +6245,7 @@ class _BudgetTabState extends State<BudgetTab>
       // Fallback: handle locally
       _tryParseBudgetFromMessage(message);
       final expenseBefore = _expenses.length;
-      _tryParseExpenseFromMessage(message);
+      unawaited(_tryParseExpenseFromMessage(message));
       final expenseAdded = _expenses.length > expenseBefore;
 
       setState(() {
@@ -6294,34 +6296,67 @@ class _BudgetTabState extends State<BudgetTab>
     }
   }
 
-  void _tryParseExpenseFromMessage(String message) {
-    // Pattern 1: "spent 2000 on hotel" / "paid 500 for lunch"
-    final expenseMatch = RegExp(
-            r'(?:spent|paid|expense|cost|charged)\s*(?:rs\.?|₹)?\s*(\d[\d,]*)\s*(?:on|for)\s+(.+)',
-            caseSensitive: false)
-        .firstMatch(message);
-    // Pattern 2: "1000 rs for accommodation" / "₹2000 for food" / "1000 for hotel"
-    final altMatch = RegExp(
-            r'(?:rs\.?|₹)?\s*(\d[\d,]*)\s*(?:rs\.?|₹|rupees?)?\s*(?:on|for)\s+(.+)',
-            caseSensitive: false)
-        .firstMatch(message);
+  /// Files what a chat message says, in the shared ledger as well as here.
+  ///
+  /// This used to add a map to a local list and stop. The chat would answer
+  /// "Expense recorded! Paid by: Bulla" and nothing had been recorded anywhere
+  /// anybody else could see -- not in Firestore, not against Bulla, not in the
+  /// settlement. The reply was describing an intention rather than a fact.
+  ///
+  /// Two hazards, both handled by refusing rather than guessing: a message
+  /// with no clear amount and purpose is not an expense (most messages in a
+  /// budget chat are questions), and a payer whose name matches nobody on the
+  /// trip is not filed against a stranger.
+  Future<void> _tryParseExpenseFromMessage(String message) async {
+    final spoken = readExpense(message);
+    if (spoken == null) return;
 
-    final match = expenseMatch ?? altMatch;
-    if (match != null) {
-      final amount = double.tryParse(match.group(1)!.replaceAll(',', ''));
-      final desc = match.group(2)!.trim();
-      if (amount != null && amount > 0) {
-        final category = _inferCategory(desc);
+    final category = _inferCategory(spoken.description);
+
+    // The local list still drives the charts on the Overview tab.
+    setState(() {
+      _expenses.add({
+        'amount': spoken.rupees,
+        'description': spoken.description,
+        'category': category,
+        'date': DateTime.now().toIso8601String(),
+      });
+    });
+
+    final tripId = context.read<TripPlanProvider>().tripId;
+    if (tripId.isEmpty || FirebaseAuth.instance.currentUser == null) return;
+
+    // Who paid. A name nobody on the trip answers to leaves this null, and the
+    // expense is filed against the person typing -- which is what "spent 2000
+    // on hotel" means anyway.
+    String? payerUid;
+    if (spoken.payer != null) {
+      final sync = TripSync();
+      final people = await sync.members(tripId);
+      payerUid = matchPerson(spoken.payer, {
+        for (final person in people) person.uid: person.name,
+      });
+      if (payerUid == null && mounted) {
+        // Said out loud. Silently filing Bulla's taxi under your own name
+        // would leave the settlement wrong and nobody knowing why.
         setState(() {
-          _expenses.add({
-            'amount': amount,
-            'description': desc,
-            'category': category,
-            'date': DateTime.now().toIso8601String(),
+          _chatMessages.add({
+            'sender': 'ai',
+            'message': 'I could not find "${spoken.payer}" on this trip, so I '
+                'recorded it under your name. Invite them and set their '
+                'nickname, then it can go against them.',
           });
         });
       }
     }
+
+    await TripSync().addExpense(
+      tripId: tripId,
+      paise: rupeesToPaise(spoken.rupees),
+      note: spoken.description,
+      category: category,
+      onBehalfOf: payerUid,
+    );
   }
 
   String _inferCategory(String description) {
