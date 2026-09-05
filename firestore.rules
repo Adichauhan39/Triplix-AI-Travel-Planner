@@ -204,7 +204,7 @@ service cloud.firestore {
         allow create: if signedIn()
           && request.resource.data.by == request.auth.uid
           && request.resource.data.state == 'open'
-          && request.resource.data.kind in ['add', 'remove'];
+          && request.resource.data.kind in ['add', 'remove', 'move'];
 
         // Only the owner decides. A contributor cannot approve their own
         // suggestion, which is the entire point of the model.

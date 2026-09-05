@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../config/app_config.dart';
+import '../services/expense_words.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 
@@ -175,10 +176,18 @@ class _TripExpensesState extends State<TripExpenses> {
       return;
     }
 
+    // Spelling checked before it lands in a list several people read. Offered
+    // rather than applied: it is somebody's money, and a note relabelled
+    // behind their back is worse than the typo was.
+    final typed = note.text.trim().isEmpty ? 'Expense' : note.text.trim();
+    final tidy = await _confirmNote(typed);
+    if (!mounted || tidy == null) return;
+
     final ok = await _sync.addExpense(
       tripId: widget.tripId,
       paise: rupeesToPaise(rupees),
-      note: note.text.trim().isEmpty ? 'Expense' : note.text.trim(),
+      note: tidy.note,
+      category: tidy.category,
     );
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -373,6 +382,57 @@ class _TripExpensesState extends State<TripExpenses> {
         ],
       ),
     );
+  }
+
+  /// Offers a spelling correction before an expense is filed.
+  ///
+  /// Returns the note to use, or null if the person backed out. Corrected on
+  /// the device against a small vocabulary rather than by asking a model: an
+  /// expense note is a few words from a stable list, so this settles it
+  /// instantly, offline and for nothing, where a model call would cost a
+  /// request each time and still have to be checked.
+  Future<TidyNote?> _confirmNote(String raw) async {
+    final tidy = tidyNote(raw);
+    if (!tidy.corrected) return tidy;
+
+    final use = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Did you mean?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('You typed "${raw.trim()}".',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+            const SizedBox(height: 10),
+            Row(children: [
+              const Icon(Icons.check, size: 16),
+              const SizedBox(width: 8),
+              Text(tidy.note,
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600)),
+            ]),
+          ],
+        ),
+        actions: [
+          TextButton(
+            // Their words, kept. Somebody's own shorthand is not a mistake.
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text('Keep "${raw.trim()}"'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Use it'),
+          ),
+        ],
+      ),
+    );
+    if (use == null) return null;
+    return use
+        ? tidy
+        : TidyNote(
+            note: raw.trim(), category: tidy.category, corrected: false);
   }
 
   Widget _totals(List<TripExpense> rows) {

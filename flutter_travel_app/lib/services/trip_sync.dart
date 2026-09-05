@@ -98,6 +98,7 @@ class TripProposal {
     required this.dayIndex,
     required this.title,
     required this.by,
+    this.fromDayIndex,
   });
 
   factory TripProposal.fromDoc(String id, Map<String, dynamic> data) =>
@@ -107,22 +108,35 @@ class TripProposal {
         dayIndex: (data['day'] as num?)?.toInt() ?? 0,
         title: (data['title'] ?? '').toString(),
         by: (data['by'] ?? '').toString(),
+        fromDayIndex: (data['from_day'] as num?)?.toInt(),
       );
 
   final String id;
 
-  /// 'add' or 'remove'.
+  /// 'add', 'remove' or 'move'.
   final String kind;
+
+  /// Where it ends up. For a removal, where it currently is.
   final int dayIndex;
   final String title;
   final String by;
 
+  /// Where it is moving from. Null for anything but a move.
+  final int? fromDayIndex;
+
   bool get isAdd => kind == 'add';
+  bool get isMove => kind == 'move';
 
   /// How the change reads to the person deciding on it.
-  String get summary => isAdd
-      ? 'Add $title to Day ${dayIndex + 1}'
-      : 'Remove $title from Day ${dayIndex + 1}';
+  String get summary {
+    if (isMove) {
+      return 'Move $title from Day ${(fromDayIndex ?? 0) + 1} to '
+          'Day ${dayIndex + 1}';
+    }
+    return isAdd
+        ? 'Add $title to Day ${dayIndex + 1}'
+        : 'Remove $title from Day ${dayIndex + 1}';
+  }
 }
 
 /// What the signed-in user may do with a trip.
@@ -632,6 +646,24 @@ class TripSync {
       _propose(tripId, {
         'kind': 'remove',
         'day': dayIndex,
+        'title': title.trim(),
+      });
+
+  /// Suggests moving a place from one day to another.
+  ///
+  /// One proposal, not a removal plus an addition: as two, the owner can
+  /// accept half, and a place that is removed and never re-added has been
+  /// deleted by somebody who asked to move it.
+  Future<bool> proposeMove({
+    required String tripId,
+    required int fromDayIndex,
+    required int dayIndex,
+    required String title,
+  }) =>
+      _propose(tripId, {
+        'kind': 'move',
+        'day': dayIndex,
+        'from_day': fromDayIndex,
         'title': title.trim(),
       });
 

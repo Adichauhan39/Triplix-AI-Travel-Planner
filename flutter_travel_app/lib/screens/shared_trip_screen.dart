@@ -7,6 +7,8 @@ import '../config/app_config.dart';
 import '../models/trip_plan.dart';
 import '../services/auth_service.dart';
 import '../services/python_adk_service.dart';
+import '../services/expense_words.dart';
+import '../services/plan_diff.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 import '../widgets/place_detail_sheet.dart';
@@ -53,6 +55,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   @override
   void dispose() {
     _tabs.dispose();
+    _request.dispose();
     super.dispose();
   }
 
@@ -432,14 +435,25 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                               child: TabBarView(
                                 controller: _tabs,
                                 children: [
-                                  ListView(
-                                    padding: const EdgeInsets.all(16),
+                                  Column(
                                     children: [
-                                      if (pending.isNotEmpty) ...[
-                                        _pendingNote(pending.length),
-                                        const SizedBox(height: 16),
-                                      ],
-                                      ..._days(data!, pending),
+                                      Expanded(
+                                        child: ListView(
+                                          padding: const EdgeInsets.all(16),
+                                          children: [
+                                            if (pending.isNotEmpty) ...[
+                                              _pendingNote(pending.length),
+                                              const SizedBox(height: 16),
+                                            ],
+                                            ..._days(data!, pending),
+                                          ],
+                                        ),
+                                      ),
+                                      // Under the plan, not the ledger: it
+                                      // edits days, and the same box under
+                                      // the money would be answering a
+                                      // question nobody asked there.
+                                      _requestBar(),
                                     ],
                                   ),
                                   ListView(
@@ -754,6 +768,58 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     ));
   }
 
+
+  /// Offers a spelling correction before an expense is filed.
+  ///
+  /// Returns the note to use. Corrected on the device against a small
+  /// vocabulary rather than by asking a model: an expense note is a few words
+  /// from a stable list, so this settles it instantly, offline and for
+  /// nothing, where a model call would cost a request each time and still
+  /// need checking.
+  Future<TidyNote?> _confirmNote(String raw) async {
+    final tidy = tidyNote(raw);
+    if (!tidy.corrected) return tidy;
+
+    final keep = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Did you mean?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('You typed "${raw.trim()}".',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+            const SizedBox(height: 10),
+            Row(children: [
+              const Icon(Icons.check, size: 16),
+              const SizedBox(width: 8),
+              Text(tidy.note,
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600)),
+            ]),
+          ],
+        ),
+        actions: [
+          TextButton(
+            // Their words, kept. Somebody's own shorthand is not a mistake.
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text('Keep "${raw.trim()}"'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Use it'),
+          ),
+        ],
+      ),
+    );
+    if (keep == null) return null; // dismissed: file nothing
+    return keep
+        ? tidy
+        : TidyNote(
+            note: raw.trim(), category: tidy.category, corrected: false);
+  }
+
   /// Adds what this person paid.
   ///
   /// Rupees in, paise stored: money is kept as whole paise everywhere so a
@@ -811,10 +877,14 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       return;
     }
 
+    final tidy = await _confirmNote(note.text);
+    if (!mounted || tidy == null) return;
+
     final ok = await _sync.addExpense(
       tripId: widget.tripId,
       paise: rupeesToPaise(rupees),
-      note: note.text.trim(),
+      note: tidy.note,
+      category: tidy.category,
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -824,6 +894,223 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               : 'Added. The trip owner approves it before it counts.')
           : 'That could not be saved. Check your connection.'),
     ));
+  }
+
+  final TextEditingController _request = TextEditingController();
+  bool _applyingRequest = false;
+
+  /// Plain English, turned into proposals.
+  ///
+  /// Runs the same plan adjuster the owner's box runs, which answers with the
+  /// whole plan as it would be afterwards. An owner can take that answer
+  /// directly; a guest cannot, because their edit has to arrive as something
+  /// approved one piece at a time. So the two versions are diffed and the
+  /// difference is filed -- which also means the owner reads "Move the palace
+  /// from Day 1 to Day 2" rather than a replaced itinerary they have to
+  /// compare by eye.
+  Future<void> _sendRequest() async {
+    final text = _request.text.trim();
+    final data = _trip;
+    if (text.isEmpty || _applyingRequest || data == null) return;
+
+    setState(() => _applyingRequest = true);
+
+    final before = _dayTitles(data);
+    final updated = await _adk.adjustPlan(
+      days: (data['days'] as List?)?.cast<Map<String, dynamic>>() ??
+          const <Map<String, dynamic>>[],
+      request: text,
+      destination: (data['destination'] ?? '').toString(),
+    );
+    if (!mounted) return;
+
+    if (updated == null) {
+      setState(() => _applyingRequest = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('That could not be worked out. Try naming the place '
+            'and the day.'),
+      ));
+      return;
+    }
+
+    final after = [
+      for (final day in updated)
+        [
+          for (final item in (day['items'] as List?) ?? const [])
+            if (item is Map<String, dynamic>) (item['title'] ?? '').toString(),
+        ],
+    ];
+
+    final changes = diffPlans(before, after);
+    if (changes.isEmpty) {
+      setState(() => _applyingRequest = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('That would not change anything.'),
+      ));
+      return;
+    }
+
+    // Shown before it is sent. The adjuster is a model, and a guest should
+    // see what is about to go to the owner in their name.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Suggest these changes?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final change in changes.take(8))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      change.kind == 'add'
+                          ? Icons.add_circle_outline
+                          : change.isMove
+                              ? Icons.swap_horiz
+                              : Icons.remove_circle_outline,
+                      size: 16,
+                      color: Colors.grey.shade700,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(_readChange(change),
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                  ],
+                ),
+              ),
+            if (changes.length > 8)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('…and ${changes.length - 8} more',
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.grey.shade600)),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    if (confirmed != true) {
+      setState(() => _applyingRequest = false);
+      return;
+    }
+
+    for (final change in changes) {
+      switch (change.kind) {
+        case 'add':
+          await _sync.proposeAdd(
+            tripId: widget.tripId,
+            dayIndex: change.dayIndex,
+            title: change.title,
+          );
+        case 'remove':
+          await _sync.proposeRemove(
+            tripId: widget.tripId,
+            dayIndex: change.dayIndex,
+            title: change.title,
+          );
+        case 'move':
+          await _sync.proposeMove(
+            tripId: widget.tripId,
+            fromDayIndex: change.fromDayIndex ?? 0,
+            dayIndex: change.dayIndex,
+            title: change.title,
+          );
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _applyingRequest = false;
+      _request.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(_access == TripAccess.owner
+          ? 'Sent. Accept them on your trip page to apply them.'
+          : 'Sent to the owner. They go in when accepted.'),
+    ));
+  }
+
+  String _readChange(PlanChange change) => switch (change.kind) {
+        'add' => 'Add ${change.title} to Day ${change.dayIndex + 1}',
+        'remove' => 'Remove ${change.title} from Day ${change.dayIndex + 1}',
+        _ => 'Move ${change.title} from Day ${(change.fromDayIndex ?? 0) + 1} '
+            'to Day ${change.dayIndex + 1}',
+      };
+
+  /// The plan as plain lists of titles, for comparison.
+  List<List<String>> _dayTitles(Map<String, dynamic> data) => [
+        for (final day in (data['days'] as List?) ?? const [])
+          if (day is Map<String, dynamic>)
+            [
+              for (final item in (day['items'] as List?) ?? const [])
+                if (item is Map<String, dynamic>)
+                  (item['title'] ?? '').toString(),
+            ],
+      ];
+
+  Widget _requestBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(top: BorderSide(color: Colors.grey.shade300)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _request,
+              enabled: !_applyingRequest,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _sendRequest(),
+              decoration: InputDecoration(
+                hintText: 'e.g. move the palace to Day 2',
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _applyingRequest
+              ? const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : IconButton.filled(
+                  onPressed: _sendRequest,
+                  icon: const Icon(Icons.arrow_upward),
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppConfig.primaryColor,
+                  ),
+                ),
+        ],
+      ),
+    );
   }
 
   /// The whole screen, for somebody who is not signed in.
@@ -946,6 +1233,60 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   /// the photographs, the reviews and the question box rather than a name on
   /// a line. Nothing here can change the trip -- the sheet is read-only, and
   /// changes go through the suggestion flow.
+  /// The actions a guest has on one place: the owner's, held for approval.
+  ///
+  /// Shown to anyone signed in, because the proposals rule allows anyone
+  /// signed in to file one. A guest who cannot edit is exactly the person most
+  /// likely to notice that a place is on the wrong day.
+  Widget _placeActions(int dayIndex, String title, int dayCount) {
+    return PopupMenuButton<String>(
+      tooltip: 'Suggest a change',
+      icon: Icon(Icons.more_vert, size: 18, color: Colors.grey.shade600),
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: 'remove',
+          child: Row(children: [
+            Icon(Icons.delete_outline, size: 18),
+            SizedBox(width: 10),
+            Text('Suggest removing'),
+          ]),
+        ),
+        for (var day = 0; day < dayCount; day++)
+          if (day != dayIndex)
+            PopupMenuItem(
+              value: 'move:$day',
+              child: Row(children: [
+                const Icon(Icons.swap_horiz, size: 18),
+                const SizedBox(width: 10),
+                Text('Move to Day ${day + 1}'),
+              ]),
+            ),
+      ],
+      onSelected: (choice) async {
+        final ok = choice == 'remove'
+            ? await _sync.proposeRemove(
+                tripId: widget.tripId,
+                dayIndex: dayIndex,
+                title: title,
+              )
+            : await _sync.proposeMove(
+                tripId: widget.tripId,
+                fromDayIndex: dayIndex,
+                dayIndex: int.parse(choice.split(':')[1]),
+                title: title,
+              );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(ok
+              ? (_access == TripAccess.owner
+                  ? 'Suggested. Accept it on your trip page to apply it.'
+                  : 'Suggested. It goes in when the owner accepts it.')
+              : 'That could not be sent. Check your connection.'),
+        ));
+      },
+    );
+  }
+
   Widget _placeRow(String title, String city) {
     final summary = _summaries[title] ?? const {};
     final name = (summary['name'] ?? title).toString();
@@ -1172,8 +1513,16 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                           fontStyle: FontStyle.italic))
                 else
                   for (final item in days[i].items)
-                    _placeRow(item.title,
-                        (data['destination'] ?? '').toString()),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _placeRow(item.title,
+                              (data['destination'] ?? '').toString()),
+                        ),
+                        if (_access != TripAccess.signedOut)
+                          _placeActions(i, item.title, days.length),
+                      ],
+                    ),
                   for (final proposal in pending)
                     if (proposal.dayIndex == i) _pendingRow(proposal),
                   ..._runningOrder(data, days[i]),

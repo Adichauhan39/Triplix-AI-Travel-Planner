@@ -988,14 +988,34 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     final plan = provider.plan;
     if (plan == null) return;
     if (proposal.dayIndex < 0 || proposal.dayIndex >= plan.days.length) return;
+    if (proposal.isMove) {
+      final from = proposal.fromDayIndex ?? -1;
+      if (from < 0 || from >= plan.days.length) return;
+    }
 
-    if (proposal.isAdd) {
+    // Finds a place on a day by the name the plan shows, ignoring the clock
+    // prefix and the case -- the proposal was written against what somebody
+    // read on screen, which is not byte-identical to what is stored.
+    int indexOn(int day, String title) {
+      if (day < 0 || day >= plan.days.length) return -1;
+      return plan.days[day].items.indexWhere((i) =>
+          _placeName(i.title).toLowerCase().trim() ==
+          title.toLowerCase().trim());
+    }
+
+    if (proposal.isMove) {
+      final from = proposal.fromDayIndex ?? -1;
+      final at = indexOn(from, proposal.title);
+      // Gone already, or the day is out of range: the move cannot be applied
+      // as asked, and adding the place to the destination anyway would be
+      // inventing a change nobody proposed.
+      if (at < 0) return;
+      provider.removeItem(from, at);
+      provider.addItems(proposal.dayIndex, [proposal.title]);
+    } else if (proposal.isAdd) {
       provider.addItems(proposal.dayIndex, [proposal.title]);
     } else {
-      final items = plan.days[proposal.dayIndex].items;
-      final at = items.indexWhere(
-          (i) => _placeName(i.title).toLowerCase() ==
-              proposal.title.toLowerCase());
+      final at = indexOn(proposal.dayIndex, proposal.title);
       if (at >= 0) provider.removeItem(proposal.dayIndex, at);
     }
 
