@@ -47,6 +47,12 @@ class LocalStore {
   /// Answers to the gap questions, so the same one is not asked twice.
   static const String keyTripShape = 'triplix.trip_shape';
 
+  /// What Explore found for a city: the resolved name and its interest
+  /// categories. Saved because it is expensive to fetch and cheap to keep --
+  /// re-running it on every launch would be a model call to rebuild something
+  /// that has not changed.
+  static const String keyExplore = 'triplix.explore';
+
   /// Stored under one key per record, with the time it changed.
   static Future<void> save(String key, Object? value) async {
     final prefs = _prefs;

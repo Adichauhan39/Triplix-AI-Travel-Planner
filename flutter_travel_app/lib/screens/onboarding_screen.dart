@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../config/app_config.dart';
 import '../providers/user_preferences_provider.dart';
+import '../services/local_store.dart';
 import '../services/python_adk_service.dart';
 import '../services/google_places_service.dart';
 import '../utils/currency_input_formatter.dart';
@@ -459,7 +460,64 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _originController.text = prefs.origin ?? '';
     _destTopController.text = prefs.destination ?? '';
 
+    // The activities were never lost -- the provider saves them. This screen
+    // just never read them back, so its own set started empty and every chip
+    // rendered unselected. To the user that is indistinguishable from having
+    // their choices deleted.
+    _selectedActivities
+      ..clear()
+      ..addAll(prefs.selectedActivities);
+
+    _restoreExplore();
+
     _hasLoadedTripBasics = true;
+  }
+
+  /// Brings back what Explore found last time.
+  ///
+  /// Without this the screen reopened with the trip basics filled in and
+  /// "Where to next?" still locked, because the gate is _exploreTapped and
+  /// that starts false on every launch. Restoring the categories restores the
+  /// gate with them: the work Explore does has already been done.
+  ///
+  /// Kept per city. Reopening with a different destination typed should not
+  /// show the last city's interests, which would be worse than showing none.
+  void _restoreExplore() {
+    final stored = LocalStore.load(LocalStore.keyExplore);
+    if (stored == null) return;
+
+    final city = (stored['city'] ?? '').toString();
+    if (city.isEmpty) return;
+
+    final destination = (_destTopController.text).trim().toLowerCase();
+    if (destination.isEmpty) return;
+    // The stored city is the resolved one ("Bhilai, Chhattisgarh, India")
+    // while the field may hold what was typed, so either may contain the
+    // other.
+    final known = city.toLowerCase();
+    if (!known.contains(destination) && !destination.contains(known)) return;
+
+    final categories = [
+      for (final entry in (stored['categories'] as List?) ?? const [])
+        if (entry is Map) Map<String, dynamic>.from(entry),
+    ];
+    if (categories.isEmpty) return;
+
+    _aiCategories = categories;
+    _loadedCity = city;
+    _searchController.text = city;
+    _exploreTapped = true;
+    _expanded.add(0);
+  }
+
+  /// Writes down what Explore found, so the next visit does not pay for it
+  /// again.
+  void _rememberExplore() {
+    if (_loadedCity.isEmpty || _aiCategories.isEmpty) return;
+    LocalStore.save(LocalStore.keyExplore, {
+      'city': _loadedCity,
+      'categories': _aiCategories,
+    });
   }
 
   @override
@@ -665,6 +723,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     FocusScope.of(context).unfocus();
     await _fetchCityInterests();
+    _rememberExplore();
   }
 
   // Resolves the typed city into a concrete place and loads its AI-suggested
@@ -1961,6 +2020,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await _scrollSectionIntoView(_section0Key);
 
     await _fetchCityInterests();
+    // Saved after the fetch settles, which covers all three of its arms: the
+    // AI's categories, the fallback list when the response is unusable, and
+    // the fallback when the call throws. A fallback is still worth keeping --
+    // it is what the user saw and chose from.
+    _rememberExplore();
   }
 
   /// Scrolls [key]'s widget to the top of the accordion viewport. Waits a
