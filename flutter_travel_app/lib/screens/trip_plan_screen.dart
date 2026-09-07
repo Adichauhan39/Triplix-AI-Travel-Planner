@@ -11,6 +11,7 @@ import '../config/app_config.dart';
 import '../models/trip_plan.dart';
 import '../models/user_preferences.dart';
 import '../providers/booked_trip_provider.dart';
+import '../providers/export_job_provider.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../services/local_store.dart';
@@ -106,10 +107,13 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// A film takes one to three and a half minutes, so it runs as a job the
   /// server owns and we poll. Holding the request open instead used to time
   /// out at 180s, which meant a five-day trip could not be exported at all.
-  String? _exportJobId;
-  double _exportProgress = 0;
-  String _exportStage = '';
-  Timer? _exportPoll;
+  // One source of truth: the provider. These read through to it rather than
+  // holding copies, because a copy of a value that changes on a timer is a
+  // stale value waiting to be shown.
+  ExportJobProvider get _job => context.read<ExportJobProvider>();
+  String? get _exportJobId => _job.jobId;
+  double get _exportProgress => _job.progress;
+  String get _exportStage => _job.stage;
 
   /// The plan as it was when the current render started, and whether the user
   /// has already been asked about the difference. Asked once per job, not once
@@ -168,12 +172,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// it returns, the original tap has expired and the share is refused with
   /// NotAllowedError. So the work happens on the first tap and the share on a
   /// second one, which is still inside a gesture.
-  Uint8List? _exportBytes;
+  Uint8List? get _exportBytes => _job.bytes;
   String _exportFormat = 'pdf';
 
   @override
   void dispose() {
-    _exportPoll?.cancel();
     _requestController.dispose();
     super.dispose();
   }
@@ -262,17 +265,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// reopening the app -- should find the film waiting rather than starting
   /// again. A job the server has since forgotten simply clears.
   void _resumeExport() {
-    if (_exportJobId != null || _resumedExport) return;
-    _resumedExport = true;
-    final stored = LocalStore.load(LocalStore.keyExportJob);
-    final jobId = (stored?['job_id'] ?? '').toString();
-    if (jobId.isEmpty) return;
-    setState(() {
-      _exportJobId = jobId;
-      _exportFormat = (stored?['format'] ?? 'mp4').toString();
-      _exportStage = 'Still working';
-    });
-    _pollExport();
+    // Nothing to do. The render is watched by ExportJobProvider, which picked
+    // it up when the app started and has been following it ever since --
+    // including while this screen did not exist.
   }
 
   /// Opens the whole trip full screen, pinnable and zoomable.
@@ -1071,9 +1066,6 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   Future<void> _sharePlan(
       TripPlan plan, BookedTripProvider booked, String format) async {
     setState(() {
-      _exportProgress = 0;
-      _exportStage = 'Getting ready';
-      _exportBytes = null;
       _exportEditPrompted = false;
       _exportPlanKey = context.read<TripPlanProvider>().contentKey;
     });
@@ -1130,88 +1122,21 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       };
     }).toList();
 
-    final started = await _adk.startExport(
-        days: days, format: format, destination: plan.destination);
-    if (!mounted) return;
-
-    if (started == null) {
-      setState(() {
-        _exportJobId = null;
-        _error = "Couldn't build the $format — check the server is running.";
-      });
-      return;
-    }
-
-    final jobId = started['job_id'] as String;
-    // Written down before polling begins. The render belongs to the server,
-    // not to this screen, so leaving the page -- or closing the app -- should
-    // not lose it. Without this, pressing Back cancelled the timer in dispose
-    // and the finished film had nowhere to arrive.
-    LocalStore.save(LocalStore.keyExportJob,
-        {'job_id': jobId, 'format': format});
+    // Handed to the provider, which owns the render from here.
+    //
+    // It keeps polling while this screen is gone -- the old timer checked
+    // mounted and cancelled itself, so walking to the Budget tab abandoned the
+    // film and coming back appeared to start it again. The provider also
+    // announces the finished file wherever the person happens to be.
     setState(() {
       _error = null;
       _exportFormat = format;
-      _exportJobId = jobId;
-      _exportStage = 'Getting ready';
     });
-    _pollExport();
-  }
-
-  /// Watches the running export and collects the file when it is done.
-  ///
-  /// Two seconds: fast enough that the figure looks live, slow enough that a
-  /// three-minute render is ~90 requests rather than thousands.
-  void _pollExport() {
-    _exportPoll?.cancel();
-    _exportPoll = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      final jobId = _exportJobId;
-      if (jobId == null) {
-        timer.cancel();
-        return;
-      }
-      final status = await _adk.exportStatus(jobId);
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      // A single failed poll is not a failed render -- the server may just be
-      // busy with the frame it is on. Keep waiting rather than throwing away
-      // work that is still going.
-      if (status == null) return;
-
-      final state = (status['state'] ?? '').toString();
-      if (state == 'error') {
-        timer.cancel();
-        LocalStore.save(LocalStore.keyExportJob, null);
-        setState(() {
-          _exportJobId = null;
-          _error = "Couldn't build the $_exportFormat — ${status['message']}";
-        });
-        return;
-      }
-
-      setState(() {
-        _exportProgress = (status['progress'] as num?)?.toDouble() ?? 0;
-        _exportStage = (status['stage'] ?? '').toString();
-      });
-
-      if (state != 'done') return;
-      timer.cancel();
-
-      final bytes = await _adk.fetchExport(jobId);
-      LocalStore.save(LocalStore.keyExportJob, null);
-      if (!mounted) return;
-      setState(() {
-        _exportJobId = null;
-        if (bytes == null) {
-          _error = 'The file was built but could not be collected.';
-        } else {
-          _error = null;
-          _exportBytes = Uint8List.fromList(bytes);
-        }
-      });
-    });
+    await context.read<ExportJobProvider>().start(
+          days: days,
+          destination: plan.destination,
+          format: format,
+        );
   }
 
   /// Asks what to do when the plan is edited while a video is being made.
@@ -1249,8 +1174,8 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     // The old job is left to finish on the server: it may well be the cache
     // hit for whatever they undo next, and cancelling ffmpeg part-way buys
     // nothing back.
-    _exportPoll?.cancel();
-    setState(() => _exportJobId = null);
+    _job.cancel();
+    setState(() {});
     await _sharePlan(plan, booked, format);
   }
 
@@ -1277,13 +1202,13 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         ],
         text: 'My Triplix trip',
       );
-      if (mounted) setState(() => _exportBytes = null);
+      if (mounted) _job.clearReady();
     } catch (e) {
       if (!mounted) return;
+      _job.clearReady();
       setState(() {
         _error = 'Sharing is blocked here — open the app on your phone, or '
             'use a browser that allows sharing. ($e)';
-        _exportBytes = null;
       });
     }
   }
@@ -1386,6 +1311,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Watched so the progress bar follows the render. The provider ticks on a
+    // timer of its own; without this the bar would only move when something
+    // else happened to rebuild the screen.
+    context.watch<ExportJobProvider>();
     // Watched, not read: a trip filled in after this screen was built has to
     // appear without the user restarting the app.
     final prefs = context.watch<UserPreferencesProvider>().preferences;

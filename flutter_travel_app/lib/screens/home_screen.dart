@@ -19,6 +19,7 @@ import '../services/expense_message.dart';
 import '../services/share_link.dart' as sharing;
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
+import '../providers/export_job_provider.dart';
 import '../providers/trip_plan_provider.dart';
 import '../providers/user_preferences_provider.dart';
 import '../widgets/triplix_logo.dart';
@@ -57,8 +58,34 @@ class _HomeScreenState extends State<HomeScreen> {
     const AccountScreen(),
   ];
 
+  /// Tells the user their film or PDF is ready, wherever they are standing.
+  ///
+  /// A render takes minutes and nobody sits on the trip screen waiting for it.
+  /// The provider raises a flag when a file lands; this shell is the one thing
+  /// always on screen, so this is where it gets said. takeAnnouncement clears
+  /// the flag, so it is said once rather than on every rebuild.
+  void _announceExport() {
+    final job = context.watch<ExportJobProvider>();
+    if (!job.takeAnnouncement()) return;
+    final what = job.format == 'pdf' ? 'PDF' : 'film';
+    // After the frame: showSnackBar during build would be changing the tree
+    // while it is being built.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Your $what is ready.'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Open trip',
+          onPressed: () => setState(() => _selectedIndex = 1),
+        ),
+      ));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    _announceExport();
     return Scaffold(
       floatingActionButton: const PlanQuickEditButton(),
       body: Stack(

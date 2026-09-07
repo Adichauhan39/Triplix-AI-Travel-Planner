@@ -34,6 +34,7 @@ import 'providers/app_provider.dart';
 import 'providers/user_preferences_provider.dart';
 import 'providers/hotel_shortlist_provider.dart';
 import 'providers/booked_trip_provider.dart';
+import 'providers/export_job_provider.dart';
 import 'providers/trip_plan_provider.dart';
 import 'services/local_store.dart';
 import 'services/api_service.dart';
@@ -111,6 +112,11 @@ class MyApp extends StatelessWidget {
         // signal we get, since the redirect never reports back.
         ChangeNotifierProvider(create: (_) => BookedTripProvider()..restore()),
         ChangeNotifierProvider(create: (_) => TripPlanProvider()..restore()),
+        // A film or PDF being built on the server. App-level, because the
+        // render keeps going while the person walks around the app -- and the
+        // "it is ready" message has to find them wherever they ended up.
+        ChangeNotifierProvider(
+            create: (_) => ExportJobProvider()..restore()),
       ],
       child: GetMaterialApp(
         title: AppConfig.appName,
