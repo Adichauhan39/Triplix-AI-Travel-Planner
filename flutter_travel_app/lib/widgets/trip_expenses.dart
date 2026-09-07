@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 
 import '../config/app_config.dart';
 import '../services/expense_words.dart';
+import '../services/expense_columns.dart';
+import 'expense_columns_view.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 
@@ -264,10 +266,26 @@ class _TripExpensesState extends State<TripExpenses> {
                 const SizedBox(height: 12),
               ],
               _totals(approved),
-              const SizedBox(height: 8),
-              for (final row in approved) _row(row),
               const SizedBox(height: 10),
-              _breakdown(approved),
+              // One column per person, their expenses underneath, ending in
+              // what they paid, owe and are up or down by.
+              //
+              // This replaces a flat list plus a separate paid/share/balance
+              // table. A group reads a ledger by person -- working out what
+              // any one of them spent meant scanning every row and adding up
+              // -- and having "Paid" in two places on one screen invited
+              // people to check one against the other.
+              ExpenseColumnsView(
+                expenses: approved,
+                people: _people,
+                me: _uid,
+                // The rules allow the row's author or the trip's owner, so
+                // the menu is offered to exactly those two.
+                canChange: (row) => row.by == _uid || _isOwner,
+                onEdit: _editExpense,
+                onDelete: _deleteExpense,
+              ),
+              const SizedBox(height: 10),
               _settlement(approved),
             ],
           ],
@@ -316,7 +334,7 @@ class _TripExpensesState extends State<TripExpenses> {
                   Expanded(
                     child: Text(
                       '${row.note}  ·  ${_nameOf(row.by, row.byName)} paid '
-                      'RS ${row.rupees.toStringAsFixed(2)}',
+                      '${formatRupees(row.paise)}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -346,37 +364,6 @@ class _TripExpensesState extends State<TripExpenses> {
                 ],
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(TripExpense expense) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(expense.note, style: const TextStyle(fontSize: 13)),
-                Text('${_nameOf(expense.by, expense.byName)} paid',
-                    style:
-                        TextStyle(fontSize: 11, color: Colors.grey[600])),
-              ],
-            ),
-          ),
-          Text('₹${expense.rupees.toStringAsFixed(2)}',
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600)),
-          // Edit as well as delete, and the owner may act on anyone's row.
-          //
-          // This was a bare cross that deleted immediately, so a wrong amount
-          // could only be destroyed and retyped -- and destroying it changes
-          // what everybody owes. The menu offers the correction first, and
-          // asks before removing anything.
-          if (_expenseMenu(expense) case final menu?) menu,
         ],
       ),
     );
@@ -486,38 +473,6 @@ class _TripExpensesState extends State<TripExpenses> {
     ));
   }
 
-  /// The edit/delete menu, shown only to people the rules would actually let
-  /// through: the row's author, or the trip's owner. Offering it to anybody
-  /// else would produce a button that fails.
-  Widget? _expenseMenu(TripExpense row) {
-    final mine = row.by == _uid;
-    if (!mine && !_isOwner) return null;
-    return PopupMenuButton<String>(
-      tooltip: 'Change this expense',
-      icon: Icon(Icons.more_vert, size: 16, color: Colors.grey.shade600),
-      itemBuilder: (context) => const [
-        PopupMenuItem(
-          value: 'edit',
-          child: Row(children: [
-            Icon(Icons.edit_outlined, size: 17),
-            SizedBox(width: 10),
-            Text('Edit'),
-          ]),
-        ),
-        PopupMenuItem(
-          value: 'delete',
-          child: Row(children: [
-            Icon(Icons.delete_outline, size: 17, color: Colors.red),
-            SizedBox(width: 10),
-            Text('Delete', style: TextStyle(color: Colors.red)),
-          ]),
-        ),
-      ],
-      onSelected: (choice) =>
-          choice == 'edit' ? _editExpense(row) : _deleteExpense(row),
-    );
-  }
-
   /// Offers a spelling correction before an expense is filed.
   ///
   /// Returns the note to use, or null if the person backed out. Corrected on
@@ -573,8 +528,8 @@ class _TripExpensesState extends State<TripExpenses> {
     final total = rows.fold<int>(0, (sum, r) => sum + r.paise);
     final heads = _people.isEmpty ? 1 : _people.length;
     return Text(
-      '₹${(total / 100).toStringAsFixed(2)} spent'
-      '${_people.length > 1 ? '  ·  ₹${(total / 100 / heads).toStringAsFixed(2)} each' : ''}',
+      '${formatRupees(total)} spent'
+      '${_people.length > 1 ? '  ·  ${formatRupees(total ~/ heads)} each' : ''}',
       style: TextStyle(fontSize: 12, color: Colors.grey[700]),
     );
   }
@@ -587,162 +542,24 @@ class _TripExpensesState extends State<TripExpenses> {
   /// line and "arjun owes You" three lines below. The nickname they chose for
   /// this trip wins: it is what the group calls them, and it is what the owner
   /// approved them under.
-  String _nameOf(String uid, [String fallback = '']) {
-    if (uid == _uid) return 'You';
-    for (final person in _people) {
-      if (person.uid == uid && person.name.isNotEmpty) return person.name;
-    }
-    if (fallback.isNotEmpty) return fallback;
-    for (final person in _people) {
-      if (person.uid == uid) return person.label;
-    }
-    return uid.length > 8 ? '${uid.substring(0, 8)}…' : uid;
-  }
-
-  /// Money as people write it: whole where it is whole, grouped Indian-style.
-  String _rupees(int paise) {
-    final value = paise.abs() / 100;
-    final text = value == value.roundToDouble()
-        ? value.round().toString()
-        : value.toStringAsFixed(2);
-    final parts = text.split('.');
-    var whole = parts[0];
-    if (whole.length > 3) {
-      final last3 = whole.substring(whole.length - 3);
-      var rest = whole.substring(0, whole.length - 3);
-      final groups = <String>[];
-      while (rest.length > 2) {
-        groups.insert(0, rest.substring(rest.length - 2));
-        rest = rest.substring(0, rest.length - 2);
-      }
-      if (rest.isNotEmpty) groups.insert(0, rest);
-      whole = '${groups.join(',')},$last3';
-    }
-    return '₹$whole${parts.length > 1 ? '.${parts[1]}' : ''}';
-  }
-
-  /// The split, shown as columns.
-  ///
-  /// "arjun owes You 900" is a conclusion; this is the working behind it. A
-  /// group splitting a bill wants to check the arithmetic, and a single
-  /// sentence gives them nothing to check.
-  ///
-  /// Balance is what this person has put in beyond their share: positive means
-  /// the group owes them, negative means they owe the group. Every balance
-  /// sums to zero, which is the property that makes the settlement below it
-  /// trustworthy.
-  Widget _breakdown(List<TripExpense> rows) {
-    if (_people.length < 2) return const SizedBox.shrink();
-
-    final paid = <String, int>{};
-    for (final row in rows) {
-      paid[row.by] = (paid[row.by] ?? 0) + row.paise;
-    }
-    final total = rows.fold<int>(0, (sum, r) => sum + r.paise);
-    final shares = fairShares(total, [for (final p in _people) p.uid]);
-
-    // The people who paid most first: the ones owed money are the ones who
-    // care most about this table being right.
-    final people = [..._people]..sort((a, b) =>
-        (paid[b.uid] ?? 0).compareTo(paid[a.uid] ?? 0));
-
-    Widget cell(String text,
-            {bool bold = false, Color? color, TextAlign align = TextAlign.right}) =>
-        Text(
-          text,
-          textAlign: align,
-          style: TextStyle(
-            fontSize: 12,
-            color: color,
-            fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-          ),
-        );
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      // One column per person, rather than one row each.
-      //
-      // A group reads this by comparing people, and columns put the two
-      // numbers being compared side by side under a name. It also scales the
-      // right way for a phone: another traveller is another narrow column,
-      // where another row pushed the table taller than the screen.
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: MediaQuery.of(context).size.width - 60,
-          ),
-          child: Table(
-            defaultColumnWidth: const IntrinsicColumnWidth(flex: 1),
-            columnWidths: const {0: IntrinsicColumnWidth()},
-            children: [
-              TableRow(
-                children: [
-                  cell('', align: TextAlign.left),
-                  for (final person in people)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: cell(_nameOf(person.uid), bold: true),
-                    ),
-                ],
-              ),
-              TableRow(
-                children: [
-                  cell('Paid', bold: true, align: TextAlign.left),
-                  for (final person in people)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: cell(_rupees(paid[person.uid] ?? 0)),
-                    ),
-                ],
-              ),
-              TableRow(
-                children: [
-                  cell('Share', bold: true, align: TextAlign.left),
-                  for (final person in people)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: cell(_rupees(shares[person.uid] ?? 0)),
-                    ),
-                ],
-              ),
-              TableRow(
-                children: [
-                  cell('Balance', bold: true, align: TextAlign.left),
-                  for (final person in people)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: () {
-                        final balance = (paid[person.uid] ?? 0) -
-                            (shares[person.uid] ?? 0);
-                        return cell(
-                          balance == 0
-                              ? '—'
-                              : '${balance > 0 ? '+' : '−'}'
-                                  '${_rupees(balance)}',
-                          bold: true,
-                          color: balance == 0
-                              ? Colors.grey.shade600
-                              : balance > 0
-                                  ? Colors.green.shade700
-                                  : Colors.red.shade700,
-                        );
-                      }(),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  String _nameOf(String uid, [String fallback = '']) => displayName(
+        uid,
+        me: _uid,
+        people: _people,
+        expenses: fallback.isEmpty
+            ? const []
+            : [
+                TripExpense(
+                  id: '',
+                  by: uid,
+                  byName: fallback,
+                  paise: 0,
+                  note: '',
+                  category: '',
+                  at: DateTime.now(),
+                )
+              ],
+      );
 
   /// Who owes whom, or nothing at all when it is already even.
   Widget _settlement(List<TripExpense> rows) {
@@ -789,7 +606,7 @@ class _TripExpensesState extends State<TripExpenses> {
                 child: Text(
                   '${name(debt.from)} '
                   '${debt.from == _uid ? 'owe' : 'owes'} '
-                  '${name(debt.to)} ₹${debt.rupees.toStringAsFixed(2)}',
+                  '${name(debt.to)} ${formatRupees(debt.paise)}',
                   style: const TextStyle(fontSize: 12),
                 ),
               ),

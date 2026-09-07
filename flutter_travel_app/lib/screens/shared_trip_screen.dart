@@ -8,6 +8,8 @@ import '../models/trip_plan.dart';
 import '../services/auth_service.dart';
 import '../services/python_adk_service.dart';
 import '../services/expense_words.dart';
+import '../services/expense_columns.dart';
+import '../widgets/expense_columns_view.dart';
 import '../services/plan_diff.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
@@ -525,6 +527,22 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     return people;
   }
 
+  /// The trip's members, with whatever name each goes by here.
+  ///
+  /// Built from the trip document rather than fetched: this screen already
+  /// holds it, and the nickname the owner approved somebody under is the name
+  /// the rest of the group reads.
+  List<TripPerson> get _members {
+    final profiles = (_trip?['profiles'] as Map?) ?? const {};
+    return [
+      for (final uid in (_trip?['members'] as List?) ?? const [])
+        TripPerson.from(
+          uid.toString(),
+          (profiles[uid.toString()] as Map?)?.cast<String, dynamic>(),
+        ),
+    ];
+  }
+
   Widget _spending(TripAccess access) {
     final canAdd = access == TripAccess.owner || access == TripAccess.editor;
     final isOwner = access == TripAccess.owner;
@@ -606,25 +624,97 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   ),
               ],
 
-              // The owner's queue. Shown to the owner only: to everybody else
-              // a pending row of their own is already visible below, marked.
-              if (isOwner && waiting.isNotEmpty) ...[
+              // Waiting rows, shown to everybody rather than to the owner
+              // alone. The owner gets the buttons; the person who is waiting
+              // gets to see that their money arrived and is with somebody
+              // else now -- without which, adding an expense and finding it
+              // nowhere on the screen reads as having lost it.
+              if (waiting.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                Text('Waiting for you to approve',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.orange.shade800)),
+                Text(
+                  isOwner
+                      ? 'Waiting for you to approve'
+                      : 'Waiting for the owner to accept',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.orange.shade800),
+                ),
                 const SizedBox(height: 4),
-                for (final row in waiting) _awaitingRow(row, rows),
+                for (final row in waiting)
+                  if (isOwner)
+                    _awaitingRow(row, rows)
+                  else
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${_nameFor(row.by, rows)} · '
+                              '${row.note.isEmpty ? row.category : row.note}',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          Text(formatRupees(row.paise),
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
               ],
 
-              if (rows.isNotEmpty) ...[
+              // Refused rows, to their author only.
+              //
+              // The owner's ledger drops these entirely, and rightly: an
+              // argument left on screen after it is settled helps nobody. But
+              // the person whose money it was is owed an explanation for its
+              // disappearance, so they -- and only they -- still see it.
+              if (rows.any((r) => r.status == 'rejected' && r.by == me)) ...[
+                const SizedBox(height: 10),
+                for (final row in rows)
+                  if (row.status == 'rejected' && row.by == me)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${row.note.isEmpty ? row.category : row.note} '
+                              '— not accepted',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                  decoration: TextDecoration.lineThrough),
+                            ),
+                          ),
+                          Text(formatRupees(row.paise),
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                  decoration: TextDecoration.lineThrough)),
+                        ],
+                      ),
+                    ),
+              ],
+
+              if (approved.isNotEmpty) ...[
                 const SizedBox(height: 14),
                 const Divider(height: 1),
-                const SizedBox(height: 8),
-                for (final row in rows)
-                  if (!(isOwner && row.isPending)) _expenseRow(row, rows, me),
+                const SizedBox(height: 10),
+                // The same widget the owner's Budget tab uses, so a guest and
+                // the owner are reading one layout rather than two.
+                ExpenseColumnsView(
+                  expenses: approved,
+                  people: _members,
+                  me: me,
+                  // What the rules allow: your own row, or anything if you own
+                  // the trip.
+                  canChange: (row) => row.by == me || isOwner,
+                  onEdit: _editExpense,
+                  onDelete: _deleteExpense,
+                ),
               ],
 
               // The way in, put where the money is.
