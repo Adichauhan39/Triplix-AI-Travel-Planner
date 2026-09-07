@@ -2160,6 +2160,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     if (offer.isEmpty) return;
 
     final picked = <String>{};
+    final wanted = TextEditingController();
+    // Photographs for the kinds on offer, from the same endpoint the
+    // onboarding screen uses. Started here rather than inside the sheet so
+    // they are already on their way while it opens; the cards render as text
+    // immediately and the pictures fade in, as they do there.
+    final kindImages = <String, String>{};
     // Re-checked immediately before opening: the places lookup above is a
     // network call, and the user can change tab while it is in flight.
     if (!_isVisible) {
@@ -2190,26 +2196,43 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 14),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final kind in offer)
-                      FilterChip(
-                        label: Text(kind),
-                        selected: picked.contains(kind),
-                        onSelected: (on) => setSheetState(() {
-                          on ? picked.add(kind) : picked.remove(kind);
-                        }),
-                      ),
-                  ],
+                _KindPictures(
+                  kinds: offer,
+                  images: kindImages,
+                  picked: picked,
+                  city: plan.destination,
+                  adk: _adk,
+                  onChanged: () => setSheetState(() {}),
+                ),
+                const SizedBox(height: 14),
+                // Somewhere to say what the ten pills cannot.
+                //
+                // They are a guess at what anyone might want; this is where
+                // somebody says what they want. It is sent as one more
+                // interest, so it reaches the same place search.
+                TextField(
+                  controller: wanted,
+                  textInputAction: TextInputAction.done,
+                  onChanged: (_) => setSheetState(() {}),
+                  decoration: InputDecoration(
+                    labelText: 'Anything else? Tell me in your own words',
+                    hintText: 'e.g. somewhere quiet by the river',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
                   height: 46,
                   child: ElevatedButton(
-                    onPressed: picked.isEmpty
+                    // Either half is enough on its own: a typed wish is as
+                    // good an answer as a tapped card.
+                    onPressed: picked.isEmpty && wanted.text.trim().isEmpty
                         ? null
                         : () => Navigator.pop(innerContext, true),
                     style: ElevatedButton.styleFrom(
@@ -2230,7 +2253,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         ),
       ),
     );
-    if (!mounted || confirmed != true || picked.isEmpty) return;
+    final typed = wanted.text.trim();
+    wanted.dispose();
+    if (!mounted || confirmed != true || (picked.isEmpty && typed.isEmpty)) {
+      return;
+    }
 
     final already = plan.days
         .expand((d) => d.items.map((i) => _placeName(i.title)))
@@ -2238,7 +2265,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         .toList();
     final found = await _adk.discoverPlaces(
       city: plan.destination,
-      interests: picked.toList(),
+      // What was typed goes in beside what was tapped, rather than replacing
+      // it: somebody who ticked Fort and then wrote "near the river" meant
+      // both.
+      interests: [...picked, if (typed.isNotEmpty) typed],
       exclude: already,
       limit: provider.shortfall(minPerDay: _minPerDay) + 2,
     );
@@ -3383,3 +3413,148 @@ class _TripMapDialogState extends State<_TripMapDialog> {
   }
 }
 
+/// The kinds of place on offer, as pictures.
+///
+/// Its own widget because it has to fetch: the sheet is built inside a
+/// StatefulBuilder, and firing a network call from a build method would run it
+/// again on every rebuild -- once per tap on a card.
+class _KindPictures extends StatefulWidget {
+  const _KindPictures({
+    required this.kinds,
+    required this.images,
+    required this.picked,
+    required this.city,
+    required this.adk,
+    required this.onChanged,
+  });
+
+  final List<String> kinds;
+
+  /// Filled in place, so the pictures survive the sheet rebuilding.
+  final Map<String, String> images;
+  final Set<String> picked;
+  final String city;
+  final PythonADKService adk;
+  final VoidCallback onChanged;
+
+  @override
+  State<_KindPictures> createState() => _KindPicturesState();
+}
+
+class _KindPicturesState extends State<_KindPictures> {
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.images.isNotEmpty) return;
+    try {
+      final found = await widget.adk.getActivityImages(
+        city: widget.city,
+        activities: widget.kinds,
+      );
+      if (!mounted || found.isEmpty) return;
+      setState(() => widget.images.addAll(found));
+    } catch (_) {
+      // Pictures are decorative. Without them the cards are still labelled
+      // and still tappable, which is the part that matters.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        for (final kind in widget.kinds)
+          _card(kind, widget.picked.contains(kind)),
+      ],
+    );
+  }
+
+  Widget _card(String kind, bool selected) {
+    final url = widget.images[kind] ?? '';
+
+    return InkWell(
+      onTap: () {
+        selected ? widget.picked.remove(kind) : widget.picked.add(kind);
+        widget.onChanged();
+        setState(() {});
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: 104,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 104,
+                    height: 76,
+                    color: Colors.grey.shade200,
+                    child: url.isEmpty
+                        ? Icon(Icons.image_outlined,
+                            size: 22, color: Colors.grey.shade400)
+                        : Image.network(
+                            url,
+                            fit: BoxFit.cover,
+                            // A broken photo URL leaves the card looking
+                            // empty rather than looking wrong.
+                            errorBuilder: (_, __, ___) => Icon(
+                                Icons.image_outlined,
+                                size: 22,
+                                color: Colors.grey.shade400),
+                          ),
+                  ),
+                ),
+                if (selected)
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: AppConfig.primaryColor,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check,
+                          size: 13, color: Colors.white),
+                    ),
+                  ),
+                if (selected)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: AppConfig.primaryColor, width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              kind,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? AppConfig.primaryColor : null,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
