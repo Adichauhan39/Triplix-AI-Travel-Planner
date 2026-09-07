@@ -438,6 +438,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   /// it rebuilds per keystroke instead, so a field's red clears as soon as the
   /// user types into it rather than lingering.
   void _onTripBasicsChanged() {
+    // Typing a new destination retires what Explore found for the old one.
+    //
+    // Restoring the last city's interests is right until the moment somebody
+    // types a different city; after that, leaving them on screen under a
+    // heading naming the new one states something untrue, and any tick still
+    // showing belongs to a list that is no longer there.
+    if (_loadedCity.isNotEmpty) {
+      final typed = _destTopController.text.trim().toLowerCase();
+      final known = _loadedCity.toLowerCase();
+      if (typed.isNotEmpty &&
+          !known.contains(typed) &&
+          !typed.contains(known)) {
+        _loadedCity = '';
+        _aiCategories = [];
+        _activityImages = {};
+        _selectedActivities.clear();
+        _exploreTapped = false;
+        _searchController.text = '';
+        if (mounted) setState(() {});
+        return;
+      }
+    }
+
     final complete = _tripBasicsComplete;
     if (complete == _lastTripBasicsComplete && !_showTripBasicsErrors) return;
     _lastTripBasicsComplete = complete;
@@ -464,11 +487,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     // just never read them back, so its own set started empty and every chip
     // rendered unselected. To the user that is indistinguishable from having
     // their choices deleted.
-    _selectedActivities
-      ..clear()
-      ..addAll(prefs.selectedActivities);
-
-    _restoreExplore();
+    //
+    // Restored only when Explore's own results came back for this same city.
+    // A tick means "this chip, in this city's list"; carried across a change
+    // of destination it marks whatever chip happens to share the name, which
+    // is how choices made for one city turned up selected under another.
+    if (_restoreExplore()) {
+      _selectedActivities
+        ..clear()
+        ..addAll(prefs.selectedActivities);
+    }
 
     _hasLoadedTripBasics = true;
   }
@@ -482,32 +510,43 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   ///
   /// Kept per city. Reopening with a different destination typed should not
   /// show the last city's interests, which would be worse than showing none.
-  void _restoreExplore() {
+  bool _restoreExplore() {
     final stored = LocalStore.load(LocalStore.keyExplore);
-    if (stored == null) return;
+    if (stored == null) return false;
 
     final city = (stored['city'] ?? '').toString();
-    if (city.isEmpty) return;
+    if (city.isEmpty) return false;
 
     final destination = (_destTopController.text).trim().toLowerCase();
-    if (destination.isEmpty) return;
+    if (destination.isEmpty) return false;
     // The stored city is the resolved one ("Bhilai, Chhattisgarh, India")
     // while the field may hold what was typed, so either may contain the
     // other.
     final known = city.toLowerCase();
-    if (!known.contains(destination) && !destination.contains(known)) return;
+    if (!known.contains(destination) && !destination.contains(known)) {
+      return false;
+    }
 
     final categories = [
       for (final entry in (stored['categories'] as List?) ?? const [])
         if (entry is Map) Map<String, dynamic>.from(entry),
     ];
-    if (categories.isEmpty) return;
+    if (categories.isEmpty) return false;
 
     _aiCategories = categories;
     _loadedCity = city;
     _searchController.text = city;
     _exploreTapped = true;
     _expanded.add(0);
+
+    // The pictures are fetched again rather than stored.
+    //
+    // They are Google Places photo URLs, which expire -- a saved one comes
+    // back broken, so the cards would be worse than empty. Restoring the
+    // categories without this left every card a grey box, because
+    // _activityImages is only ever filled here.
+    _loadActivityImages(city);
+    return true;
   }
 
   /// Writes down what Explore found, so the next visit does not pay for it
