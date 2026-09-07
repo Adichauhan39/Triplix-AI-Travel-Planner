@@ -16,6 +16,7 @@ import '../services/trip_photo_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import '../services/expense_message.dart';
+import '../services/share_link.dart' as sharing;
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 import '../providers/trip_plan_provider.dart';
@@ -7042,11 +7043,17 @@ class _BudgetTabState extends State<BudgetTab>
     if (plan != null) {
       await TripSync().publish(tripId: tripId, plan: plan);
     }
-    await Clipboard.setData(ClipboardData(text: TripSync.shareLink(tripId)));
+    final outcome = await sharing.shareLink(
+      TripSync.shareLink(tripId),
+      message: 'Come and split the costs of this trip with me on Triplix.',
+    );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Link copied. They are asked their name, then you '
-          'approve them before anything counts.'),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(sharing.shareMessageFor(
+        outcome,
+        copied: 'Link copied. They are asked their name, then you approve '
+            'them before anything counts.',
+      )),
     ));
   }
 

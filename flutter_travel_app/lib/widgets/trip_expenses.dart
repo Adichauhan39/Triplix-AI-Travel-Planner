@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../config/app_config.dart';
 import '../services/expense_words.dart';
 import '../services/expense_columns.dart';
+import '../services/share_link.dart' as sharing;
 import 'expense_columns_view.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
@@ -103,12 +104,21 @@ class _TripExpensesState extends State<TripExpenses> {
   /// Copies the trip link. One trip, one link -- sharing the budget and
   /// sharing the plan are the same act, because they describe one journey.
   Future<void> _shareLink() async {
-    final link = TripSync.shareLink(widget.tripId);
-    await Clipboard.setData(ClipboardData(text: link));
+    // Straight to the share sheet, with the clipboard as the fallback.
+    // Copying left people to go and find WhatsApp themselves; on a phone,
+    // which is where these get sent, the sheet is one tap to the right
+    // conversation.
+    final outcome = await sharing.shareLink(
+      TripSync.shareLink(widget.tripId),
+      message: 'Come and split the costs of this trip with me on Triplix.',
+    );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text(
-          'Link copied. Whoever opens it can ask to join and add spending.'),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(sharing.shareMessageFor(
+        outcome,
+        copied: 'Link copied. Whoever opens it can ask to join and add '
+            'spending.',
+      )),
     ));
   }
 

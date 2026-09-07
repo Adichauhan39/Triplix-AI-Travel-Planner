@@ -8,6 +8,7 @@ import '../models/trip_plan.dart';
 import '../services/auth_service.dart';
 import '../services/python_adk_service.dart';
 import '../services/expense_words.dart';
+import '../services/expense_message.dart';
 import '../services/expense_columns.dart';
 import '../widgets/expense_columns_view.dart';
 import '../services/plan_diff.dart';
@@ -58,6 +59,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   void dispose() {
     _tabs.dispose();
     _request.dispose();
+    _spend.dispose();
     super.dispose();
   }
 
@@ -458,9 +460,21 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                                       _requestBar(),
                                     ],
                                   ),
-                                  ListView(
-                                    padding: const EdgeInsets.all(16),
-                                    children: [_spending(access)],
+                                  Column(
+                                    children: [
+                                      Expanded(
+                                        child: ListView(
+                                          padding: const EdgeInsets.all(16),
+                                          children: [_spending(access)],
+                                        ),
+                                      ),
+                                      // Only for people who may actually add.
+                                      // A box that files nothing is worse than
+                                      // no box.
+                                      if (access == TripAccess.owner ||
+                                          access == TripAccess.editor)
+                                        _spendBar(),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -525,6 +539,140 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     final people = [for (final m in members) m.toString()]
       ..removeWhere((m) => m.isEmpty);
     return people;
+  }
+
+  final TextEditingController _spend = TextEditingController();
+  bool _filing = false;
+
+  /// Files an expense from a sentence.
+  ///
+  /// The same reader the owner's budget chat uses, so "500 for the cab" and
+  /// "bulla paid 500 for dinner" mean here exactly what they mean there.
+  Future<void> _fileSpoken() async {
+    final text = _spend.text.trim();
+    if (text.isEmpty || _filing) return;
+
+    final spoken = readExpense(text);
+    if (spoken == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Tell me an amount and what it was for — '
+            'like "500 for the cab".'),
+      ));
+      return;
+    }
+
+    // Naming somebody else is the owner's to do. A member who could file in
+    // another member's name could change what that person owes without them
+    // knowing, which is the one thing the approval step exists to stop. Said
+    // plainly rather than quietly filed under the wrong name.
+    if (spoken.payer != null && _access != TripAccess.owner) {
+      final goAhead = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Only the owner can do that'),
+          content: Text(
+            'Recording what "${spoken.payer}" paid is the trip owner\'s to '
+            'do. Add it as your own spending instead?',
+            style: const TextStyle(fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Add as mine'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || goAhead != true) return;
+    }
+
+    setState(() => _filing = true);
+
+    final tidy = await _confirmNote(spoken.description);
+    if (!mounted) {
+      return;
+    }
+    if (tidy == null) {
+      setState(() => _filing = false);
+      return;
+    }
+
+    final ok = await _sync.addExpense(
+      tripId: widget.tripId,
+      paise: rupeesToPaise(spoken.rupees),
+      note: tidy.note,
+      category: tidy.category,
+      // Only the owner may name another payer, and the rules agree.
+      onBehalfOf: _access == TripAccess.owner
+          ? matchPerson(spoken.payer, {
+              for (final person in _members) person.uid: person.name,
+            })
+          : null,
+    );
+    if (!mounted) return;
+    setState(() {
+      _filing = false;
+      if (ok) _spend.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (_access == TripAccess.owner
+              ? 'Added.'
+              : 'Added. The trip owner approves it before it counts.')
+          : 'That could not be saved. Check your connection.'),
+    ));
+  }
+
+  Widget _spendBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(top: BorderSide(color: Colors.grey.shade300)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _spend,
+              enabled: !_filing,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _fileSpoken(),
+              decoration: InputDecoration(
+                hintText: 'e.g. 500 for the cab',
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _filing
+              ? const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : IconButton.filled(
+                  onPressed: _fileSpoken,
+                  icon: const Icon(Icons.arrow_upward),
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppConfig.primaryColor,
+                  ),
+                ),
+        ],
+      ),
+    );
   }
 
   /// The trip's members, with whatever name each goes by here.
