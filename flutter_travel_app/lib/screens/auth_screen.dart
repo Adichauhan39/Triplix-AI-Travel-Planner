@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:animate_do/animate_do.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,11 +10,48 @@ import '../config/app_config.dart';
 import '../services/auth_service.dart';
 import '../services/recaptcha_service.dart';
 import '../widgets/captcha_challenge.dart';
+import '../widgets/aurora_canvas.dart';
+import '../widgets/glass_panel.dart';
 import '../widgets/triplix_logo.dart';
 
 /// Tabs available inside [AuthScreen]. The order here is also the swipe order
 /// of the underlying [PageView].
 enum AuthTab { login, signup }
+
+/// The colours of the sign-in page, taken from the logo.
+///
+/// The mark is a teal pin with an orange sun on it. Everything here is either
+/// one of those two, or the ink they sit on. The rest of the app has other
+/// ideas -- a grey it calls "Deep Blue", a wash of blue-to-purple -- and this
+/// page is where a single language starts.
+class _Brand {
+  static const Color ink = Color(0xFF0B1220);
+  static const Color teal = Color(0xFF1FA7C4);
+  static const Color sun = Color(0xFFF7941D);
+
+  static const Color text = Colors.white;
+  static const Color muted = Color(0xB3FFFFFF);
+  static const Color faint = Color(0x66FFFFFF);
+  static const Color hairline = Color(0x24FFFFFF);
+  static const Color fill = Color(0x0FFFFFFF);
+
+  static const LinearGradient action = LinearGradient(
+    colors: [teal, sun],
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+  );
+}
+
+/// How the fields read on the glass: white text, teal cursor.
+const TextStyle _fieldText = TextStyle(color: _Brand.text, fontSize: 15);
+
+/// The outline used on secondary buttons over the glass.
+final ButtonStyle _glassOutline = OutlinedButton.styleFrom(
+  foregroundColor: _Brand.text,
+  side: const BorderSide(color: _Brand.hairline, width: 1),
+  padding: const EdgeInsets.symmetric(vertical: 14),
+  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+);
 
 /// A single page that combines Login and Sign Up as two swipable cards.
 /// The top segmented selector and the [PageView] stay in sync: tapping a
@@ -89,42 +127,54 @@ class _AuthScreenState extends State<AuthScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Colors.blue.shade600, Colors.purple.shade600],
-          ),
-        ),
+      backgroundColor: _Brand.ink,
+      body: AuroraCanvas(
         child: SafeArea(
           child: FadeTransition(
             opacity: _fadeAnimation,
-            child: Column(
-              children: [
-                const SizedBox(height: 16),
-                _Header(selectedTab: _selectedTab),
-                const SizedBox(height: 24),
-                _AuthTabSelector(
-                  selectedTab: _selectedTab,
-                  onTabSelected: _goToTab,
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: PageView(
-                    controller: _pageController,
-                    onPageChanged: _onPageChanged,
-                    children: [
-                      _AuthCardWrapper(
-                        child: _LoginCard(onSwitchTab: _goToTab),
+            // Held to a column's width on a wide screen. A form stretched
+            // across a laptop is a form nobody can find the middle of.
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 460),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 28),
+                    FadeInDown(
+                      duration: const Duration(milliseconds: 650),
+                      child: _Header(selectedTab: _selectedTab),
+                    ),
+                    const SizedBox(height: 22),
+                    FadeIn(
+                      delay: const Duration(milliseconds: 180),
+                      duration: const Duration(milliseconds: 500),
+                      child: _AuthTabSelector(
+                        selectedTab: _selectedTab,
+                        onTabSelected: _goToTab,
                       ),
-                      _AuthCardWrapper(
-                        child: _SignupCard(onSwitchTab: _goToTab),
+                    ),
+                    const SizedBox(height: 14),
+                    Expanded(
+                      child: FadeInUp(
+                        delay: const Duration(milliseconds: 240),
+                        duration: const Duration(milliseconds: 650),
+                        child: PageView(
+                          controller: _pageController,
+                          onPageChanged: _onPageChanged,
+                          children: [
+                            _AuthCardWrapper(
+                              child: _LoginCard(onSwitchTab: _goToTab),
+                            ),
+                            _AuthCardWrapper(
+                              child: _SignupCard(onSwitchTab: _goToTab),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -137,67 +187,93 @@ class _AuthScreenState extends State<AuthScreen>
 // Header (logo + dynamic title)
 // ---------------------------------------------------------------------------
 
-class _Header extends StatelessWidget {
+class _Header extends StatefulWidget {
   const _Header({required this.selectedTab});
 
   final AuthTab selectedTab;
 
-  String get _title {
-    switch (selectedTab) {
-      case AuthTab.login:
-        return 'Welcome Back';
-      case AuthTab.signup:
-        return 'Create Account';
-    }
+  @override
+  State<_Header> createState() => _HeaderState();
+}
+
+class _HeaderState extends State<_Header> with SingleTickerProviderStateMixin {
+  // The pin rises and settles, very slowly, as though it were hanging there.
+  late final AnimationController _drift = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 3600),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _drift.dispose();
+    super.dispose();
   }
 
-  String get _subtitle {
-    switch (selectedTab) {
-      case AuthTab.login:
-        return 'Your AI-Powered Travel Agent';
-      case AuthTab.signup:
-        return 'Start your travel journey';
-    }
-  }
+  String get _title => switch (widget.selectedTab) {
+        AuthTab.login => 'Where to next?',
+        AuthTab.signup => 'Your first trip starts here',
+      };
+
+  String get _subtitle => switch (widget.selectedTab) {
+        AuthTab.login => 'Sign in and pick up your plan where you left it.',
+        AuthTab.signup => 'Real places, real prices, one plan for everyone.',
+      };
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        const TriplixLogo(
-          size: 56,
-          padding: EdgeInsets.all(16),
-          backgroundColor: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 20,
-              offset: Offset(0, 10),
+        AnimatedBuilder(
+          animation: _drift,
+          builder: (context, child) {
+            final lift = Curves.easeInOut.transform(_drift.value) * 6 - 3;
+            return Transform.translate(offset: Offset(0, lift), child: child);
+          },
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0x14FFFFFF),
+              boxShadow: [
+                // The pin's own teal, bleeding into the ink behind it.
+                BoxShadow(
+                  color: Color(0x661FA7C4),
+                  blurRadius: 42,
+                  spreadRadius: 2,
+                ),
+              ],
             ),
-          ],
+            child: const TriplixLogo(size: 54, shape: BoxShape.circle),
+          ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 22),
         AnimatedSwitcher(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 260),
           child: Text(
             _title,
-            key: ValueKey('title-$selectedTab'),
+            key: ValueKey('title-${widget.selectedTab}'),
+            textAlign: TextAlign.center,
             style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-              letterSpacing: 1.5,
+              fontSize: 30,
+              fontWeight: FontWeight.w700,
+              color: _Brand.text,
+              height: 1.15,
+              letterSpacing: -0.4,
             ),
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         AnimatedSwitcher(
-          duration: const Duration(milliseconds: 250),
-          child: Text(
-            _subtitle,
-            key: ValueKey('subtitle-$selectedTab'),
-            style: const TextStyle(color: Colors.white70, fontSize: 14),
+          duration: const Duration(milliseconds: 260),
+          child: Padding(
+            key: ValueKey('subtitle-${widget.selectedTab}'),
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Text(
+              _subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: _Brand.muted, fontSize: 14, height: 1.4),
+            ),
           ),
         ),
       ],
@@ -220,56 +296,64 @@ class _AuthTabSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Two words and a line that moves between them. The pill it replaces
+    // shouted for attention on a page whose whole point is the form below.
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-        ),
-        child: Row(
-          children: [
-            _segment('Login', AuthTab.login),
-            _segment('Sign Up', AuthTab.signup),
-          ],
-        ),
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              _word('Sign in', AuthTab.login),
+              _word('Create account', AuthTab.signup),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Stack(
+            children: [
+              Container(height: 1, color: _Brand.hairline),
+              AnimatedAlign(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                alignment: selectedTab == AuthTab.login
+                    ? Alignment.centerLeft
+                    : Alignment.centerRight,
+                child: FractionallySizedBox(
+                  widthFactor: 0.5,
+                  child: Container(
+                    height: 2,
+                    decoration: const BoxDecoration(
+                      gradient: _Brand.action,
+                      borderRadius: BorderRadius.all(Radius.circular(2)),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  Widget _segment(String label, AuthTab tab) {
-    final bool isSelected = tab == selectedTab;
+  Widget _word(String label, AuthTab tab) {
+    final on = tab == selectedTab;
     return Expanded(
       child: GestureDetector(
         onTap: () => onTabSelected(tab),
         behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: isSelected ? Colors.white : Colors.transparent,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
+        child: AnimatedDefaultTextStyle(
+          duration: const Duration(milliseconds: 200),
+          style: TextStyle(
+            fontFamily: 'Poppins',
+            fontSize: 14,
+            fontWeight: on ? FontWeight.w600 : FontWeight.w500,
+            color: on ? _Brand.text : _Brand.faint,
           ),
-          alignment: Alignment.center,
-          child: Text(
-            label,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-              color: isSelected ? Colors.blue.shade700 : Colors.white,
-            ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(label, textAlign: TextAlign.center),
           ),
         ),
       ),
@@ -288,26 +372,14 @@ class _AuthCardWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Glass rather than a white card, so the ground stays part of the page.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 30,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: child,
-          ),
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 20),
+      child: GlassPanel(
+        padding: EdgeInsets.zero,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+          child: child,
         ),
       ),
     );
@@ -721,6 +793,8 @@ class _LoginCardState extends State<_LoginCard>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextFormField(
+            style: _fieldText,
+            cursorColor: _Brand.teal,
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
             decoration: _fieldDecoration(
@@ -738,6 +812,8 @@ class _LoginCardState extends State<_LoginCard>
           ),
           const SizedBox(height: 16),
           TextFormField(
+            style: _fieldText,
+            cursorColor: _Brand.teal,
             controller: _passwordController,
             obscureText: !_isPasswordVisible,
             decoration: _fieldDecoration(
@@ -765,14 +841,20 @@ class _LoginCardState extends State<_LoginCard>
             children: [
               Checkbox(
                 value: _rememberMe,
+                activeColor: _Brand.teal,
+                checkColor: _Brand.ink,
+                side: const BorderSide(color: _Brand.faint, width: 1.5),
                 onChanged: (value) =>
                     setState(() => _rememberMe = value ?? false),
               ),
-              const Text('Remember me'),
+              const Text('Remember me',
+                  style: TextStyle(color: _Brand.muted, fontSize: 13)),
               const Spacer(),
               TextButton(
                 onPressed: _showForgotPasswordDialog,
-                child: const Text('Forgot Password?'),
+                style: TextButton.styleFrom(foregroundColor: _Brand.sun),
+                child: const Text('Forgot password?',
+                    style: TextStyle(fontSize: 13)),
               ),
             ],
           ),
@@ -789,6 +871,7 @@ class _LoginCardState extends State<_LoginCard>
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               OutlinedButton.icon(
+                                style: _glassOutline,
                                 onPressed: _isCaptchaChecking
                                     ? null
                                     : () =>
@@ -827,8 +910,9 @@ class _LoginCardState extends State<_LoginCard>
           ElevatedButton(
             onPressed: (_isLoading || !_captchaReady) ? null : _handleLogin,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue.shade600,
-              disabledBackgroundColor: Colors.blue.shade200,
+              backgroundColor: _Brand.teal,
+              disabledBackgroundColor: const Color(0x331FA7C4),
+              disabledForegroundColor: _Brand.faint,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -846,7 +930,7 @@ class _LoginCardState extends State<_LoginCard>
                   )
                 : Text(
                     _captchaReady
-                        ? 'Login'
+                        ? 'Sign in'
                         : 'Complete verification to continue',
                     style: const TextStyle(
                       fontSize: 16,
@@ -858,23 +942,19 @@ class _LoginCardState extends State<_LoginCard>
           const SizedBox(height: 16),
           const Row(
             children: [
-              Expanded(child: Divider()),
+              Expanded(child: Divider(color: _Brand.hairline)),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Text('or'),
+                child: Text('or', style: TextStyle(color: _Brand.faint)),
               ),
-              Expanded(child: Divider()),
+              Expanded(child: Divider(color: _Brand.hairline)),
             ],
           ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed:
                 (_isLoading || _isGoogleLoading) ? null : _handleGoogleSignIn,
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
+            style: _glassOutline,
             icon: _isGoogleLoading
                 ? const SizedBox(
                     width: 18,
@@ -889,16 +969,17 @@ class _LoginCardState extends State<_LoginCard>
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Text(
-                "Don't have an account? ",
-                style: TextStyle(color: Colors.black54),
+                "New here? ",
+                style: TextStyle(color: _Brand.muted, fontSize: 13),
               ),
               GestureDetector(
                 onTap: () => widget.onSwitchTab(AuthTab.signup),
-                child: Text(
-                  'Sign Up',
+                child: const Text(
+                  'Create an account',
                   style: TextStyle(
-                    color: Colors.blue.shade600,
-                    fontWeight: FontWeight.bold,
+                    color: _Brand.sun,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
                   ),
                 ),
               ),
@@ -908,14 +989,14 @@ class _LoginCardState extends State<_LoginCard>
           Center(
             child: TextButton.icon(
               onPressed: () => showAuthTermsSheet(context),
-              icon: Icon(
+              icon: const Icon(
                 Icons.shield_outlined,
-                size: 16,
-                color: Colors.blue.shade700,
+                size: 15,
+                color: _Brand.faint,
               ),
-              label: Text(
+              label: const Text(
                 'Terms & Privacy',
-                style: TextStyle(color: Colors.blue.shade700),
+                style: TextStyle(color: _Brand.faint, fontSize: 12),
               ),
             ),
           ),
@@ -1195,6 +1276,8 @@ class _SignupCardState extends State<_SignupCard>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextFormField(
+            style: _fieldText,
+            cursorColor: _Brand.teal,
             controller: _nameController,
             textCapitalization: TextCapitalization.words,
             decoration: _fieldDecoration(
@@ -1211,6 +1294,8 @@ class _SignupCardState extends State<_SignupCard>
           ),
           const SizedBox(height: 16),
           TextFormField(
+            style: _fieldText,
+            cursorColor: _Brand.teal,
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
             decoration: _fieldDecoration(
@@ -1228,6 +1313,8 @@ class _SignupCardState extends State<_SignupCard>
           ),
           const SizedBox(height: 16),
           TextFormField(
+            style: _fieldText,
+            cursorColor: _Brand.teal,
             controller: _passwordController,
             obscureText: !_isPasswordVisible,
             decoration: _fieldDecoration(
@@ -1247,6 +1334,8 @@ class _SignupCardState extends State<_SignupCard>
           ),
           const SizedBox(height: 16),
           TextFormField(
+            style: _fieldText,
+            cursorColor: _Brand.teal,
             controller: _confirmPasswordController,
             obscureText: !_isConfirmPasswordVisible,
             decoration: _fieldDecoration(
@@ -1288,6 +1377,7 @@ class _SignupCardState extends State<_SignupCard>
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               OutlinedButton.icon(
+                                style: _glassOutline,
                                 onPressed: _isCaptchaChecking
                                     ? null
                                     : () =>
@@ -1347,8 +1437,9 @@ class _SignupCardState extends State<_SignupCard>
                 ? null
                 : _handleSignup,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue.shade600,
-              disabledBackgroundColor: Colors.blue.shade200,
+              backgroundColor: _Brand.teal,
+              disabledBackgroundColor: const Color(0x331FA7C4),
+              disabledForegroundColor: _Brand.faint,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1376,23 +1467,19 @@ class _SignupCardState extends State<_SignupCard>
           const SizedBox(height: 16),
           const Row(
             children: [
-              Expanded(child: Divider()),
+              Expanded(child: Divider(color: _Brand.hairline)),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Text('or'),
+                child: Text('or', style: TextStyle(color: _Brand.faint)),
               ),
-              Expanded(child: Divider()),
+              Expanded(child: Divider(color: _Brand.hairline)),
             ],
           ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed:
                 (_isLoading || _isGoogleLoading) ? null : _handleGoogleSignIn,
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
+            style: _glassOutline,
             icon: _isGoogleLoading
                 ? const SizedBox(
                     width: 18,
@@ -1716,9 +1803,9 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
         return Container(
           height: _trackHeight,
           decoration: BoxDecoration(
-            color: Colors.blue.shade50,
+            color: _Brand.fill,
             borderRadius: BorderRadius.circular(_trackHeight / 2),
-            border: Border.all(color: Colors.blue.shade100),
+            border: Border.all(color: _Brand.hairline),
           ),
           child: Stack(
             children: [
@@ -1728,9 +1815,7 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
                 curve: Curves.easeOut,
                 width: clampedDrag + _thumbSize + (_padding * 2),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue.shade400, Colors.purple.shade300],
-                  ),
+                  gradient: _Brand.action,
                   borderRadius: BorderRadius.circular(_trackHeight / 2),
                 ),
               ),
@@ -1738,19 +1823,19 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
               Center(
                 child: Opacity(
                   opacity: (1 - progress).clamp(0.0, 1.0),
-                  child: Row(
+                  child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         Icons.shield_outlined,
                         size: 18,
-                        color: Colors.blue.shade700,
+                        color: _Brand.muted,
                       ),
-                      const SizedBox(width: 8),
+                      SizedBox(width: 8),
                       Text(
                         'Slide to verify you\'re human',
                         style: TextStyle(
-                          color: Colors.blue.shade700,
+                          color: _Brand.muted,
                           fontWeight: FontWeight.w600,
                           fontSize: 13,
                         ),
@@ -1794,7 +1879,7 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
                     alignment: Alignment.center,
                     child: Icon(
                       progress >= 0.9 ? Icons.check : Icons.arrow_forward,
-                      color: Colors.blue.shade700,
+                      color: _Brand.ink,
                     ),
                   ),
                 ),
@@ -1827,9 +1912,9 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
         height: _trackHeight,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.green.shade50,
+          color: const Color(0x2610B981),
           borderRadius: BorderRadius.circular(_trackHeight / 2),
-          border: Border.all(color: Colors.green.shade200),
+          border: Border.all(color: const Color(0x6610B981)),
         ),
         child: Row(
           children: [
@@ -1843,19 +1928,19 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
               child: const Icon(Icons.check, color: Colors.white, size: 20),
             ),
             const SizedBox(width: 12),
-            Expanded(
+            const Expanded(
               child: Text(
                 'Verified — you\'re human',
                 style: TextStyle(
-                  color: Colors.green.shade800,
+                  color: Color(0xFF6EE7B7),
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
-            Text(
+            const Text(
               'long-press to redo',
               style: TextStyle(
-                color: Colors.green.shade700,
+                color: Color(0x996EE7B7),
                 fontSize: 11,
               ),
             ),
@@ -1896,16 +1981,15 @@ class _TermsConsentRow extends StatelessWidget {
                 width: 22,
                 height: 22,
                 decoration: BoxDecoration(
-                  color: accepted ? Colors.blue.shade600 : Colors.transparent,
+                  color: accepted ? _Brand.teal : Colors.transparent,
                   border: Border.all(
-                    color:
-                        accepted ? Colors.blue.shade600 : Colors.grey.shade400,
+                    color: accepted ? _Brand.teal : _Brand.faint,
                     width: 2,
                   ),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: accepted
-                    ? const Icon(Icons.check, color: Colors.white, size: 16)
+                    ? const Icon(Icons.check, color: _Brand.ink, size: 16)
                     : null,
               ),
             ),
@@ -1914,7 +1998,7 @@ class _TermsConsentRow extends StatelessWidget {
               child: RichText(
                 text: TextSpan(
                   style: const TextStyle(
-                    color: Colors.black87,
+                    color: _Brand.muted,
                     fontSize: 13,
                     height: 1.4,
                   ),
@@ -1922,8 +2006,8 @@ class _TermsConsentRow extends StatelessWidget {
                     const TextSpan(text: 'I agree to the '),
                     TextSpan(
                       text: 'Terms of Service',
-                      style: TextStyle(
-                        color: Colors.blue.shade700,
+                      style: const TextStyle(
+                        color: _Brand.teal,
                         fontWeight: FontWeight.w600,
                         decoration: TextDecoration.underline,
                       ),
@@ -1936,8 +2020,8 @@ class _TermsConsentRow extends StatelessWidget {
                     const TextSpan(text: ' and '),
                     TextSpan(
                       text: 'Privacy Policy',
-                      style: TextStyle(
-                        color: Colors.blue.shade700,
+                      style: const TextStyle(
+                        color: _Brand.teal,
                         fontWeight: FontWeight.w600,
                         decoration: TextDecoration.underline,
                       ),
@@ -1969,13 +2053,31 @@ InputDecoration _fieldDecoration({
   required IconData icon,
   Widget? suffix,
 }) {
+  // Dark glass with a teal focus, in place of the app theme's grey-on-white.
+  // Every colour is set here rather than inherited, because the theme's
+  // primary is a grey that would vanish against this ground.
+  OutlineInputBorder edge(Color colour, [double width = 1]) =>
+      OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: colour, width: width),
+      );
   return InputDecoration(
     labelText: label,
     hintText: hint,
-    prefixIcon: Icon(icon),
+    prefixIcon: Icon(icon, color: _Brand.muted, size: 20),
     suffixIcon: suffix,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    suffixIconColor: _Brand.muted,
     filled: true,
-    fillColor: Colors.grey.shade50,
+    fillColor: _Brand.fill,
+    labelStyle: const TextStyle(color: _Brand.muted, fontSize: 14),
+    floatingLabelStyle: const TextStyle(color: _Brand.teal, fontSize: 13),
+    hintStyle: const TextStyle(color: _Brand.faint, fontSize: 13),
+    errorStyle: const TextStyle(color: Color(0xFFFF8A80), fontSize: 12),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    border: edge(_Brand.hairline),
+    enabledBorder: edge(_Brand.hairline),
+    focusedBorder: edge(_Brand.teal, 1.5),
+    errorBorder: edge(const Color(0xFFFF8A80)),
+    focusedErrorBorder: edge(const Color(0xFFFF8A80), 1.5),
   );
 }
