@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
+import '../config/brand.dart';
 import '../services/auth_service.dart';
 import '../services/recaptcha_service.dart';
 import '../widgets/captcha_challenge.dart';
@@ -18,29 +19,9 @@ import '../widgets/triplix_logo.dart';
 /// of the underlying [PageView].
 enum AuthTab { login, signup }
 
-/// The colours of the sign-in page, taken from the logo.
-///
-/// The mark is a teal pin with an orange sun on it. Everything here is either
-/// one of those two, or the ink they sit on. The rest of the app has other
-/// ideas -- a grey it calls "Deep Blue", a wash of blue-to-purple -- and this
-/// page is where a single language starts.
-class _Brand {
-  static const Color ink = Color(0xFF0B1220);
-  static const Color teal = Color(0xFF1FA7C4);
-  static const Color sun = Color(0xFFF7941D);
-
-  static const Color text = Colors.white;
-  static const Color muted = Color(0xB3FFFFFF);
-  static const Color faint = Color(0x66FFFFFF);
-  static const Color hairline = Color(0x24FFFFFF);
-  static const Color fill = Color(0x0FFFFFFF);
-
-  static const LinearGradient action = LinearGradient(
-    colors: [teal, sun],
-    begin: Alignment.centerLeft,
-    end: Alignment.centerRight,
-  );
-}
+/// The palette lives in config/brand.dart now, shared with the Welcome page.
+/// Aliased so nothing below has to change.
+typedef _Brand = Brand;
 
 /// How the fields read on the glass: white text, teal cursor.
 const TextStyle _fieldText = TextStyle(color: _Brand.text, fontSize: 15);
