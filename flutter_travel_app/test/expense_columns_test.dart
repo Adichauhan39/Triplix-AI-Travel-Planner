@@ -2,7 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_travel_app/services/expense_columns.dart';
 import 'package:flutter_travel_app/services/trip_sync.dart';
 
-TripExpense expense(String by, int paise, {String note = 'x', String name = ''}) =>
+TripExpense expense(String by, int paise,
+        {String note = 'x', String name = '', bool shared = true}) =>
     TripExpense(
       id: '$by-$paise-$note',
       by: by,
@@ -11,6 +12,7 @@ TripExpense expense(String by, int paise, {String note = 'x', String name = ''})
       note: note,
       category: 'Other',
       at: DateTime(2026, 1, 1),
+      shared: shared,
     );
 
 TripPerson person(String uid, String name) =>
@@ -154,6 +156,98 @@ void main() {
       // Equal amounts fall back to the name, so this is stable.
       expect(order(), order());
       expect(order().first, 'u2');
+    });
+  });
+
+  group('expenses taken out of the split', () {
+    test('nobody owes a share of one person own spending', () {
+      final columns = buildExpenseColumns(
+        approved: [
+          expense('u1', 90000),
+          expense('u1', 40000, note: 'shopping', shared: false),
+        ],
+        people: [person('u1', 'A'), person('u2', 'B')],
+        me: null,
+      );
+      final a = columns.firstWhere((c) => c.uid == 'u1');
+      final b = columns.firstWhere((c) => c.uid == 'u2');
+
+      // Only the 900 is divided. Counting the shopping would charge B for
+      // half of A's shirt.
+      expect(a.paid, 90000);
+      expect(a.personal, 40000);
+      expect(b.share, 45000);
+      expect(a.share, 45000);
+      expect(a.balance, 45000);
+      expect(b.balance, -45000);
+    });
+
+    test('the expense still shows in the column', () {
+      // Out of the split is not out of the record: it happened, and the
+      // person who paid should still see it on their trip.
+      final columns = buildExpenseColumns(
+        approved: [expense('u1', 40000, note: 'shopping', shared: false)],
+        people: [person('u1', 'A')],
+        me: null,
+      );
+      expect(columns.single.expenses, hasLength(1));
+      expect(columns.single.expenses.single.note, 'shopping');
+    });
+
+    test('a wholly personal ledger owes nobody anything', () {
+      final columns = buildExpenseColumns(
+        approved: [
+          expense('u1', 50000, shared: false),
+          expense('u2', 20000, shared: false),
+        ],
+        people: [person('u1', 'A'), person('u2', 'B')],
+        me: null,
+      );
+      expect(columns.every((c) => c.share == 0), isTrue);
+      expect(columns.every((c) => c.balance == 0), isTrue);
+      expect(columns.map((c) => c.personal), containsAll([50000, 20000]));
+    });
+
+    test('balances still cancel out', () {
+      final columns = buildExpenseColumns(
+        approved: [
+          expense('u1', 100000),
+          expense('u2', 20000),
+          expense('u1', 70000, shared: false),
+        ],
+        people: [person('u1', 'A'), person('u2', 'B')],
+        me: null,
+      );
+      expect(columns.fold<int>(0, (s, c) => s + c.balance), 0);
+    });
+
+    test('paid plus personal still accounts for every rupee', () {
+      final rows = [
+        expense('u1', 100000),
+        expense('u2', 20000),
+        expense('u1', 70000, shared: false),
+      ];
+      final columns = buildExpenseColumns(
+        approved: rows,
+        people: [person('u1', 'A'), person('u2', 'B')],
+        me: null,
+      );
+      final total = rows.fold<int>(0, (s, r) => s + r.paise);
+      final shown = columns.fold<int>(0, (s, c) => s + c.paid + c.personal);
+      expect(shown, total);
+    });
+
+    test('old rows with no flag are treated as shared', () {
+      // Defaulting the other way would silently rewrite what a group already
+      // believes it owes.
+      final row = TripExpense.fromDoc('id', {'by': 'u1', 'paise': 1000});
+      expect(row.shared, isTrue);
+    });
+
+    test('an explicit false is respected', () {
+      final row =
+          TripExpense.fromDoc('id', {'by': 'u1', 'paise': 1000, 'shared': false});
+      expect(row.shared, isFalse);
     });
   });
 

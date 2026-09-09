@@ -44,6 +44,7 @@ class TripExpense {
     required this.category,
     required this.at,
     this.status = 'approved',
+    this.shared = true,
   });
 
   factory TripExpense.fromDoc(String id, Map<String, dynamic> data) {
@@ -59,6 +60,10 @@ class TripExpense {
       // were already counted, and quietly un-counting them would change what
       // people believe they owe.
       status: (data['status'] ?? 'approved').toString(),
+      // Rows written before this existed were all split, which is what they
+      // were understood to mean at the time. Defaulting to false would
+      // silently rewrite what a group already believes it owes.
+      shared: data['shared'] != false,
       // A row written on this device has no server time for a moment. Treated
       // as "just now" so it sorts to the top rather than to 1970.
       at: stamp is Timestamp ? stamp.toDate() : DateTime.now(),
@@ -75,6 +80,13 @@ class TripExpense {
 
   /// 'pending', 'approved' or 'rejected'.
   final String status;
+
+  /// Whether this is divided between everybody.
+  ///
+  /// False means one person's own spending, recorded on the trip so it is not
+  /// forgotten, but owed by nobody else -- somebody's shopping, or the drink
+  /// they bought only for themselves.
+  final bool shared;
 
   bool get isApproved => status == 'approved';
   bool get isPending => status == 'pending';
@@ -616,6 +628,33 @@ class TripSync {
       return true;
     } catch (e) {
       debugPrint('TripSync.editExpense failed: $e');
+      return false;
+    }
+  }
+
+  /// Takes an expense out of the split, or puts it back.
+  ///
+  /// The money stays on the trip either way -- this is about who owes for it,
+  /// not about whether it happened. A member's change goes back to 'pending'
+  /// for the same reason an edited amount does: it moves what everybody else
+  /// owes, so the owner sees it before it counts.
+  Future<bool> setShared({
+    required String tripId,
+    required String expenseId,
+    required bool shared,
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
+    try {
+      final trip = await fetch(tripId);
+      final isOwner = (trip?['owner'] ?? '').toString() == uid;
+      await _expensesOf(tripId).doc(expenseId).update({
+        'shared': shared,
+        if (!isOwner) 'status': 'pending',
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.setShared failed: $e');
       return false;
     }
   }

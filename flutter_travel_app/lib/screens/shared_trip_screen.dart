@@ -862,6 +862,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   canChange: (row) => row.by == me || isOwner,
                   onEdit: _editExpense,
                   onDelete: _deleteExpense,
+                  onShared: _setShared,
                 ),
               ],
 
@@ -1142,6 +1143,23 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       onSelected: (choice) =>
           choice == 'edit' ? _editExpense(row) : _deleteExpense(row),
     );
+  }
+
+  /// Takes an expense out of the split, or puts it back.
+  Future<void> _setShared(TripExpense row, bool shared) async {
+    final ok = await _sync.setShared(
+      tripId: widget.tripId,
+      expenseId: row.id,
+      shared: shared,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (shared
+              ? 'Back in the split.'
+              : 'Taken out of the split. Nobody else owes a share of it.')
+          : 'That could not be saved. Check your connection.'),
+    ));
   }
 
   /// Offers a spelling correction before an expense is filed.

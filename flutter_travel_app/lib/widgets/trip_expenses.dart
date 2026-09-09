@@ -294,6 +294,7 @@ class _TripExpensesState extends State<TripExpenses> {
                 canChange: (row) => row.by == _uid || _isOwner,
                 onEdit: _editExpense,
                 onDelete: _deleteExpense,
+                onShared: _setShared,
               ),
               const SizedBox(height: 10),
               _settlement(approved),
@@ -480,6 +481,23 @@ class _TripExpensesState extends State<TripExpenses> {
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
       content: Text('That could not be deleted. Check your connection.'),
+    ));
+  }
+
+  /// Takes an expense out of the split, or puts it back.
+  Future<void> _setShared(TripExpense row, bool shared) async {
+    final ok = await _sync.setShared(
+      tripId: widget.tripId,
+      expenseId: row.id,
+      shared: shared,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (shared
+              ? 'Back in the split.'
+              : 'Taken out of the split. Nobody else owes a share of it.')
+          : 'That could not be saved. Check your connection.'),
     ));
   }
 

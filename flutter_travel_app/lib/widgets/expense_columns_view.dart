@@ -21,6 +21,7 @@ class ExpenseColumnsView extends StatelessWidget {
     this.canChange,
     this.onEdit,
     this.onDelete,
+    this.onShared,
   });
 
   /// The rows that count. Pending and rejected ones are not money anybody owes
@@ -35,6 +36,9 @@ class ExpenseColumnsView extends StatelessWidget {
   final bool Function(TripExpense)? canChange;
   final void Function(TripExpense)? onEdit;
   final void Function(TripExpense)? onDelete;
+
+  /// Takes a row out of the split, or puts it back.
+  final void Function(TripExpense, bool shared)? onShared;
 
   static const double _columnWidth = 168;
 
@@ -116,6 +120,9 @@ class ExpenseColumnsView extends StatelessWidget {
         const SizedBox(height: 6),
 
         _figure('Paid', formatRupees(column.paid)),
+        if (column.personal > 0)
+          _figure('Just theirs', formatRupees(column.personal),
+              color: Colors.grey.shade600),
         // Nothing is claimed for somebody outside the split: the settlement
         // divides between members and will never pay them back, so a balance
         // here would be a number that never comes true.
@@ -157,10 +164,25 @@ class ExpenseColumnsView extends StatelessWidget {
                   style: const TextStyle(fontSize: 12),
                   overflow: TextOverflow.ellipsis,
                 ),
-                Text(
-                  formatRupees(row.paise),
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600),
+                Row(
+                  children: [
+                    Text(
+                      formatRupees(row.paise),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: row.shared ? null : Colors.grey.shade600,
+                      ),
+                    ),
+                    // Said on the row itself. A number quietly missing from
+                    // the total below is the kind of thing people argue about.
+                    if (!row.shared) ...[
+                      const SizedBox(width: 5),
+                      Text('just theirs',
+                          style: TextStyle(
+                              fontSize: 10, color: Colors.grey.shade500)),
+                    ],
+                  ],
                 ),
               ],
             ),
@@ -173,8 +195,8 @@ class ExpenseColumnsView extends StatelessWidget {
                 padding: EdgeInsets.zero,
                 icon: Icon(Icons.more_vert,
                     size: 15, color: Colors.grey.shade600),
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
                     value: 'edit',
                     child: Row(children: [
                       Icon(Icons.edit_outlined, size: 17),
@@ -182,7 +204,24 @@ class ExpenseColumnsView extends StatelessWidget {
                       Text('Edit'),
                     ]),
                   ),
+                  // Out of the split, or back into it. The money stays on the
+                  // trip either way -- this is about who owes for it, not
+                  // about whether it happened.
                   PopupMenuItem(
+                    value: 'split',
+                    child: Row(children: [
+                      Icon(
+                          row.shared
+                              ? Icons.person_outline
+                              : Icons.group_outlined,
+                          size: 17),
+                      const SizedBox(width: 10),
+                      Text(row.shared
+                          ? 'Just mine — take out of the split'
+                          : 'Put back in the split'),
+                    ]),
+                  ),
+                  const PopupMenuItem(
                     value: 'delete',
                     child: Row(children: [
                       Icon(Icons.delete_outline, size: 17, color: Colors.red),
@@ -191,9 +230,11 @@ class ExpenseColumnsView extends StatelessWidget {
                     ]),
                   ),
                 ],
-                onSelected: (choice) => choice == 'edit'
-                    ? onEdit?.call(row)
-                    : onDelete?.call(row),
+                onSelected: (choice) => switch (choice) {
+                  'edit' => onEdit?.call(row),
+                  'split' => onShared?.call(row, !row.shared),
+                  _ => onDelete?.call(row),
+                },
               ),
             ),
         ],

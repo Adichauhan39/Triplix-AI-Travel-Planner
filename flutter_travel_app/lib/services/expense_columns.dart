@@ -22,6 +22,7 @@ class PersonColumn {
     required this.paid,
     required this.share,
     required this.inSplit,
+    this.personal = 0,
   });
 
   final String uid;
@@ -32,8 +33,13 @@ class PersonColumn {
   /// This person's expenses, newest first.
   final List<TripExpense> expenses;
 
-  /// What they put in, in paise.
+  /// What they put into the shared pot, in paise. Their own spending is not
+  /// in here -- nobody owes them for it, so counting it would misstate the
+  /// split.
   final int paid;
+
+  /// What they spent on themselves: recorded, shown, and divided with nobody.
+  final int personal;
 
   /// What they owe of the total. Zero when they are not in the split.
   final int share;
@@ -122,10 +128,18 @@ List<PersonColumn> buildExpenseColumns({
   ];
 
   final paid = <String, int>{};
+  final personal = <String, int>{};
   final byPerson = <String, List<TripExpense>>{};
   for (final row in approved) {
     if (row.by.isEmpty) continue;
-    paid[row.by] = (paid[row.by] ?? 0) + row.paise;
+    // An expense taken out of the split still belongs to the person and still
+    // shows in their column -- it simply owes nobody anything, so it stays out
+    // of the total the shares are worked out from.
+    if (row.shared) {
+      paid[row.by] = (paid[row.by] ?? 0) + row.paise;
+    } else {
+      personal[row.by] = (personal[row.by] ?? 0) + row.paise;
+    }
     (byPerson[row.by] ??= []).add(row);
   }
 
@@ -140,7 +154,10 @@ List<PersonColumn> buildExpenseColumns({
   // The split is whatever settle_up says it is. Deriving it again here would
   // let the columns and the settlement drift apart, which is the one thing a
   // shared ledger cannot survive.
-  final total = approved.fold<int>(0, (sum, row) => sum + row.paise);
+  // Only the shared money is divided. Including somebody's own shopping would
+  // charge everybody a share of it.
+  final total = approved.fold<int>(
+      0, (sum, row) => sum + (row.shared ? row.paise : 0));
   final shares = memberUids.isEmpty
       ? <String, int>{}
       : fairShares(total, memberUids);
@@ -154,6 +171,7 @@ List<PersonColumn> buildExpenseColumns({
         paid: paid[uid] ?? 0,
         share: shares[uid] ?? 0,
         inSplit: memberUids.contains(uid),
+        personal: personal[uid] ?? 0,
       ),
   ];
 
