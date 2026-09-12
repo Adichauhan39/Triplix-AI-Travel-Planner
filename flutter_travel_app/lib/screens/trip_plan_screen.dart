@@ -620,7 +620,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               'Some days do not have enough to do yet. Tell us the pace and '
               'we will fill them with real places in '
               '${plan.destination.split(',').first}.',
-              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 13, color: Brand.muted),
             ),
             const SizedBox(height: 4),
           ],
@@ -1384,6 +1384,62 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     setState(() => _error = null);
   }
 
+  /// The screen's own dark theme.
+  ///
+  /// Set here rather than app-wide because the app is being converted a screen
+  /// at a time: a global switch would turn every unconverted page dark at once
+  /// with all its light-mode colours still hard-coded, which is how you get
+  /// black text on ink.
+  ThemeData _brandTheme(BuildContext context) {
+    final base = ThemeData.dark(useMaterial3: false);
+    return base.copyWith(
+      scaffoldBackgroundColor: Brand.ink,
+      canvasColor: Brand.ink,
+      cardColor: Brand.surface,
+      dividerColor: Brand.hairline,
+      colorScheme: base.colorScheme.copyWith(
+        primary: Brand.teal,
+        secondary: Brand.sun,
+        surface: Brand.surface,
+        error: Brand.danger,
+      ),
+      textTheme: base.textTheme
+          .apply(bodyColor: Brand.text, displayColor: Brand.text),
+      iconTheme: const IconThemeData(color: Brand.muted),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Brand.ink,
+        foregroundColor: Brand.text,
+        elevation: 0,
+      ),
+      popupMenuTheme: const PopupMenuThemeData(color: Brand.raised),
+      dialogTheme: const DialogThemeData(backgroundColor: Brand.surface),
+      bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Brand.surface),
+      snackBarTheme: const SnackBarThemeData(
+        backgroundColor: Brand.raised,
+        contentTextStyle: TextStyle(color: Brand.text),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Brand.fill,
+        hintStyle: const TextStyle(color: Brand.faint),
+        labelStyle: const TextStyle(color: Brand.muted),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Brand.radiusPill),
+          borderSide: const BorderSide(color: Brand.hairline),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Brand.radiusPill),
+          borderSide: const BorderSide(color: Brand.hairline),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Brand.radiusPill),
+          borderSide: const BorderSide(color: Brand.teal),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Watched so the progress bar follows the render. The provider ticks on a
@@ -1428,7 +1484,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       });
     }
 
-    return Scaffold(
+    return Theme(
+      data: _brandTheme(context),
+      child: Scaffold(
+      backgroundColor: Brand.ink,
       appBar: AppBar(
         title: Text(plan?.destination.isNotEmpty == true
             ? 'Your trip to ${plan!.destination.split(',').first}'
@@ -1542,6 +1601,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 _buildRequestBar(),
               ],
             ),
+    ),
     );
   }
 
@@ -1551,20 +1611,20 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.map_outlined, size: 56, color: Colors.grey[400]),
+              Icon(Icons.map_outlined, size: 56, color: Brand.faint),
               const SizedBox(height: 16),
               Text(
                 'No trip yet',
                 style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
-                    color: Colors.grey[700]),
+                    color: Brand.muted),
               ),
               const SizedBox(height: 8),
               Text(
                 _missingInputMessage(),
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                style: TextStyle(fontSize: 13, color: Brand.faint),
               ),
             ],
           ),
@@ -1581,21 +1641,21 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.orange.shade50,
+              color: Brand.fill,
               borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-              border: Border.all(color: Colors.orange.shade200),
+              border: Border.all(color: Brand.hairline),
             ),
             child: Row(
               children: [
                 Icon(Icons.image_not_supported_outlined,
-                    size: 18, color: Colors.orange[800]),
+                    size: 18, color: Brand.caution),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Photos and ratings could not be loaded — check the '
                     'server is running, then reopen this tab.',
                     style:
-                        TextStyle(fontSize: 12, color: Colors.orange[900]),
+                        TextStyle(fontSize: 12, color: Brand.caution),
                   ),
                 ),
               ],
@@ -1609,7 +1669,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-            side: BorderSide(color: Colors.grey.shade300),
+            side: BorderSide(color: Brand.hairline),
           ),
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -1634,7 +1694,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                     const SizedBox(width: 10),
                     Text(_dayLabel.format(day.date),
                         style: TextStyle(
-                            fontSize: 13, color: Colors.grey[700])),
+                            fontSize: 13, color: Brand.muted)),
                   ],
                 ),
                 _daySummary(day, booked),
@@ -1655,7 +1715,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       style: TextStyle(
                           fontSize: 13,
                           fontStyle: FontStyle.italic,
-                          color: Colors.grey[500])),
+                          color: Brand.faint)),
                   const SizedBox(height: 6),
                   // Offered where the gap is felt, rather than sending the
                   // user back to the onboarding checklist to guess which
@@ -1730,7 +1790,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
-                                color: Colors.amber.shade100,
+                                color: Brand.fill,
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text('suggested',
@@ -1744,7 +1804,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                           // accident while scrolling a long trip.
                           PopupMenuButton<String>(
                             icon: Icon(Icons.more_vert,
-                                size: 18, color: Colors.grey[500]),
+                                size: 18, color: Brand.faint),
                             tooltip: 'Change this place',
                             onSelected: (choice) => _editItem(
                                 plan, index, day.items.indexOf(item), choice),
@@ -1776,10 +1836,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
+                      color: Brand.fill,
                       borderRadius:
                           BorderRadius.circular(AppConfig.radiusSmall),
-                      border: Border.all(color: Colors.grey.shade300),
+                      border: Border.all(color: Brand.hairline),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1788,7 +1848,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
-                                color: Colors.grey[700])),
+                                color: Brand.muted)),
                         const SizedBox(height: 6),
                         for (final line in _schedules[
                                 day.date.toIso8601String().split('T').first]!)
@@ -1948,7 +2008,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         children: [
           if (parts.isNotEmpty)
             Text(parts.join('  ·  '),
-                style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+                style: TextStyle(fontSize: 12, color: Brand.muted)),
           // The warning that actually saves a trip: turning up somewhere on
           // the one day of the week it does not open.
           for (final name in closed)
@@ -1957,14 +2017,14 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               child: Row(
                 children: [
                   Icon(Icons.warning_amber_rounded,
-                      size: 15, color: Colors.orange[800]),
+                      size: 15, color: Brand.caution),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text('$name is closed on this day',
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: Colors.orange[800])),
+                            color: Brand.caution)),
                   ),
                 ],
               ),
@@ -2098,14 +2158,14 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: AppConfig.primaryColor.withValues(alpha: 0.06),
+        color: Brand.teal.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
         border: Border.all(
-            color: AppConfig.primaryColor.withValues(alpha: 0.25)),
+            color: Brand.teal.withValues(alpha: 0.25)),
       ),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: AppConfig.primaryColor),
+          Icon(icon, size: 18, color: Brand.teal),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -2115,7 +2175,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w700)),
                 Text(subtitle,
-                    style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                    style: TextStyle(fontSize: 11, color: Brand.muted)),
                 // Left on the plan rather than hidden: the user really did
                 // book this, and making their own record vanish because they
                 // edited the destination would be worse than showing it in
@@ -2126,7 +2186,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                     child: Row(
                       children: [
                         Icon(Icons.error_outline,
-                            size: 12, color: Colors.orange[800]),
+                            size: 12, color: Brand.caution),
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
@@ -2134,7 +2194,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.orange[800]),
+                                color: Brand.caution),
                           ),
                         ),
                       ],
@@ -2149,7 +2209,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             Tooltip(
               message: 'As you typed it — we could not check this',
               child: Icon(Icons.help_outline,
-                  size: 15, color: Colors.orange[700]),
+                  size: 15, color: Brand.caution),
             ),
           // The only two rows on the plan that could not be changed. A wrong
           // departure time is the worst of them: the whole first day is built
@@ -2159,7 +2219,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               tooltip: 'Change this booking',
               padding: EdgeInsets.zero,
               icon: Icon(Icons.more_vert,
-                  size: 16, color: AppConfig.primaryColor),
+                  size: 16, color: Brand.teal),
               itemBuilder: (context) => [
                 if (onEdit != null)
                   const PopupMenuItem(
@@ -2247,9 +2307,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: Colors.grey.shade100,
+          color: Brand.fill,
           borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: Brand.hairline),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2261,12 +2321,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: Colors.grey[800]),
+                  color: Brand.muted),
             ),
             const SizedBox(height: 2),
             Text(
               'Kept, but left off this itinerary.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 11, color: Brand.faint),
             ),
             const SizedBox(height: 6),
             for (final booking in strays)
@@ -2279,7 +2339,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                           ? Icons.flight_takeoff
                           : Icons.hotel,
                       size: 14,
-                      color: Colors.grey[600],
+                      color: Brand.faint,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -2355,16 +2415,16 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         width: double.infinity,
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: Colors.orange.shade50,
+          color: Brand.fill,
           borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-          border: Border.all(color: Colors.orange.shade200),
+          border: Border.all(color: Brand.hairline),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(Icons.schedule, size: 13, color: Colors.orange[800]),
+                Icon(Icons.schedule, size: 13, color: Brand.caution),
                 const SizedBox(width: 6),
                 Text(
                   conflicts.length == 1
@@ -2373,7 +2433,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
-                      color: Colors.orange[800]),
+                      color: Brand.caution),
                 ),
               ],
             ),
@@ -2385,7 +2445,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   '${conflict.place} ${conflict.message}'
                   '${conflict.certain ? '' : ' — that time is an estimate'}',
                   style: TextStyle(
-                      fontSize: 11, height: 1.35, color: Colors.orange[900]),
+                      fontSize: 11, height: 1.35, color: Brand.caution),
                 ),
               ),
           ],
@@ -2518,7 +2578,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       ElevatedButton(
                         onPressed: () => Navigator.pop(innerContext, true),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: AppConfig.primaryColor,
+                          backgroundColor: Brand.teal,
                           foregroundColor: Colors.white,
                         ),
                         child: const Text('Save'),
@@ -2660,7 +2720,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 Text(
                   'What else do you enjoy? We will find real places of these '
                   'kinds in ${plan.destination.split(',').first}.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 12, color: Brand.faint),
                 ),
                 const SizedBox(height: 14),
                 _KindPictures(
@@ -2703,9 +2763,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                         ? null
                         : () => Navigator.pop(innerContext, true),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppConfig.primaryColor,
+                      backgroundColor: Brand.teal,
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: Colors.grey.shade300,
+                      disabledBackgroundColor: Brand.hairline,
                     ),
                     child: const Text('Fill the rest of my trip'),
                   ),
@@ -2775,7 +2835,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               const SizedBox(height: 4),
               Text(
                 'Its current places are replaced with ones of this kind.',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                style: TextStyle(fontSize: 12, color: Brand.faint),
               ),
               const SizedBox(height: 14),
               Wrap(
@@ -3016,10 +3076,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       width: 52,
       height: 52,
       decoration: BoxDecoration(
-        color: Colors.grey[200],
+        color: Brand.hairline,
         borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
       ),
-      child: Icon(Icons.place_outlined, size: 20, color: Colors.grey[500]),
+      child: Icon(Icons.place_outlined, size: 20, color: Brand.faint),
     );
     if (photo.isEmpty) return placeholder;
     return ClipRRect(
@@ -3055,7 +3115,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           description,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 11.5, height: 1.3, color: Colors.grey[800]),
+          style: TextStyle(fontSize: 11.5, height: 1.3, color: Brand.muted),
         ),
       );
     }
@@ -3072,7 +3132,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-            fontSize: 11.5, fontStyle: FontStyle.italic, color: Colors.grey[700]),
+            fontSize: 11.5, fontStyle: FontStyle.italic, color: Brand.muted),
       ),
     );
   }
@@ -3097,7 +3157,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       child: Text(parts.join('  ·  '),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+          style: TextStyle(fontSize: 11, color: Brand.muted)),
     );
   }
 
@@ -3129,7 +3189,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       ),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.grey.shade300)),
+        border: Border(top: BorderSide(color: Brand.hairline)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3154,7 +3214,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       ),
                       Text('${(_exportProgress * 100).round()}%',
                           style: const TextStyle(
-                              fontSize: 12, color: Colors.black54)),
+                              fontSize: 12, color: Brand.faint)),
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -3163,14 +3223,14 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                     child: LinearProgressIndicator(
                       value: _exportProgress > 0 ? _exportProgress : null,
                       minHeight: 5,
-                      backgroundColor: Colors.grey.shade200,
+                      backgroundColor: Brand.hairline,
                       valueColor: AlwaysStoppedAnimation(
-                          AppConfig.primaryColor),
+                          Brand.teal),
                     ),
                   ),
                   const SizedBox(height: 4),
                   const Text('Keep planning — we will tell you when it is done.',
-                      style: TextStyle(fontSize: 11, color: Colors.black45)),
+                      style: TextStyle(fontSize: 11, color: Brand.faint)),
                 ],
               ),
             ),
@@ -3187,7 +3247,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   label: Text('Your ${_exportFormat.toUpperCase()} is ready — '
                       'tap to share or save'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppConfig.primaryColor,
+                    backgroundColor: Brand.teal,
                     foregroundColor: Colors.white,
                   ),
                 ),
@@ -3199,12 +3259,12 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               child: Row(
                 children: [
                   Icon(Icons.error_outline,
-                      size: 16, color: Colors.orange[800]),
+                      size: 16, color: Brand.caution),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(_error!,
                         style: TextStyle(
-                            fontSize: 12, color: Colors.orange[800])),
+                            fontSize: 12, color: Brand.caution)),
                   ),
                 ],
               ),
@@ -3242,7 +3302,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       onPressed: _applyRequest,
                       icon: const Icon(Icons.arrow_upward),
                       style: IconButton.styleFrom(
-                        backgroundColor: AppConfig.primaryColor,
+                        backgroundColor: Brand.teal,
                       ),
                     ),
             ],
@@ -3345,7 +3405,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                   const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text('Pick the ones you want, or search for somewhere specific.',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+              style: TextStyle(fontSize: 12, color: Brand.faint)),
           const SizedBox(height: 10),
           TextField(
             controller: _query,
@@ -3373,7 +3433,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
           if (_searchError != null) ...[
             const SizedBox(height: 8),
             Text(_searchError!,
-                style: TextStyle(fontSize: 12, color: Colors.orange[800])),
+                style: TextStyle(fontSize: 12, color: Brand.caution)),
           ],
           const SizedBox(height: 12),
           // An empty sheet with a search box and no words looks broken. Saying
@@ -3385,7 +3445,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
               child: Text(
                 widget.emptyHint!,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                style: TextStyle(fontSize: 13, color: Brand.muted),
               ),
             )
           else
@@ -3408,10 +3468,10 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                   : () => Navigator.of(context)
                       .pop([for (final i in _selected) _shown[i]]),
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppConfig.primaryColor,
+                backgroundColor: Brand.teal,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.shade300,
-                disabledForegroundColor: Colors.grey.shade600,
+                disabledBackgroundColor: Brand.hairline,
+                disabledForegroundColor: Brand.faint,
               ),
               child: Text(_selected.isEmpty
                   ? 'Select at least one'
@@ -3434,12 +3494,12 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
       margin: const EdgeInsets.only(bottom: 8),
       elevation: 0,
       color: selected
-          ? AppConfig.primaryColor.withValues(alpha: 0.08)
+          ? Brand.teal.withValues(alpha: 0.08)
           : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
         side: BorderSide(
-          color: selected ? AppConfig.primaryColor : Colors.grey.shade300,
+          color: selected ? Brand.teal : Brand.hairline,
           width: selected ? 2 : 1,
         ),
       ),
@@ -3463,10 +3523,10 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                       // No stand-in image: a grey box is honest about a photo
                       // that would not load.
                       errorBuilder: (_, __, ___) => Container(
-                          width: 52, height: 52, color: Colors.grey[200])),
+                          width: 52, height: 52, color: Brand.hairline)),
                 )
               else
-                Container(width: 52, height: 52, color: Colors.grey[200]),
+                Container(width: 52, height: 52, color: Brand.hairline),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -3478,7 +3538,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                     if (rating > 0)
                       Text('$rating ★ ($count)',
                           style: TextStyle(
-                              fontSize: 11, color: Colors.grey[700])),
+                              fontSize: 11, color: Brand.muted)),
                     if (about.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -3486,7 +3546,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                fontSize: 11, color: Colors.grey[800])),
+                                fontSize: 11, color: Brand.muted)),
                       ),
                   ],
                 ),
@@ -3494,7 +3554,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
               Icon(
                 selected ? Icons.check_circle : Icons.radio_button_unchecked,
                 size: 20,
-                color: selected ? AppConfig.primaryColor : Colors.grey[400],
+                color: selected ? Brand.teal : Brand.faint,
               ),
             ],
           ),
@@ -3565,7 +3625,7 @@ class _StayPickerDialogState extends State<_StayPickerDialog> {
             Text(
               'So each day starts from the right place, and the stops are '
               'ordered from near you.',
-              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 13, color: Brand.muted),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -4073,10 +4133,10 @@ class _KindPicturesState extends State<_KindPictures> {
                   child: Container(
                     width: 104,
                     height: 76,
-                    color: Colors.grey.shade200,
+                    color: Brand.hairline,
                     child: url.isEmpty
                         ? Icon(Icons.image_outlined,
-                            size: 22, color: Colors.grey.shade400)
+                            size: 22, color: Brand.faint)
                         : Image.network(
                             url,
                             fit: BoxFit.cover,
@@ -4085,7 +4145,7 @@ class _KindPicturesState extends State<_KindPictures> {
                             errorBuilder: (_, __, ___) => Icon(
                                 Icons.image_outlined,
                                 size: 22,
-                                color: Colors.grey.shade400),
+                                color: Brand.faint),
                           ),
                   ),
                 ),
@@ -4096,7 +4156,7 @@ class _KindPicturesState extends State<_KindPictures> {
                     child: Container(
                       padding: const EdgeInsets.all(3),
                       decoration: BoxDecoration(
-                        color: AppConfig.primaryColor,
+                        color: Brand.teal,
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(Icons.check,
@@ -4110,7 +4170,7 @@ class _KindPicturesState extends State<_KindPictures> {
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                              color: AppConfig.primaryColor, width: 2),
+                              color: Brand.teal, width: 2),
                         ),
                       ),
                     ),
@@ -4125,7 +4185,7 @@ class _KindPicturesState extends State<_KindPictures> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? AppConfig.primaryColor : null,
+                color: selected ? Brand.teal : null,
               ),
             ),
           ],
