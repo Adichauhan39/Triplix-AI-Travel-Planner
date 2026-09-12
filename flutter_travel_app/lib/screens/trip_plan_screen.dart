@@ -11,6 +11,7 @@ import '../config/app_config.dart';
 import '../models/trip_plan.dart';
 import '../models/user_preferences.dart';
 import '../models/confirmed_booking.dart';
+import '../services/opening_hours.dart';
 import '../services/plan_diff.dart';
 import '../widgets/agent_ask.dart';
 import '../providers/booked_trip_provider.dart';
@@ -1761,6 +1762,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                                 style: const TextStyle(
                                     fontSize: 12, height: 1.35)),
                           ),
+                        ..._conflictLines(day),
                       ],
                     ),
                   ),
@@ -2196,6 +2198,75 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     if (claimed == null || claimed.isEmpty) return null;
 
     return claimed.toLowerCase() == city.toLowerCase() ? null : claimed;
+  }
+
+  /// Places in this day's running order that will be shut when it arrives.
+  ///
+  /// Renders nothing when there is nothing wrong, and nothing when the hours
+  /// are unknown -- a warning invented from missing data would teach people to
+  /// ignore the real ones.
+  ///
+  /// The times the scheduler guessed at ("Afternoon") are flagged too, but
+  /// said differently: the place really does close at five, and the only
+  /// uncertain half is when the plan means to be there.
+  List<Widget> _conflictLines(PlanDay day) {
+    final lines =
+        _schedules[day.date.toIso8601String().split('T').first] ??
+            const <String>[];
+    if (lines.isEmpty) return const [];
+
+    final conflicts = findDayConflicts(
+      runningOrder: lines,
+      hoursByPlace: {
+        for (final item in day.items)
+          _placeName(item.title): _todayHoursFor(item.title, day.date),
+      },
+    );
+    if (conflicts.isEmpty) return const [];
+
+    return [
+      const SizedBox(height: 8),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+          border: Border.all(color: Colors.orange.shade200),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.schedule, size: 13, color: Colors.orange[800]),
+                const SizedBox(width: 6),
+                Text(
+                  conflicts.length == 1
+                      ? 'One place will be shut'
+                      : '${conflicts.length} places will be shut',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.orange[800]),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            for (final conflict in conflicts)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1),
+                child: Text(
+                  '${conflict.place} ${conflict.message}'
+                  '${conflict.certain ? '' : ' — that time is an estimate'}',
+                  style: TextStyle(
+                      fontSize: 11, height: 1.35, color: Colors.orange[900]),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ];
   }
 
   /// Two digits, so 7:5 is never written where 07:05 is meant.
