@@ -4182,6 +4182,126 @@ def suggest_day_schedule(request: dict):
         return {"status": "error", "message": str(e), "notes": {}}
 
 
+# Directions for one ordered list of stops, remembered briefly.
+#
+# Two endpoints want the same answer about the same day: the map wants the
+# line, the route wants the times. Both come from one reply, so asking Google
+# twice would be paying twice for something already fetched. Keyed on the
+# rounded coordinates, which is what actually determines the answer.
+_route_cache: Dict[str, Dict[str, Any]] = {}
+_ROUTE_CACHE_TTL = 900
+
+
+def _directions_for(points: list) -> Dict[str, Any]:
+    """The driving route through `points`, in order. Empty dict on failure."""
+    if len(points) < 2 or not GOOGLE_PLACES_API_KEY:
+        return {}
+
+    key = "|".join(f"{round(la, 5)},{round(ln, 5)}" for la, ln in points)
+    cached = _route_cache.get(key)
+    now = time.time()
+    if cached and cached.get("at", 0) + _ROUTE_CACHE_TTL > now:
+        return cached.get("data") or {}
+
+    params = {
+        "origin": f"{points[0][0]},{points[0][1]}",
+        "destination": f"{points[-1][0]},{points[-1][1]}",
+        "mode": "driving",
+        "key": GOOGLE_PLACES_API_KEY,
+    }
+    if len(points) > 2:
+        params["waypoints"] = "|".join(
+            f"{la},{ln}" for la, ln in points[1:-1])
+
+    try:
+        reply = requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=params, timeout=15).json()
+    except Exception as e:
+        print(f"[ROUTE] {e}")
+        return {}
+
+    if reply.get("status") != "OK" or not reply.get("routes"):
+        print(f"[ROUTE] {reply.get('status')}")
+        return {}
+
+    route = reply["routes"][0]
+    legs = []
+    for leg in (route.get("legs") or []):
+        seconds = int((leg.get("duration") or {}).get("value") or 0)
+        metres = int((leg.get("distance") or {}).get("value") or 0)
+        legs.append({
+            "seconds": seconds,
+            "minutes": max(1, round(seconds / 60)) if seconds else 0,
+            "metres": metres,
+            "duration": (leg.get("duration") or {}).get("text") or "",
+            "distance": (leg.get("distance") or {}).get("text") or "",
+        })
+
+    data = {
+        "polyline": (route.get("overview_polyline") or {}).get("points", ""),
+        "legs": legs,
+        "total_seconds": sum(l["seconds"] for l in legs),
+        "total_metres": sum(l["metres"] for l in legs),
+    }
+    _route_cache[key] = {"at": now, "data": data}
+    # Bounded, because a long session plans many days and this is only a
+    # short-lived saving, not a store.
+    if len(_route_cache) > 200:
+        for stale in sorted(_route_cache,
+                            key=lambda k: _route_cache[k]["at"])[:100]:
+            _route_cache.pop(stale, None)
+    return data
+
+
+@app.post("/api/trip/route")
+def trip_route(request: dict):
+    """How long a day's drive takes, leg by leg.
+
+    Answers the question a map of pins cannot: five places on one street and
+    five an hour apart look identical until somebody says "20 min".
+
+    The reply pairs each leg with the two stops it joins, by index, so the
+    caller does not have to assume the order it sent is the order it gets.
+    """
+    try:
+        stops = [
+            (item.get("lat"), item.get("lng"))
+            for item in (request.get("items") or [])
+            if item.get("lat") is not None and item.get("lng") is not None
+        ]
+        if len(stops) < 2:
+            # Not a failure: one place has no drive.
+            return {"status": "success", "legs": [], "total_minutes": 0}
+
+        route = _directions_for(stops)
+        if not route:
+            return {"status": "error", "message": "route_unavailable",
+                    "legs": [], "total_minutes": 0}
+
+        legs = []
+        for index, leg in enumerate(route["legs"]):
+            legs.append({
+                "from": index,
+                "to": index + 1,
+                "minutes": leg["minutes"],
+                "duration": leg["duration"],
+                "distance": leg["distance"],
+            })
+
+        total = route["total_seconds"]
+        return {
+            "status": "success",
+            "legs": legs,
+            "total_minutes": max(1, round(total / 60)) if total else 0,
+            "total_distance_km": round(route["total_metres"] / 1000, 1),
+        }
+    except Exception as e:
+        print(f"[TRIP ROUTE] {e}")
+        return {"status": "error", "message": str(e), "legs": [],
+                "total_minutes": 0}
+
+
 @app.post("/api/trip/map")
 def trip_map(request: dict):
     """The whole trip on one map, pinned by day.
@@ -4250,31 +4370,19 @@ def trip_map(request: dict):
         # the question there is "where is this trip", not "what is the drive".
         path = ""
         if request.get("route") is True and len(points) >= 2:
-            try:
-                params = {
-                    "origin": f"{points[0][0]},{points[0][1]}",
-                    "destination": f"{points[-1][0]},{points[-1][1]}",
-                    "mode": "driving",
-                    "key": GOOGLE_PLACES_API_KEY,
-                }
-                if len(points) > 2:
-                    params["waypoints"] = "|".join(
-                        f"{la},{ln}" for la, ln in points[1:-1])
-                directions = requests.get(
-                    "https://maps.googleapis.com/maps/api/directions/json",
-                    params=params, timeout=15).json()
-                if directions.get("status") == "OK" and directions.get("routes"):
-                    encoded = (directions["routes"][0]
-                               .get("overview_polyline", {}).get("points", ""))
-                    if encoded:
-                        # enc: keeps the URL short; a route runs to hundreds of
-                        # coordinates and raw pairs exceed what Static Maps
-                        # will accept.
-                        path = ("&path=color:0xd62d20c0%7Cweight:5%7Cenc:"
-                                + quote(encoded, safe=""))
-            except Exception as e:
-                # No line is a smaller loss than no map.
-                print(f"[TRIP MAP] route unavailable: {e}")
+            encoded = (_directions_for(points) or {}).get("polyline", "")
+            if encoded:
+                # enc: keeps the URL short; a route runs to hundreds of
+                # coordinates and raw pairs exceed what Static Maps will
+                # accept.
+                trail = quote(encoded, safe="")
+                # Drawn twice: a wide translucent pass, then the bright line
+                # over it. Static Maps has no glow, and one flat stroke on a
+                # dark ground reads as a scratch rather than a route.
+                path = (
+                    f"&path=color:0x1FA7C433%7Cweight:11%7Cenc:{trail}"
+                    f"&path=color:0x1FA7C4ff%7Cweight:5%7Cenc:{trail}"
+                )
 
         centre_lat = sum(p[0] for p in points) / len(points)
         centre_lng = sum(p[1] for p in points) / len(points)
@@ -4287,10 +4395,35 @@ def trip_map(request: dict):
         # 640x640 at scale=2 is the most Static Maps will return.
         detailed = request.get("detailed") is True
         size = "640x640" if detailed else "640x480"
+        # Ink, with the clutter turned off.
+        #
+        # The default roadmap is a beige sheet of business pins, transit lines
+        # and administrative borders, none of which is the trip. What is left
+        # here is land, water, roads and place names -- so the eye has only
+        # the route and the day's pins to land on.
+        style = "".join(
+            "&style=" + quote(rule, safe="")
+            for rule in (
+                "feature:all|element:geometry|color:0x0b1220",
+                "feature:all|element:labels.text.fill|color:0x8295b3",
+                "feature:all|element:labels.text.stroke|color:0x0b1220",
+                "feature:all|element:labels.icon|visibility:off",
+                "feature:poi|visibility:off",
+                "feature:poi.park|element:geometry|color:0x122a20",
+                "feature:transit|visibility:off",
+                "feature:administrative|element:geometry|visibility:off",
+                "feature:road|element:geometry|color:0x1a2438",
+                "feature:road|element:labels.text.fill|color:0x6b7d9c",
+                "feature:road.arterial|element:geometry|color:0x223049",
+                "feature:road.highway|element:geometry|color:0x2d4066",
+                "feature:water|element:geometry|color:0x061426",
+                "feature:landscape.natural|element:geometry|color:0x101a2c",
+            )
+        )
         url = (
             "https://maps.googleapis.com/maps/api/staticmap"
             f"?size={size}&scale=2&maptype=roadmap"
-            f"&center={centre_lat},{centre_lng}"
+            f"&center={centre_lat},{centre_lng}{style}"
             f"{''.join(markers)}{path}&key={GOOGLE_PLACES_API_KEY}"
         )
         resp = requests.get(url, timeout=20)
