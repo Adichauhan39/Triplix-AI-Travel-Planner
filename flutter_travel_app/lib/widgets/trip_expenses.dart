@@ -6,8 +6,8 @@ import 'package:flutter/services.dart';
 import '../config/app_config.dart';
 import '../services/expense_words.dart';
 import '../services/expense_columns.dart';
-import '../services/share_link.dart' as sharing;
 import 'expense_columns_view.dart';
+import 'share_sheet.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 
@@ -104,22 +104,15 @@ class _TripExpensesState extends State<TripExpenses> {
   /// Copies the trip link. One trip, one link -- sharing the budget and
   /// sharing the plan are the same act, because they describe one journey.
   Future<void> _shareLink() async {
-    // Straight to the share sheet, with the clipboard as the fallback.
-    // Copying left people to go and find WhatsApp themselves; on a phone,
-    // which is where these get sent, the sheet is one tap to the right
-    // conversation.
-    final outcome = await sharing.shareLink(
-      TripSync.shareLink(widget.tripId),
+    // Copies first, then offers where to send it. The old order -- sheet
+    // first, copy only if there was no sheet -- left desktop users with
+    // nothing on the clipboard, which is the one thing share must never do.
+    await showShareSheet(
+      context,
+      link: TripSync.shareLink(widget.tripId),
       message: 'Come and split the costs of this trip with me on Triplix.',
+      note: 'Whoever opens it signs in, tells you their name, and waits for you to approve them before anything they add counts.',
     );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(sharing.shareMessageFor(
-        outcome,
-        copied: 'Link copied. Whoever opens it can ask to join and add '
-            'spending.',
-      )),
-    ));
   }
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
@@ -258,8 +251,8 @@ class _TripExpensesState extends State<TripExpenses> {
                   onPressed: _askNickname,
                 ),
                 IconButton(
-                  tooltip: 'Copy the link to share this trip and its spending',
-                  icon: const Icon(Icons.link, size: 18),
+                  tooltip: 'Share this trip and its spending',
+                  icon: const Icon(Icons.ios_share, size: 18),
                   onPressed: _shareLink,
                 ),
                 TextButton.icon(

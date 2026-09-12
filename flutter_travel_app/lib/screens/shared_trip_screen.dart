@@ -16,6 +16,7 @@ import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 import '../widgets/agent_ask.dart';
 import '../widgets/place_detail_sheet.dart';
+import '../widgets/share_sheet.dart';
 
 /// A trip somebody shared, opened from its link.
 ///
@@ -1979,29 +1980,18 @@ Future<String?> shareTrip({
   }
 
   final link = TripSync.shareLink(tripId);
-  await Clipboard.setData(ClipboardData(text: link));
   if (!context.mounted) return link;
 
-  // Says what the link actually does. "Shared" on its own invites people to
-  // assume it is private to whoever they sent it to.
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: const Text('Link copied. Anyone with it can read your trip.'),
-    action: SnackBarAction(
-      label: 'Show',
-      onPressed: () => showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Share this trip'),
-          content: SelectableText(link),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Done'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  ));
+  // The same sheet as every other share button: copied on open, then the
+  // apps. The note says what the link actually does -- "Shared" on its own
+  // invites people to assume it stays with whoever they sent it to.
+  await showShareSheet(
+    context,
+    link: link,
+    message: 'I planned this trip on Triplix. Come and have a look.',
+    note: 'Anyone with this link can read your trip. To change it or add '
+        'spending they sign in, tell you their name, and wait for you to '
+        'approve them.',
+  );
   return link;
 }

@@ -17,7 +17,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import '../services/expense_columns.dart';
 import '../services/expense_message.dart';
-import '../services/share_link.dart' as sharing;
+import '../widgets/share_sheet.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 import '../providers/export_job_provider.dart';
@@ -6765,7 +6765,7 @@ class _BudgetTabState extends State<BudgetTab>
                             fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                     ),
-                    Text('Copy link',
+                    Text('Share...',
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -7177,18 +7177,13 @@ class _BudgetTabState extends State<BudgetTab>
     if (plan != null) {
       await TripSync().publish(tripId: tripId, plan: plan);
     }
-    final outcome = await sharing.shareLink(
-      TripSync.shareLink(tripId),
-      message: 'Come and split the costs of this trip with me on Triplix.',
-    );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(sharing.shareMessageFor(
-        outcome,
-        copied: 'Link copied. They are asked their name, then you approve '
-            'them before anything counts.',
-      )),
-    ));
+    await showShareSheet(
+      context,
+      link: TripSync.shareLink(tripId),
+      message: 'Come and split the costs of this trip with me on Triplix.',
+      note: 'Whoever opens it signs in, tells you their name, and waits for you to approve them before anything they add counts.',
+    );
   }
 
   Widget _buildExpensesTab() {
