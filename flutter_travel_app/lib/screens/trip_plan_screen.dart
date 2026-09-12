@@ -293,7 +293,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         adk: _adk,
         coords: _mapCoords(plan),
         placeName: _placeName,
-        onOpenInMaps: () => _openWholeTripInMaps(plan),
+        onOpenInMaps: (day) => _openInMaps(plan, day),
       ),
     );
   }
@@ -323,12 +323,34 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   }
 
   /// Hands the whole trip to Google Maps, where it can actually be navigated.
-  Future<void> _openWholeTripInMaps(TripPlan plan) async {
+  /// Hands Maps the stops of one day, or of the whole trip.
+  ///
+  /// [day] is the day on screen. It used to always send everything, so opening
+  /// Maps from a sheet showing Day 4 produced a route through all five days --
+  /// and since Maps caps waypoints, the end of it was quietly cut off as well.
+  Future<void> _openInMaps(TripPlan plan, int? day) async {
+    final days = day == null
+        ? plan.days
+        : (day >= 0 && day < plan.days.length
+            ? [plan.days[day]]
+            : const <PlanDay>[]);
+
     final stops = [
-      for (final day in plan.days)
-        for (final item in day.items) _placeName(item.title)
+      for (final d in days)
+        for (final item in d.items) _placeName(item.title)
     ].where((s) => s.isNotEmpty).toList();
     if (stops.isEmpty) return;
+
+    // One stop is a place, not a route: /dir/ with the same origin and
+    // destination opens an empty journey, so ask Maps for the place itself.
+    if (stops.length == 1) {
+      await launchUrl(
+        Uri.https('www.google.com', '/maps/search/',
+            {'api': '1', 'query': stops.first}),
+        mode: LaunchMode.externalApplication,
+      );
+      return;
+    }
 
     // Maps takes an origin, a destination and waypoints between them.
     final params = <String, String>{
@@ -3705,7 +3727,9 @@ class _TripMapDialog extends StatefulWidget {
   final PythonADKService adk;
   final Map<String, List<double>> coords;
   final String Function(String) placeName;
-  final VoidCallback onOpenInMaps;
+  /// Told which day is on screen, so the button matches what is being
+  /// looked at. Null means the whole trip.
+  final void Function(int? day) onOpenInMaps;
 
   @override
   State<_TripMapDialog> createState() => _TripMapDialogState();
@@ -4031,13 +4055,15 @@ class _TripMapDialogState extends State<_TripMapDialog> {
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: widget.onOpenInMaps,
+                  onPressed: () => widget.onOpenInMaps(_day),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Brand.text,
                     side: const BorderSide(color: Brand.hairline),
                   ),
                   icon: const Icon(Icons.open_in_new, size: 16),
-                  label: const Text('Open in Google Maps'),
+                  label: Text(_day == null
+                      ? 'Open the whole trip in Google Maps'
+                      : 'Open Day ${_day! + 1} in Google Maps'),
                 ),
               ),
             ),

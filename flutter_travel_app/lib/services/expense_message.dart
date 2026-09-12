@@ -91,14 +91,76 @@ final RegExp _notShared = RegExp(
   caseSensitive: false,
 );
 
+/// "in surendra account", "to surendra", "surendra's account".
+///
+/// A separate pattern from `by`/`from`, because this is how people actually
+/// say it when they are putting money against somebody rather than reporting
+/// who paid: "add 500 to bulla", "5000 in surendra account".
+final RegExp _accountOf = RegExp(
+  r"\b(?:in|into|to|for)\s+([a-z][a-z .]{0,30}?)(?:'?s)?"
+  r"\s*(?:account|name|share)\b",
+  caseSensitive: false,
+);
+
+/// "add 500 to bulla" -- no account word, so it has to end there or run into
+/// the purpose.
+final RegExp _toName = RegExp(
+  r"^\s*add\b[^a-z]*(?:rs\.?|₹|inr)?\s*[\d,.]+\s*(?:rs\.?|₹|rupees?)?\s*"
+  r"(?:in|into|to)\s+([a-z][a-z .]{0,30}?)"
+  r"(?=\s+(?:for|on|towards)\b|[,.]|$)",
+  caseSensitive: false,
+);
+
+/// What a sentence says about money, including when it does not say enough.
+///
+/// [readExpense] answers null for an incomplete sentence, which is right for
+/// filing but useless for talking: somebody who types "add 5000 to surendra
+/// account" has said three quarters of an expense and should be asked for the
+/// rest, not ignored while a model invents a reply.
+class ExpenseDraft {
+  const ExpenseDraft({
+    this.rupees,
+    this.payer,
+    this.description = '',
+    this.shared = true,
+  });
+
+  final double? rupees;
+  final String? payer;
+
+  /// What the money was for. Empty when the sentence never said.
+  final String description;
+  final bool shared;
+
+  bool get hasAmount => rupees != null && rupees! > 0;
+
+  /// Enough to file.
+  bool get complete => hasAmount && description.isNotEmpty;
+
+  /// An amount and nothing to call it: worth one question.
+  bool get needsPurpose => hasAmount && description.isEmpty;
+}
+
 /// Reads a sentence into an expense, or null if there is no money in it.
 ///
 /// Returning null is the common case and not a failure: most messages in a
 /// budget chat are questions, and filing an expense from one would be worse
 /// than missing it.
 SpokenExpense? readExpense(String message) {
+  final draft = readExpenseDraft(message);
+  if (!draft.complete) return null;
+  return SpokenExpense(
+    rupees: draft.rupees!,
+    description: draft.description,
+    payer: draft.payer,
+    shared: draft.shared,
+  );
+}
+
+/// Everything the sentence gave up, complete or not.
+ExpenseDraft readExpenseDraft(String message) {
   final text = message.trim();
-  if (text.isEmpty) return null;
+  if (text.isEmpty) return const ExpenseDraft();
 
   // Apostrophes dropped for the test only; the original text is still what
   // the amount and the payer are read from.
@@ -106,16 +168,24 @@ SpokenExpense? readExpense(String message) {
   final shared = !_notShared.hasMatch(plain);
 
   final amountMatch = _amount.firstMatch(text);
-  if (amountMatch == null) return null;
+  if (amountMatch == null) return const ExpenseDraft();
   final rupees = double.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
-  if (rupees == null || rupees <= 0) return null;
+  if (rupees == null || rupees <= 0) return const ExpenseDraft();
 
   // Payer, if the sentence names one. "<name> paid" is checked first because
   // "bulla paid 500 by card" would otherwise report the card as the payer.
   String? payer;
   final leading = _namePaid.firstMatch(text);
+  final account = _accountOf.firstMatch(text);
+  final toward = _toName.firstMatch(text);
   if (leading != null) {
     payer = leading.group(1)!.trim();
+  } else if (account != null) {
+    // "5000 in surendra account" -- checked before `by`, since "for" appears
+    // in both this pattern and the purpose one.
+    payer = account.group(1)!.trim();
+  } else if (toward != null) {
+    payer = toward.group(1)!.trim();
   } else {
     final trailing = _byName.firstMatch(text);
     if (trailing != null) payer = trailing.group(1)!.trim();
@@ -145,6 +215,13 @@ SpokenExpense? readExpense(String message) {
     description = description
         .replaceFirst(RegExp(r'\s+(?:paid\s+)?by\s+.+$', caseSensitive: false), '')
         .trim();
+    // Nor does "surendra account": "for" introduces the purpose and also the
+    // person, and the person is not what the money was spent on.
+    if (RegExp(r'^[a-z][a-z .]{0,30}?(?:\u0027?s)?\s*(?:account|name|share)$',
+            caseSensitive: false)
+        .hasMatch(description)) {
+      description = '';
+    }
   }
   // The instruction is not part of what was bought. Cut at the connector so
   // "food, but dont share it" becomes "food" rather than "food but".
@@ -168,12 +245,10 @@ SpokenExpense? readExpense(String message) {
       description = '';
     }
   }
-  if (description.isEmpty) return null;
-
-  return SpokenExpense(
+  return ExpenseDraft(
     rupees: rupees,
-    description: description,
     payer: payer,
+    description: description,
     shared: shared,
   );
 }

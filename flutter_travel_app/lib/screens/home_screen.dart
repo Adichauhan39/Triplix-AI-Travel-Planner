@@ -6072,6 +6072,12 @@ class BudgetTab extends StatefulWidget {
   State<BudgetTab> createState() => _BudgetTabState();
 }
 
+/// What the budget chat actually did with a message.
+///
+/// The reply is built from this rather than from the model, because the model
+/// cannot see the ledger and was announcing expenses that were never written.
+enum ChatExpense { filed, needsPurpose, notMoney }
+
 class _BudgetTabState extends State<BudgetTab>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
@@ -6239,10 +6245,13 @@ class _BudgetTabState extends State<BudgetTab>
 
       // Check if AI detected a budget setup command
       _tryParseBudgetFromMessage(message);
-      // Check if AI detected an expense
+      // Awaited. This used to be fire-and-forget with the count read on the
+      // next line, so expenseAdded was false before the work had run and the
+      // model's claim was shown instead of the ledger's.
       final expenseBefore = _expenses.length;
-      unawaited(_tryParseExpenseFromMessage(message));
-      final expenseAdded = _expenses.length > expenseBefore;
+      final outcome = await _tryParseExpenseFromMessage(message);
+      if (!mounted) return;
+      final expenseAdded = outcome == ChatExpense.filed;
 
       setState(() {
         _isTyping = false;
@@ -6261,6 +6270,10 @@ class _BudgetTabState extends State<BudgetTab>
                 '✅ Remaining: ₹${_remaining.toStringAsFixed(0)}\n'
                 '📊 Expenses logged: ${_expenses.length}',
           });
+        } else if (outcome == ChatExpense.needsPurpose) {
+          // Asked, rather than letting the model answer for a ledger it
+          // cannot write to.
+          _chatMessages.add({'sender': 'ai', 'message': _askForPurpose()});
         } else {
           _chatMessages.add({'sender': 'ai', 'message': aiReply});
         }
@@ -6273,8 +6286,9 @@ class _BudgetTabState extends State<BudgetTab>
       // Fallback: handle locally
       _tryParseBudgetFromMessage(message);
       final expenseBefore = _expenses.length;
-      unawaited(_tryParseExpenseFromMessage(message));
-      final expenseAdded = _expenses.length > expenseBefore;
+      final outcome = await _tryParseExpenseFromMessage(message);
+      if (!mounted) return;
+      final expenseAdded = outcome == ChatExpense.filed;
 
       setState(() {
         _isTyping = false;
@@ -6292,6 +6306,8 @@ class _BudgetTabState extends State<BudgetTab>
                 '✅ Remaining: ₹${_remaining.toStringAsFixed(0)}\n'
                 '📊 Expenses logged: ${_expenses.length}',
           });
+        } else if (outcome == ChatExpense.needsPurpose) {
+          _chatMessages.add({'sender': 'ai', 'message': _askForPurpose()});
         } else {
           _chatMessages.add({
             'sender': 'ai',
@@ -6335,9 +6351,45 @@ class _BudgetTabState extends State<BudgetTab>
   /// with no clear amount and purpose is not an expense (most messages in a
   /// budget chat are questions), and a payer whose name matches nobody on the
   /// trip is not filed against a stranger.
-  Future<void> _tryParseExpenseFromMessage(String message) async {
-    final spoken = readExpense(message);
-    if (spoken == null) return;
+  /// A draft waiting on one more answer.
+  ///
+  /// "add 5000 to surendra account" is three quarters of an expense. Asking
+  /// what it was for only helps if the answer can be joined to it, so the
+  /// amount and the payer are held here until the next message supplies the
+  /// missing half.
+  ExpenseDraft? _pendingExpense;
+
+  Future<ChatExpense> _tryParseExpenseFromMessage(String message) async {
+    var draft = readExpenseDraft(message);
+
+    // The reply to "what was it for?".
+    final pending = _pendingExpense;
+    if (pending != null && !draft.hasAmount) {
+      final purpose = message.trim();
+      // A question is not an answer, and neither is a whole sentence.
+      if (purpose.isNotEmpty && purpose.length <= 60 && !purpose.contains('?')) {
+        draft = ExpenseDraft(
+          rupees: pending.rupees,
+          payer: pending.payer,
+          description: purpose,
+          shared: pending.shared,
+        );
+      }
+    }
+
+    if (draft.needsPurpose) {
+      setState(() => _pendingExpense = draft);
+      return ChatExpense.needsPurpose;
+    }
+    if (!draft.complete) return ChatExpense.notMoney;
+
+    _pendingExpense = null;
+    final spoken = SpokenExpense(
+      rupees: draft.rupees!,
+      description: draft.description,
+      payer: draft.payer,
+      shared: draft.shared,
+    );
 
     final category = _inferCategory(spoken.description);
 
@@ -6352,7 +6404,11 @@ class _BudgetTabState extends State<BudgetTab>
     });
 
     final tripId = context.read<TripPlanProvider>().tripId;
-    if (tripId.isEmpty || FirebaseAuth.instance.currentUser == null) return;
+    if (tripId.isEmpty || FirebaseAuth.instance.currentUser == null) {
+      // On the charts but not in the shared ledger, which is the honest
+      // outcome when there is no trip or nobody is signed in.
+      return ChatExpense.filed;
+    }
 
     // Who paid. A name nobody on the trip answers to leaves this null, and the
     // expense is filed against the person typing -- which is what "spent 2000
@@ -6386,6 +6442,18 @@ class _BudgetTabState extends State<BudgetTab>
       onBehalfOf: payerUid,
       shared: spoken.shared,
     );
+    return ChatExpense.filed;
+  }
+
+  /// The question to ask when an amount arrived without a purpose.
+  String _askForPurpose() {
+    final draft = _pendingExpense;
+    final amount = draft?.rupees?.round() ?? 0;
+    final who = draft?.payer;
+    return who == null
+        ? 'What was the ₹$amount for? Tell me in a word or two and I will '
+            'add it.'
+        : 'What was the ₹$amount for? I will put it against $who once I know.';
   }
 
   String _inferCategory(String description) {
