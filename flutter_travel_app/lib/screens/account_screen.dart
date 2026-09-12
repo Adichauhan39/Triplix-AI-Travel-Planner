@@ -312,7 +312,7 @@ class _AccountScreenState extends State<AccountScreen> {
                       children: [
                         CircleAvatar(
                           radius: 45,
-                          backgroundColor: Colors.white,
+                          backgroundColor: AppConfig.cardColor,
                           child: Text(
                             _userAvatar,
                             style: const TextStyle(

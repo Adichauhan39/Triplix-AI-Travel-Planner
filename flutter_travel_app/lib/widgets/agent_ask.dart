@@ -109,7 +109,7 @@ Future<bool?> confirmPlanChanges(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(iconFor(change),
-                        size: 16, color: Colors.grey.shade700),
+                        size: 16, color: AppConfig.textSecondary),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(wordsFor(change),
@@ -123,7 +123,7 @@ Future<bool?> confirmPlanChanges(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text('…and ${changes.length - 10} more',
                     style:
-                        TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                        TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
               ),
           ],
         ),

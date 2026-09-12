@@ -167,7 +167,7 @@ class _PlanQuickEditSheetState extends State<PlanQuickEditSheet> {
           const SizedBox(height: 4),
           Text(
             'Say what to change and it updates your day-by-day plan.',
-            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
           ),
           const SizedBox(height: 14),
           TextField(
@@ -213,12 +213,12 @@ class _PlanQuickEditSheetState extends State<PlanQuickEditSheet> {
             const SizedBox(height: 10),
             Row(
               children: [
-                Icon(Icons.error_outline, size: 16, color: Colors.orange[800]),
+                Icon(Icons.error_outline, size: 16, color: AppConfig.warningColor),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(_error!,
                       style:
-                          TextStyle(fontSize: 12, color: Colors.orange[800])),
+                          TextStyle(fontSize: 12, color: AppConfig.warningColor)),
                 ),
               ],
             ),
@@ -243,7 +243,7 @@ class _PlanQuickEditSheetState extends State<PlanQuickEditSheet> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppConfig.primaryColor,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.shade300,
+                disabledBackgroundColor: AppConfig.borderColor,
               ),
               child: _applying
                   ? const SizedBox(

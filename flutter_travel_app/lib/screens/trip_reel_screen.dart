@@ -208,7 +208,7 @@ class _TripReelScreenState extends State<TripReelScreen>
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Colors.black87],
+                    colors: [Colors.transparent, AppConfig.textPrimary],
                   ),
                 ),
                 child: Column(
@@ -223,7 +223,7 @@ class _TripReelScreenState extends State<TripReelScreen>
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
                           shadows: [
-                            Shadow(blurRadius: 8, color: Colors.black54)
+                            Shadow(blurRadius: 8, color: AppConfig.textTertiary)
                           ],
                         ),
                       ),

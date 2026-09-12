@@ -52,14 +52,14 @@ class _CartScreenState extends State<CartScreen> {
                   Icon(
                     Icons.shopping_cart_outlined,
                     size: 80,
-                    color: Colors.grey[400],
+                    color: AppConfig.textTertiary,
                   ),
                   const SizedBox(height: 16),
                   Text(
                     'Your cart is empty',
                     style: TextStyle(
                       fontSize: 20,
-                      color: Colors.grey[600],
+                      color: AppConfig.textTertiary,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -68,7 +68,7 @@ class _CartScreenState extends State<CartScreen> {
                     'Start swiping to add hotels!',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.grey[500],
+                      color: AppConfig.textTertiary,
                     ),
                   ),
                 ],
@@ -157,7 +157,7 @@ class _CartScreenState extends State<CartScreen> {
                                               hotel.city,
                                               style: TextStyle(
                                                 fontSize: 12,
-                                                color: Colors.grey[600],
+                                                color: AppConfig.textTertiary,
                                               ),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
@@ -254,7 +254,7 @@ class _CartScreenState extends State<CartScreen> {
                           '${_cartHotels.length} ${_cartHotels.length == 1 ? 'hotel' : 'hotels'} in cart',
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.grey[600],
+                            color: AppConfig.textTertiary,
                           ),
                         ),
                         const SizedBox(height: 16),

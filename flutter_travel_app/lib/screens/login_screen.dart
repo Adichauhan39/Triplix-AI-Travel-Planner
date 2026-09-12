@@ -1,3 +1,4 @@
+import '../config/app_config.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:get/get.dart';
@@ -205,7 +206,7 @@ class _LoginScreenState extends State<LoginScreen>
                     const TriplixLogo(
                       size: 60,
                       padding: EdgeInsets.all(20),
-                      backgroundColor: Colors.white,
+                      backgroundColor: AppConfig.cardColor,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
@@ -279,7 +280,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppConfig.cardColor,
                               ),
                               validator: (value) {
                                 if (value == null || value.isEmpty) {
@@ -317,7 +318,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppConfig.cardColor,
                               ),
                               validator: (value) {
                                 if (value == null || value.isEmpty) {

@@ -1251,7 +1251,7 @@ class _HomeTabState extends State<HomeTab> {
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: Colors.grey[100],
+                        color: AppConfig.cardColor,
                         borderRadius: const BorderRadius.vertical(
                           bottom: Radius.circular(16),
                         ),
@@ -1284,7 +1284,7 @@ class _HomeTabState extends State<HomeTab> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppConfig.primaryColor,
                               foregroundColor: Colors.white,
-                              disabledBackgroundColor: Colors.grey.shade300,
+                              disabledBackgroundColor: AppConfig.borderColor,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 20,
                                 vertical: 12,
@@ -1325,7 +1325,7 @@ class _HomeTabState extends State<HomeTab> {
           'Select one option to proceed:',
           style: TextStyle(
             fontSize: 14,
-            color: Colors.grey[600],
+            color: AppConfig.textTertiary,
           ),
         ),
         const SizedBox(height: 16),
@@ -1338,7 +1338,7 @@ class _HomeTabState extends State<HomeTab> {
             decoration: BoxDecoration(
               border: Border.all(
                 color:
-                    isSelected ? AppConfig.primaryColor : Colors.grey.shade300,
+                    isSelected ? AppConfig.primaryColor : AppConfig.borderColor,
                 width: isSelected ? 2 : 1,
               ),
               borderRadius: BorderRadius.circular(12),
@@ -1364,7 +1364,7 @@ class _HomeTabState extends State<HomeTab> {
                           border: Border.all(
                             color: isSelected
                                 ? AppConfig.primaryColor
-                                : Colors.grey.shade400,
+                                : AppConfig.textTertiary,
                             width: 2,
                           ),
                           color: isSelected
@@ -1393,7 +1393,7 @@ class _HomeTabState extends State<HomeTab> {
                                 fontWeight: FontWeight.bold,
                                 color: isSelected
                                     ? AppConfig.primaryColor
-                                    : Colors.black87,
+                                    : AppConfig.textPrimary,
                               ),
                             ),
                             if (item['location'] != null) ...[
@@ -1401,14 +1401,14 @@ class _HomeTabState extends State<HomeTab> {
                               Row(
                                 children: [
                                   Icon(Icons.location_on,
-                                      size: 14, color: Colors.grey[600]),
+                                      size: 14, color: AppConfig.textTertiary),
                                   const SizedBox(width: 4),
                                   Expanded(
                                     child: Text(
                                       item['location'],
                                       style: TextStyle(
                                         fontSize: 13,
-                                        color: Colors.grey[600],
+                                        color: AppConfig.textTertiary,
                                       ),
                                     ),
                                   ),
@@ -1422,7 +1422,7 @@ class _HomeTabState extends State<HomeTab> {
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.green[700],
+                                  color: AppConfig.successColor,
                                 ),
                               ),
                             ],
@@ -1432,7 +1432,7 @@ class _HomeTabState extends State<HomeTab> {
                                 item['description'],
                                 style: TextStyle(
                                   fontSize: 13,
-                                  color: Colors.grey[700],
+                                  color: AppConfig.textSecondary,
                                 ),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -1799,7 +1799,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                             borderSide: BorderSide.none,
                           ),
                           filled: true,
-                          fillColor: Colors.grey[100],
+                          fillColor: AppConfig.cardColor,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 20,
                             vertical: 12,
@@ -1890,7 +1890,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, color: Colors.grey[400]),
+              Icon(Icons.chevron_right, color: AppConfig.textTertiary),
             ],
           ),
         ),
@@ -1905,7 +1905,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -2018,7 +2018,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                                   ? null
                                   : Border(
                                       bottom: BorderSide(
-                                        color: Colors.grey[200]!,
+                                        color: AppConfig.borderColor!,
                                       ),
                                     ),
                             ),
@@ -2488,7 +2488,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                 TriplixLogo(
                   size: 16,
                   padding: EdgeInsets.all(4),
-                  backgroundColor: Colors.white,
+                  backgroundColor: AppConfig.cardColor,
                   borderRadius: BorderRadius.all(Radius.circular(8)),
                 ),
                 SizedBox(width: 8),
@@ -2751,7 +2751,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                   child: Text(
                     content,
                     style: const TextStyle(
-                      color: Colors.black87,
+                      color: AppConfig.textPrimary,
                       fontSize: 15,
                       height: 1.6,
                       letterSpacing: 0.2,
@@ -2830,7 +2830,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                     child: Text(
                       line,
                       style: const TextStyle(
-                        color: Colors.black87,
+                        color: AppConfig.textPrimary,
                         fontSize: 15,
                         fontWeight: FontWeight.w500,
                         height: 1.5,
@@ -2851,7 +2851,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
             child: Text(
               line,
               style: const TextStyle(
-                color: Colors.black87,
+                color: AppConfig.textPrimary,
                 fontSize: 15,
                 height: 1.6,
                 letterSpacing: 0.2,
@@ -2871,7 +2871,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
               Text(
                 text,
                 style: const TextStyle(
-                  color: Colors.black87,
+                  color: AppConfig.textPrimary,
                   fontSize: 15,
                   height: 1.5,
                 ),
@@ -3007,7 +3007,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                     Text(
                       message['message'],
                       style: const TextStyle(
-                        color: Colors.black87,
+                        color: AppConfig.textPrimary,
                         fontSize: 15,
                         height: 1.5,
                       ),
@@ -3081,7 +3081,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                       '+${suggestions.length - 3} more suggestions',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey[600],
+                        color: AppConfig.textTertiary,
                         fontStyle: FontStyle.italic,
                       ),
                     ),
@@ -3189,7 +3189,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                 child: Text(
                   analysis,
                   style: const TextStyle(
-                    color: Colors.black87,
+                    color: AppConfig.textPrimary,
                     fontSize: 14,
                     height: 1.4,
                   ),
@@ -3313,13 +3313,13 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
             Row(
               children: [
                 Icon(Icons.help_outline,
-                    color: Colors.orange.shade700, size: 24),
+                    color: AppConfig.warningColor, size: 24),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Replacement Needed?',
                     style: TextStyle(
-                      color: Colors.orange.shade700,
+                      color: AppConfig.warningColor,
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
@@ -3334,7 +3334,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
               message['message'] ??
                   'You removed "$itemName". Would you like me to suggest a replacement?',
               style: const TextStyle(
-                color: Colors.black87,
+                color: AppConfig.textPrimary,
                 fontSize: 15,
                 height: 1.4,
               ),
@@ -3366,7 +3366,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                     onPressed: () =>
                         _handleReplacementResponse(false, removedItem),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey.shade400,
+                      backgroundColor: AppConfig.textTertiary,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
@@ -3469,7 +3469,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                       Text(
                         'Swipe left to skip, right to like',
                         style: TextStyle(
-                          color: Colors.grey.shade600,
+                          color: AppConfig.textTertiary,
                           fontSize: 14,
                         ),
                       ),
@@ -3771,13 +3771,13 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                     Row(
                       children: [
                         Icon(Icons.location_on,
-                            size: 14, color: Colors.grey[600]),
+                            size: 14, color: AppConfig.textTertiary),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
                             location.toString(),
                             style: TextStyle(
-                                color: Colors.grey[600], fontSize: 12),
+                                color: AppConfig.textTertiary, fontSize: 12),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -3821,7 +3821,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                           Text(
                             description,
                             style: TextStyle(
-                              color: Colors.grey[700],
+                              color: AppConfig.textSecondary,
                               fontSize: 13,
                               height: 1.4,
                             ),
@@ -3884,14 +3884,14 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                                 Icon(
                                   Icons.access_time,
                                   size: 12,
-                                  color: Colors.grey[600],
+                                  color: AppConfig.textTertiary,
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
                                     openingHours.toString(),
                                     style: TextStyle(
-                                      color: Colors.grey[600],
+                                      color: AppConfig.textTertiary,
                                       fontSize: 11,
                                     ),
                                     maxLines: 1,
@@ -3919,7 +3919,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                         color: Colors.white,
                         border: Border(
                           top:
-                              BorderSide(color: Colors.grey.shade200, width: 1),
+                              BorderSide(color: AppConfig.borderColor, width: 1),
                         ),
                       ),
                       child: SizedBox(
@@ -4114,14 +4114,14 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
-          Icon(icon, size: 12, color: Colors.grey[600]),
+          Icon(icon, size: 12, color: AppConfig.textTertiary),
           const SizedBox(width: 4),
           Expanded(
             child: Text(
               text,
               style: TextStyle(
                 fontSize: 11,
-                color: Colors.grey[700],
+                color: AppConfig.textSecondary,
                 height: 1.2,
               ),
               maxLines: 1,
@@ -4201,7 +4201,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
       case 'nightlife':
         return Colors.indigo;
       case 'spiritual':
-        return Colors.amber.shade800;
+        return AppConfig.warningColor;
       case 'photography':
         return Colors.teal;
       default:
@@ -6041,7 +6041,7 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
             const Text(
               'Triplix is typing',
               style: TextStyle(
-                color: Colors.black54,
+                color: AppConfig.textTertiary,
                 fontSize: 14,
                 fontStyle: FontStyle.italic,
               ),
@@ -6622,7 +6622,7 @@ class _BudgetTabState extends State<BudgetTab>
           // to invite a friend does not first think "that will be under
           // Expenses" -- and this is the thing people kept failing to find.
           Material(
-            color: Colors.blue.shade50,
+            color: AppConfig.cardColor,
             child: InkWell(
               onTap: _shareBudgetLink,
               child: Padding(
@@ -6936,7 +6936,7 @@ class _BudgetTabState extends State<BudgetTab>
                   child: LinearProgressIndicator(
                     value: (utilization / 100).clamp(0, 1),
                     minHeight: 8,
-                    backgroundColor: Colors.white.withValues(alpha: 0.2),
+                    backgroundColor: AppConfig.cardColor.withValues(alpha: 0.2),
                     valueColor: AlwaysStoppedAnimation(utilization > 90
                         ? Colors.redAccent
                         : utilization > 70
@@ -7102,7 +7102,7 @@ class _BudgetTabState extends State<BudgetTab>
             const SizedBox(height: 4),
             Text(
               'Added through the chat, and not shared with anyone.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 11, color: AppConfig.textTertiary),
             ),
             const SizedBox(height: 8),
             for (final e in _expenses)

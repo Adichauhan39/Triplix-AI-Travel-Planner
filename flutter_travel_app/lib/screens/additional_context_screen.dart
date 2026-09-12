@@ -141,7 +141,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.bold,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 6),
@@ -149,16 +149,16 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           'Share any special requirements, preferences, or context to help plan your perfect trip.',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey[600],
+                            color: AppConfig.textTertiary,
                           ),
                         ),
                         const SizedBox(height: 12),
                         Container(
                           decoration: BoxDecoration(
-                            color: Colors.grey[100],
+                            color: AppConfig.cardColor,
                             borderRadius: BorderRadius.circular(16),
                             border:
-                                Border.all(color: Colors.grey[300]!, width: 1),
+                                Border.all(color: AppConfig.borderColor!, width: 1),
                           ),
                           child: TextField(
                             controller: _aiContextController,
@@ -186,7 +186,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -210,7 +210,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -234,7 +234,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -258,7 +258,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -363,13 +363,13 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
       label: Text(
         label,
         style: TextStyle(
-          color: isSelected ? Colors.white : Colors.black87,
+          color: isSelected ? Colors.white : AppConfig.textPrimary,
           fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
         ),
       ),
       selected: isSelected,
       onSelected: (_) => onTap(),
-      backgroundColor: Colors.grey[100],
+      backgroundColor: AppConfig.cardColor,
       selectedColor: AppConfig.primaryColor,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
@@ -387,7 +387,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
           style: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,
-            color: Colors.black87,
+            color: AppConfig.textPrimary,
           ),
         ),
         const SizedBox(height: 8),
@@ -401,7 +401,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                       style: TextStyle(
                         color: selected.contains(option)
                             ? Colors.white
-                            : Colors.black87,
+                            : AppConfig.textPrimary,
                         fontSize: 12,
                       ),
                     ),
@@ -415,7 +415,7 @@ class _AdditionalContextScreenState extends State<AdditionalContextScreen> {
                         }
                       });
                     },
-                    backgroundColor: Colors.white,
+                    backgroundColor: AppConfig.cardColor,
                     selectedColor: AppConfig.primaryColor,
                     checkmarkColor: Colors.white,
                     shape: RoundedRectangleBorder(

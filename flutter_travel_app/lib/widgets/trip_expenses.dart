@@ -69,7 +69,7 @@ class _TripExpensesState extends State<TripExpenses> {
             Text(
               'Shown beside what you pay for, so everyone can tell whose '
               'is whose.',
-              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -127,9 +127,9 @@ class _TripExpensesState extends State<TripExpenses> {
   Widget _note(String message) => Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.grey.shade100,
+          color: AppConfig.cardColor,
           borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: AppConfig.borderColor),
         ),
         child: Text(message, style: const TextStyle(fontSize: 12)),
       );
@@ -265,7 +265,7 @@ class _TripExpensesState extends State<TripExpenses> {
                       ? 'Loading…'
                       : 'Nothing spent yet. Whoever pays adds it here, and '
                           'everyone sees it.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
                 ),
               )
             else ...[
@@ -314,9 +314,9 @@ class _TripExpensesState extends State<TripExpenses> {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.amber.shade50,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-        border: Border.all(color: Colors.amber.shade200),
+        border: Border.all(color: AppConfig.borderColor),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -334,7 +334,7 @@ class _TripExpensesState extends State<TripExpenses> {
             _isOwner
                 ? 'Nothing counts towards the split until you accept it.'
                 : 'These do not count towards the split yet.',
-            style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+            style: TextStyle(fontSize: 11, color: AppConfig.textSecondary),
           ),
           const SizedBox(height: 6),
           for (final row in pending)
@@ -521,7 +521,7 @@ class _TripExpensesState extends State<TripExpenses> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('You typed "${raw.trim()}".',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+                style: TextStyle(fontSize: 13, color: AppConfig.textSecondary)),
             const SizedBox(height: 10),
             Row(children: [
               const Icon(Icons.check, size: 16),
@@ -563,7 +563,7 @@ class _TripExpensesState extends State<TripExpenses> {
       '${formatRupees(total)} shared'
       '${_people.length > 1 ? '  ·  ${formatRupees(total ~/ heads)} each' : ''}'
       '${personal > 0 ? '  ·  ${formatRupees(personal)} just theirs' : ''}',
-      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+      style: TextStyle(fontSize: 12, color: AppConfig.textSecondary),
     );
   }
 
@@ -600,7 +600,7 @@ class _TripExpensesState extends State<TripExpenses> {
       return Text(
         'Invite the people you are travelling with and this will split '
         'what everyone paid.',
-        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+        style: TextStyle(fontSize: 11, color: AppConfig.textTertiary),
       );
     }
 
@@ -620,9 +620,9 @@ class _TripExpensesState extends State<TripExpenses> {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.green.shade50,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-        border: Border.all(color: Colors.green.shade200),
+        border: Border.all(color: AppConfig.borderColor),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -633,7 +633,7 @@ class _TripExpensesState extends State<TripExpenses> {
           const SizedBox(height: 4),
           if (debts.isEmpty)
             Text('Everyone has paid their share.',
-                style: TextStyle(fontSize: 12, color: Colors.grey[700]))
+                style: TextStyle(fontSize: 12, color: AppConfig.textSecondary))
           else
             for (final debt in debts)
               Padding(

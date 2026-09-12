@@ -1,3 +1,4 @@
+import '../config/app_config.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -70,12 +71,12 @@ class _PostLoginVerificationScreenState
                     height: 68,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.blue.shade50,
+                      color: AppConfig.cardColor,
                     ),
                     child: Icon(
                       Icons.flight_takeoff,
                       size: 34,
-                      color: Colors.blue.shade700,
+                      color: AppConfig.primaryColor,
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -92,7 +93,7 @@ class _PostLoginVerificationScreenState
                     'Signed in with $_providerLabel. Taking you to onboarding...',
                     style: const TextStyle(
                       fontSize: 14,
-                      color: Colors.black54,
+                      color: AppConfig.textTertiary,
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -103,7 +104,7 @@ class _PostLoginVerificationScreenState
                     child: CircularProgressIndicator(
                       strokeWidth: 3,
                       valueColor: AlwaysStoppedAnimation<Color>(
-                        Colors.blue.shade700,
+                        AppConfig.primaryColor,
                       ),
                     ),
                   ),
@@ -112,7 +113,7 @@ class _PostLoginVerificationScreenState
                     'Please wait 3 seconds...',
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.black45,
+                      color: AppConfig.textTertiary,
                     ),
                   ),
                 ],

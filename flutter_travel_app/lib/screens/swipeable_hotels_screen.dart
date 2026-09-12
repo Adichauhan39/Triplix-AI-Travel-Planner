@@ -344,9 +344,9 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.red.shade50,
+                  color: AppConfig.cardColor,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.red.shade200),
+                  border: Border.all(color: AppConfig.borderColor),
                 ),
                 child: _buildSectionHeader(
                   title: 'Not Interested',
@@ -399,7 +399,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
         Text(
           subtitle,
           style:
-              TextStyle(color: Colors.grey[700], fontWeight: FontWeight.w600),
+              TextStyle(color: AppConfig.textSecondary, fontWeight: FontWeight.w600),
         ),
       ],
     );
@@ -412,16 +412,16 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
       padding: const EdgeInsets.all(14),
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppConfig.borderColor),
       ),
       child: Row(
         children: [
           Expanded(
             child: Text(
               message,
-              style: TextStyle(color: Colors.grey[700]),
+              style: TextStyle(color: AppConfig.textSecondary),
             ),
           ),
           if (actionLabel != null && onPressed != null)
@@ -435,7 +435,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(14),
         boxShadow: const [
           BoxShadow(
@@ -525,7 +525,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: accentColor.withValues(alpha: 0.5)),
       ),
@@ -779,7 +779,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey[300],
+                    color: AppConfig.borderColor,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -813,7 +813,7 @@ class _SwipeableHotelsScreenState extends State<SwipeableHotelsScreen> {
                 hotel.description,
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey[600],
+                  color: AppConfig.textTertiary,
                   height: 1.5,
                 ),
               ),

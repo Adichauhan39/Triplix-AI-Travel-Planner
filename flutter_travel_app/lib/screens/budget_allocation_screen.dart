@@ -169,7 +169,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -185,14 +185,14 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            color: Colors.black87,
+                            color: AppConfig.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 12),
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: Colors.grey[50],
+                            color: AppConfig.cardColor,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Column(
@@ -207,7 +207,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                                 child: Row(
                                   children: [
                                     Icon(category['icon'],
-                                        size: 16, color: Colors.grey[600]),
+                                        size: 16, color: AppConfig.textTertiary),
                                     const SizedBox(width: 8),
                                     Expanded(
                                       child: Text(
@@ -293,7 +293,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -309,7 +309,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+                    color: AppConfig.textPrimary,
                   ),
                 ),
               ),
@@ -327,7 +327,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
           SliderTheme(
             data: SliderThemeData(
               activeTrackColor: AppConfig.primaryColor,
-              inactiveTrackColor: Colors.grey[300],
+              inactiveTrackColor: AppConfig.borderColor,
               thumbColor: AppConfig.primaryColor,
               overlayColor: AppConfig.primaryColor.withValues(alpha: 0.2),
               trackHeight: 4,
@@ -364,11 +364,11 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                     fillColor: Colors.white,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.grey[300]!),
+                      borderSide: BorderSide(color: AppConfig.borderColor!),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.grey[300]!),
+                      borderSide: BorderSide(color: AppConfig.borderColor!),
                     ),
                   ),
                 ),
@@ -378,7 +378,7 @@ class _BudgetAllocationScreenState extends State<BudgetAllocationScreen> {
                 'INR',
                 style: TextStyle(
                   fontSize: 12,
-                  color: Colors.grey[700],
+                  color: AppConfig.textSecondary,
                   fontWeight: FontWeight.w600,
                 ),
               ),

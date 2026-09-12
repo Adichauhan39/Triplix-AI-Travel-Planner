@@ -404,7 +404,7 @@ class _LoginCardState extends State<_LoginCard>
     await showModalBottomSheet<void>(
       context: context,
       isDismissible: false,
-      backgroundColor: Colors.white,
+      backgroundColor: AppConfig.cardColor,
       isScrollControlled: true,
       builder: (sheetContext) {
         return SizedBox(
@@ -626,7 +626,7 @@ class _LoginCardState extends State<_LoginCard>
         _useRealCaptcha
             ? 'Please complete the reCAPTCHA challenge below.'
             : 'Please complete the slide-to-verify check below.',
-        backgroundColor: Colors.orange.shade700,
+        backgroundColor: AppConfig.warningColor,
         colorText: Colors.white,
       );
       return;
@@ -1027,7 +1027,7 @@ class _SignupCardState extends State<_SignupCard>
     await showModalBottomSheet<void>(
       context: context,
       isDismissible: false,
-      backgroundColor: Colors.white,
+      backgroundColor: AppConfig.cardColor,
       isScrollControlled: true,
       builder: (sheetContext) {
         return SizedBox(
@@ -1182,7 +1182,7 @@ class _SignupCardState extends State<_SignupCard>
         _useRealCaptcha
             ? 'Please complete the reCAPTCHA challenge below.'
             : 'Please complete the slide-to-verify check below.',
-        backgroundColor: Colors.orange.shade700,
+        backgroundColor: AppConfig.warningColor,
         colorText: Colors.white,
       );
       return;
@@ -1191,7 +1191,7 @@ class _SignupCardState extends State<_SignupCard>
       Get.snackbar(
         'Terms required',
         'Please accept the Terms & Privacy to continue.',
-        backgroundColor: Colors.orange.shade700,
+        backgroundColor: AppConfig.warningColor,
         colorText: Colors.white,
       );
       await showAuthTermsSheet(
@@ -1476,7 +1476,7 @@ class _SignupCardState extends State<_SignupCard>
             children: [
               const Text(
                 'Already have an account? ',
-                style: TextStyle(color: Colors.black54),
+                style: TextStyle(color: AppConfig.textTertiary),
               ),
               GestureDetector(
                 onTap: () => widget.onSwitchTab(AuthTab.login),
@@ -1539,7 +1539,7 @@ class _TermsSheet extends StatelessWidget {
                 width: 44,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
+                  color: AppConfig.borderColor,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -1550,7 +1550,7 @@ class _TermsSheet extends StatelessWidget {
                   children: [
                     Icon(
                       Icons.description_outlined,
-                      color: Colors.blue.shade700,
+                      color: AppConfig.primaryColor,
                     ),
                     const SizedBox(width: 8),
                     const Expanded(
@@ -1575,7 +1575,7 @@ class _TermsSheet extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'Last updated: June 2026',
-                    style: TextStyle(color: Colors.black54, fontSize: 12),
+                    style: TextStyle(color: AppConfig.textTertiary, fontSize: 12),
                   ),
                 ),
               ),
@@ -1710,14 +1710,14 @@ class _TermsSectionTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.blue.shade100),
+        border: Border.all(color: AppConfig.cardColor),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(section.icon, color: Colors.blue.shade700),
+          Icon(section.icon, color: AppConfig.primaryColor),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -1903,7 +1903,7 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: Colors.green.shade500,
+                color: AppConfig.textTertiary,
                 shape: BoxShape.circle,
               ),
               child: const Icon(Icons.check, color: Colors.white, size: 20),

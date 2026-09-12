@@ -225,9 +225,9 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
+                    color: AppConfig.cardColor,
                     borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-                    border: Border.all(color: Colors.blue.shade200),
+                    border: Border.all(color: AppConfig.borderColor),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -343,7 +343,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
               'Opens Aviasales in your browser to complete the search and '
               'booking. We\'ll ask if you booked so we can add it to your trip.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
             ),
             // Cities without an IATA mapping can't be encoded into an Aviasales
             // route URL, so the link lands on their homepage instead. Say so
@@ -357,7 +357,7 @@ class _SearchFlightsScreenState extends State<SearchFlightsScreen> {
                   'Aviasales will open on its search page — this route isn\'t '
                   'prefilled, so you\'ll need to enter the cities there.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                  style: TextStyle(fontSize: 12, color: AppConfig.warningColor),
                 ),
               ),
           ],
@@ -569,7 +569,7 @@ class _AirportFieldState extends State<_AirportField> {
             elevation: 0,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-              side: BorderSide(color: Colors.grey.shade300),
+              side: BorderSide(color: AppConfig.borderColor),
             ),
             child: ListTile(
               dense: true,
@@ -598,10 +598,10 @@ class _AirportFieldState extends State<_AirportField> {
           Card(
             margin: const EdgeInsets.only(top: 6),
             elevation: 0,
-            color: Colors.blue.shade50,
+            color: AppConfig.cardColor,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-              side: BorderSide(color: Colors.blue.shade200),
+              side: BorderSide(color: AppConfig.borderColor),
             ),
             child: ListTile(
               dense: true,
@@ -619,7 +619,7 @@ class _AirportFieldState extends State<_AirportField> {
             padding: const EdgeInsets.only(top: 8, left: 4),
             child: Text(
               _fallbackNote!,
-              style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+              style: TextStyle(fontSize: 12, color: AppConfig.warningColor),
             ),
           ),
       ],

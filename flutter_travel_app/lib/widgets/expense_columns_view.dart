@@ -65,7 +65,7 @@ class ExpenseColumnsView extends StatelessWidget {
                 Container(
                   width: 1,
                   margin: const EdgeInsets.symmetric(horizontal: 10),
-                  color: Colors.grey.shade200,
+                  color: AppConfig.borderColor,
                 ),
               SizedBox(
                 width: _columnWidth,
@@ -97,7 +97,7 @@ class ExpenseColumnsView extends StatelessWidget {
                 message: 'Paid for something but is no longer on this trip, '
                     'so the split does not include them.',
                 child: Icon(Icons.info_outline,
-                    size: 13, color: Colors.orange.shade700),
+                    size: 13, color: AppConfig.warningColor),
               ),
           ],
         ),
@@ -109,20 +109,20 @@ class ExpenseColumnsView extends StatelessWidget {
             child: Text('Nothing yet',
                 style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade500,
+                    color: AppConfig.textTertiary,
                     fontStyle: FontStyle.italic)),
           )
         else
           for (final row in column.expenses) _expense(row),
 
         const SizedBox(height: 8),
-        Container(height: 1, color: Colors.grey.shade200),
+        Container(height: 1, color: AppConfig.borderColor),
         const SizedBox(height: 6),
 
         _figure('Paid', formatRupees(column.paid)),
         if (column.personal > 0)
           _figure('Just theirs', formatRupees(column.personal),
-              color: Colors.grey.shade600),
+              color: AppConfig.textTertiary),
         // Nothing is claimed for somebody outside the split: the settlement
         // divides between members and will never pay them back, so a balance
         // here would be a number that never comes true.
@@ -136,13 +136,13 @@ class ExpenseColumnsView extends StatelessWidget {
                     '${formatRupees(column.balance)}',
             bold: true,
             color: column.balance == 0
-                ? Colors.grey.shade600
+                ? AppConfig.textTertiary
                 : column.balance > 0
-                    ? Colors.green.shade700
-                    : Colors.red.shade700,
+                    ? AppConfig.successColor
+                    : AppConfig.errorColor,
           )
         else
-          _figure('Balance', '—', color: Colors.grey.shade500),
+          _figure('Balance', '—', color: AppConfig.textTertiary),
       ],
     );
   }
@@ -171,7 +171,7 @@ class ExpenseColumnsView extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: row.shared ? null : Colors.grey.shade600,
+                        color: row.shared ? null : AppConfig.textTertiary,
                       ),
                     ),
                     // Said on the row itself. A number quietly missing from
@@ -180,7 +180,7 @@ class ExpenseColumnsView extends StatelessWidget {
                       const SizedBox(width: 5),
                       Text('just theirs',
                           style: TextStyle(
-                              fontSize: 10, color: Colors.grey.shade500)),
+                              fontSize: 10, color: AppConfig.textTertiary)),
                     ],
                   ],
                 ),
@@ -194,7 +194,7 @@ class ExpenseColumnsView extends StatelessWidget {
                 tooltip: 'Change this expense',
                 padding: EdgeInsets.zero,
                 icon: Icon(Icons.more_vert,
-                    size: 15, color: Colors.grey.shade600),
+                    size: 15, color: AppConfig.textTertiary),
                 itemBuilder: (context) => [
                   const PopupMenuItem(
                     value: 'edit',
@@ -250,7 +250,7 @@ class ExpenseColumnsView extends StatelessWidget {
         children: [
           Expanded(
             child: Text(label,
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                style: TextStyle(fontSize: 11, color: AppConfig.textTertiary)),
           ),
           Text(
             value,

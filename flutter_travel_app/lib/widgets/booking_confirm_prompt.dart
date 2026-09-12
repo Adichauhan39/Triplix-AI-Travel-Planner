@@ -236,12 +236,12 @@ class BookingConfirmPrompt {
               endDate == null
                   ? _display.format(startDate)
                   : '${_display.format(startDate)} – ${_display.format(endDate)}',
-              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 13, color: AppConfig.textTertiary),
             ),
             const SizedBox(height: 6),
             Text(
               'We can add it to your itinerary. You can change it later.',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
             ),
             const SizedBox(height: 20),
             Row(
@@ -961,7 +961,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             children: [
               Text('Pick your flight so we can add its departure time to your '
                   'itinerary.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+                  style: TextStyle(fontSize: 13, color: AppConfig.textSecondary)),
               const SizedBox(height: 12),
               ...candidates.take(6).map((f) {
                 final number = (f['route_number'] ?? '').toString();
@@ -974,7 +974,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                   shape: RoundedRectangleBorder(
                     borderRadius:
                         BorderRadius.circular(AppConfig.radiusSmall),
-                    side: BorderSide(color: Colors.grey.shade300),
+                    side: BorderSide(color: AppConfig.borderColor),
                   ),
                   child: InkWell(
                     borderRadius:
@@ -1011,13 +1011,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                                         : '$stops stop(s)',
                                   ].join(' · '),
                                   style: TextStyle(
-                                      fontSize: 12, color: Colors.grey[700]),
+                                      fontSize: 12, color: AppConfig.textSecondary),
                                 ),
                               ],
                             ),
                           ),
                           Icon(Icons.chevron_right,
-                              size: 18, color: Colors.grey[500]),
+                              size: 18, color: AppConfig.textTertiary),
                         ],
                       ),
                     ),
@@ -1105,7 +1105,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
           children: [
             Text('We couldn\'t find "$text". Closest matches'
                 '${widget.city.isEmpty ? '' : ' in ${widget.city}'}:',
-                style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+                style: TextStyle(fontSize: 13, color: AppConfig.textSecondary)),
             const SizedBox(height: 12),
             // Cards, matching the flight picker — these are things to choose
             // between, and a bordered card reads as tappable in a way a bare
@@ -1118,7 +1118,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-                  side: BorderSide(color: Colors.grey.shade300),
+                  side: BorderSide(color: AppConfig.borderColor),
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
@@ -1146,13 +1146,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                         fontSize: 11,
-                                        color: Colors.grey[700])),
+                                        color: AppConfig.textSecondary)),
                               ],
                             ],
                           ),
                         ),
                         Icon(Icons.chevron_right,
-                            size: 18, color: Colors.grey[500]),
+                            size: 18, color: AppConfig.textTertiary),
                       ],
                     ),
                   ),
@@ -1317,7 +1317,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                   ? 'Type a flight number, time or airline to narrow the list, '
                       'then tap your flight.'
                   : 'You\'ll find it on your booking confirmation.',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+              style: TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
           const SizedBox(height: 16),
 
           if (_isFlight && _loadingFlights) ...[
@@ -1357,7 +1357,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 if (widget.flightDate != null)
                   Text(DateFormat('dd MMM').format(widget.flightDate!),
                       style:
-                          TextStyle(fontSize: 12, color: Colors.grey[600])),
+                          TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
               ],
             ),
             const SizedBox(height: 10),
@@ -1437,7 +1437,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             const SizedBox(height: 4),
             Text(
               'Or type your flight number above.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 11, color: AppConfig.textTertiary),
             ),
           ],
           // Shown while the lookup runs, not only once it returns.
@@ -1459,14 +1459,14 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 const SizedBox(width: 8),
                 Text(
                   'Finding flights on this route…',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                  style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
                 ),
               ],
             ),
             const SizedBox(height: 4),
             Text(
               'A route we have not seen before takes a few seconds.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              style: TextStyle(fontSize: 11, color: AppConfig.textTertiary),
             ),
           ],
 
@@ -1485,8 +1485,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 color: _pickedFromPlaces
                     ? AppConfig.primaryColor
                     : _flightNoMatch
-                        ? Colors.orange[800]
-                        : Colors.grey[700],
+                        ? AppConfig.warningColor
+                        : AppConfig.textSecondary,
               ),
             ),
             const SizedBox(height: 8),
@@ -1522,7 +1522,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                         side: BorderSide(
                           color: selected
                               ? AppConfig.primaryColor
-                              : Colors.grey.shade300,
+                              : AppConfig.borderColor,
                         ),
                       ),
                       child: ListTile(
@@ -1573,7 +1573,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                         'Not listed? What you type above is saved as-is.'
                     : 'Not listed? Whatever you type above is saved as-is when '
                         'you tap Save.',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                style: TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
           ],
 
           // Both sources came back empty.
@@ -1585,13 +1585,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.info_outline, size: 15, color: Colors.grey[600]),
+                Icon(Icons.info_outline, size: 15, color: AppConfig.textTertiary),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'No schedule found for this route and date — enter the '
                     'flight number yourself.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
                   ),
                 ),
               ],
@@ -1606,13 +1606,13 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.error_outline,
-                    size: 18, color: Colors.orange[800]),
+                    size: 18, color: AppConfig.warningColor),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     _lookupError!,
                     style:
-                        TextStyle(fontSize: 12, color: Colors.orange[800]),
+                        TextStyle(fontSize: 12, color: AppConfig.warningColor),
                   ),
                 ),
               ],
@@ -1648,7 +1648,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                 fontWeight: FontWeight.w600,
                 color: _selectedHotel != null
                     ? AppConfig.primaryColor
-                    : Colors.grey[700],
+                    : AppConfig.textSecondary,
               ),
             ),
             const SizedBox(height: 8),
@@ -1672,7 +1672,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                         side: BorderSide(
                           color: selected
                               ? AppConfig.primaryColor
-                              : Colors.grey.shade300,
+                              : AppConfig.borderColor,
                           width: selected ? 2 : 1,
                         ),
                       ),
@@ -1704,14 +1704,14 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                               fontSize: 11,
-                                              color: Colors.grey[700])),
+                                              color: AppConfig.textSecondary)),
                                     ],
                                   ],
                                 ),
                               ),
                               if (!selected)
                                 Icon(Icons.chevron_right,
-                                    size: 18, color: Colors.grey[500]),
+                                    size: 18, color: AppConfig.textTertiary),
                             ],
                           ),
                         ),
@@ -1751,7 +1751,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
               'No flight on this route matches that. Tap one from the list, '
               "or use \"I don't have it yet\" and add it later.",
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+              style: TextStyle(fontSize: 12, color: AppConfig.warningColor),
             ),
             const SizedBox(height: 8),
           ] else if (!_canSave && !_verifying) ...[
@@ -1762,7 +1762,7 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                       : 'Tap the flight you took — either leg is enough')
                   : 'Tap the hotel you booked to enable saving',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
             ),
             const SizedBox(height: 8),
           ],
@@ -1782,8 +1782,8 @@ class _BookingDetailSheetState extends State<_BookingDetailSheet> {
                   // disabled button kept enough of its colour to look
                   // tappable, so "nothing selected" read as a broken button
                   // rather than a deliberate state.
-                  disabledBackgroundColor: Colors.grey.shade300,
-                  disabledForegroundColor: Colors.grey.shade600,
+                  disabledBackgroundColor: AppConfig.borderColor,
+                  disabledForegroundColor: AppConfig.textTertiary,
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -1958,12 +1958,12 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
               ),
             ),
             Text(DateFormat('dd MMM').format(widget.date),
-                style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                style: TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
           ],
         ),
         const SizedBox(height: 4),
         Text('Optional — you can add this later.',
-            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+            style: TextStyle(fontSize: 11, color: AppConfig.textTertiary)),
         const SizedBox(height: 10),
         TextField(
           controller: _controller,
@@ -2016,7 +2016,7 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: Colors.orange[800]),
+                    color: AppConfig.warningColor),
               ),
             ),
           ConstrainedBox(
@@ -2041,7 +2041,7 @@ class _ReturnLegPickerState extends State<_ReturnLegPicker> {
                       side: BorderSide(
                         color: selected
                             ? AppConfig.primaryColor
-                            : Colors.grey.shade300,
+                            : AppConfig.borderColor,
                         width: selected ? 2 : 1,
                       ),
                     ),

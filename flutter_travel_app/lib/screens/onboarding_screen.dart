@@ -1035,7 +1035,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             children: [
               Text(
                 '"$query" matches multiple places. Select the exact city:',
-                style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                style: TextStyle(color: AppConfig.textTertiary, fontSize: 14),
               ),
               const SizedBox(height: 12),
               ConstrainedBox(
@@ -1066,7 +1066,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey[300]!),
+                              border: Border.all(color: AppConfig.borderColor!),
                               borderRadius: BorderRadius.circular(14),
                             ),
                             child: Row(
@@ -1104,7 +1104,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                         locationLabel,
                                         style: TextStyle(
                                           fontSize: 13,
-                                          color: Colors.grey[700],
+                                          color: AppConfig.textSecondary,
                                         ),
                                       ),
                                       if (stateOrRegion.isNotEmpty) ...[
@@ -1186,7 +1186,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [
             Text(
               '"$query" matches multiple places:',
-              style: TextStyle(color: Colors.grey[600], fontSize: 14),
+              style: TextStyle(color: AppConfig.textTertiary, fontSize: 14),
             ),
             const SizedBox(height: 16),
             ...options.map((option) {
@@ -1201,7 +1201,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey[300]!),
+                      border: Border.all(color: AppConfig.borderColor!),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Row(
@@ -1239,7 +1239,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   desc,
                                   style: TextStyle(
                                     fontSize: 13,
-                                    color: Colors.grey[500],
+                                    color: AppConfig.textTertiary,
                                   ),
                                 ),
                               ],
@@ -1679,7 +1679,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       text: label,
                       style: TextStyle(
                         fontSize: 10,
-                        color: hasError ? _errorColor : Colors.black54,
+                        color: hasError ? _errorColor : AppConfig.textTertiary,
                         fontWeight: FontWeight.w700,
                       ),
                       children: const [
@@ -1705,7 +1705,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: Colors.black87,
+                        color: AppConfig.textPrimary,
                       ),
                       decoration: InputDecoration(
                         hintText: hint,
@@ -1736,7 +1736,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.black12),
         boxShadow: const [
@@ -1768,7 +1768,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 border: index == suggestions.length - 1
                     ? null
                     : Border(
-                        bottom: BorderSide(color: Colors.grey.shade200),
+                        bottom: BorderSide(color: AppConfig.borderColor),
                       ),
               ),
               child: Row(
@@ -1787,7 +1787,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
-                        color: Colors.black87,
+                        color: AppConfig.textPrimary,
                       ),
                     ),
                   ),
@@ -1824,7 +1824,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: Colors.black87,
+                  color: AppConfig.textPrimary,
                 ),
               ),
               const SizedBox(height: 10),
@@ -2343,7 +2343,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
-                      color: Colors.black87,
+                      color: AppConfig.textPrimary,
                     ),
                   ),
                 ),
@@ -2353,7 +2353,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     margin: const EdgeInsets.only(right: 4),
                     decoration: BoxDecoration(
-                      color: Colors.green.shade50,
+                      color: AppConfig.cardColor,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: Colors.green.shade300),
                     ),
@@ -2361,12 +2361,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.check_circle,
-                            color: Colors.green.shade700, size: 14),
+                            color: AppConfig.successColor, size: 14),
                         const SizedBox(width: 4),
                         Text(
                           'Saved',
                           style: TextStyle(
-                            color: Colors.green.shade700,
+                            color: AppConfig.successColor,
                             fontWeight: FontWeight.w600,
                             fontSize: 11,
                           ),
@@ -2384,7 +2384,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 13,
-                  color: Colors.grey[600],
+                  color: AppConfig.textTertiary,
                 ),
               ),
             ),
@@ -2419,10 +2419,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: AppConfig.borderColor,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(icon, color: Colors.grey.shade500, size: 22),
+            child: Icon(icon, color: AppConfig.textTertiary, size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -2434,7 +2434,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
-                    color: Colors.grey.shade600,
+                    color: AppConfig.textTertiary,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -2442,13 +2442,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   hint,
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade500,
+                    color: AppConfig.textTertiary,
                   ),
                 ),
               ],
             ),
           ),
-          Icon(Icons.lock_outline, color: Colors.grey.shade500, size: 22),
+          Icon(Icons.lock_outline, color: AppConfig.textTertiary, size: 22),
         ],
       ),
     );
@@ -2468,7 +2468,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              color: AppConfig.cardColor,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.black12),
             ),
@@ -2489,7 +2489,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         'DESTINATION',
                         style: TextStyle(
                           fontSize: 10,
-                          color: Colors.black54,
+                          color: AppConfig.textTertiary,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -2502,8 +2502,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: destText.isEmpty
-                              ? Colors.black45
-                              : Colors.black87,
+                              ? AppConfig.textTertiary
+                              : AppConfig.textPrimary,
                         ),
                       ),
                     ],
@@ -2536,14 +2536,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 padding: const EdgeInsets.all(40),
                 child: Column(
                   children: [
-                    Icon(Icons.explore, size: 64, color: Colors.grey[300]),
+                    Icon(Icons.explore, size: 64, color: AppConfig.borderColor),
                     const SizedBox(height: 16),
                     Text(
                       destText.isEmpty
                           ? 'Enter your destination in "TO" above and tap Explore'
                           : 'Tap Explore in Trip basics to load activities for $destText',
                       style: TextStyle(
-                        color: Colors.grey[500],
+                        color: AppConfig.textTertiary,
                         fontSize: 14,
                       ),
                       textAlign: TextAlign.center,
@@ -2558,13 +2558,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.black87,
+                color: AppConfig.textPrimary,
               ),
             ),
             const SizedBox(height: 4),
             Text(
               'Select the activities you\'re interested in',
-              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+              style: TextStyle(fontSize: 13, color: AppConfig.textTertiary),
             ),
             const SizedBox(height: 16),
             ..._aiCategories.asMap().entries.map((entry) {
@@ -2686,13 +2686,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       loadingBuilder: (context, child, progress) =>
                           progress == null
                               ? child
-                              : Container(color: Colors.grey[200]),
+                              : Container(color: AppConfig.borderColor),
                       errorBuilder: (context, error, stackTrace) =>
-                          Container(color: Colors.grey[200]),
+                          Container(color: AppConfig.borderColor),
                     )
                   : Container(
                       key: const ValueKey('placeholder'),
-                      color: Colors.grey[200],
+                      color: AppConfig.borderColor,
                     ),
             ),
             // Scrim only once there's a photo to darken; over the grey
@@ -2722,7 +2722,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 // White reads against the scrim; without a photo behind it the
                 // label needs dark text to stay legible on grey.
                 style: TextStyle(
-                  color: hasImage ? Colors.white : Colors.black87,
+                  color: hasImage ? Colors.white : AppConfig.textPrimary,
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2762,7 +2762,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 12),
@@ -2771,7 +2771,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: AppConfig.cardColor,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: DropdownButtonHideUnderline(
@@ -2780,7 +2780,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: Colors.black87,
+                      color: AppConfig.textPrimary,
                     ),
                     icon: const Icon(Icons.arrow_drop_down),
                     items: _supportedCurrencyCodes.map((code) {
@@ -2801,7 +2801,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               Expanded(
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
+                    color: AppConfig.cardColor,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: TextField(
@@ -2876,20 +2876,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             style: TextStyle(
               fontSize: 17,
               fontWeight: FontWeight.bold,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 6),
           Text(
             'Share any special requirements, preferences, or context to help plan your perfect trip.',
-            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            style: TextStyle(fontSize: 13, color: AppConfig.textTertiary),
           ),
           const SizedBox(height: 12),
           Container(
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              color: AppConfig.cardColor,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.grey[300]!, width: 1),
+              border: Border.all(color: AppConfig.borderColor!, width: 1),
             ),
             child: TextField(
               controller: _aiContextController,
@@ -2916,7 +2916,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 12),
@@ -2937,7 +2937,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 12),
@@ -2958,7 +2958,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 12),
@@ -2979,7 +2979,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 16),
@@ -3019,13 +3019,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       label: Text(
         label,
         style: TextStyle(
-          color: isSelected ? Colors.white : Colors.black87,
+          color: isSelected ? Colors.white : AppConfig.textPrimary,
           fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
         ),
       ),
       selected: isSelected,
       onSelected: (_) => onTap(),
-      backgroundColor: Colors.grey[100],
+      backgroundColor: AppConfig.cardColor,
       selectedColor: AppConfig.primaryColor,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
@@ -3045,7 +3045,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           style: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,
-            color: Colors.black87,
+            color: AppConfig.textPrimary,
           ),
         ),
         const SizedBox(height: 8),
@@ -3059,7 +3059,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       style: TextStyle(
                         color: selected.contains(option)
                             ? Colors.white
-                            : Colors.black87,
+                            : AppConfig.textPrimary,
                         fontSize: 12,
                       ),
                     ),
@@ -3073,7 +3073,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         }
                       });
                     },
-                    backgroundColor: Colors.grey[100],
+                    backgroundColor: AppConfig.cardColor,
                     selectedColor: AppConfig.primaryColor,
                     checkmarkColor: Colors.white,
                     shape: RoundedRectangleBorder(

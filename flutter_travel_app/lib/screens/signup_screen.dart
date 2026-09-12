@@ -1,3 +1,4 @@
+import '../config/app_config.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../services/auth_service.dart';
@@ -124,7 +125,7 @@ class _SignupScreenState extends State<SignupScreen>
                     const TriplixLogo(
                       size: 50,
                       padding: EdgeInsets.all(20),
-                      backgroundColor: Colors.white,
+                      backgroundColor: AppConfig.cardColor,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
@@ -186,7 +187,7 @@ class _SignupScreenState extends State<SignupScreen>
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppConfig.cardColor,
                               ),
                               validator: (value) {
                                 if (value == null || value.trim().isEmpty) {
@@ -209,7 +210,7 @@ class _SignupScreenState extends State<SignupScreen>
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppConfig.cardColor,
                               ),
                               validator: (value) {
                                 if (value == null || value.isEmpty) {
@@ -247,7 +248,7 @@ class _SignupScreenState extends State<SignupScreen>
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppConfig.cardColor,
                               ),
                               validator: (value) {
                                 if (value == null || value.isEmpty) {
@@ -286,7 +287,7 @@ class _SignupScreenState extends State<SignupScreen>
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppConfig.cardColor,
                               ),
                               validator: (value) {
                                 if (value == null || value.isEmpty) {

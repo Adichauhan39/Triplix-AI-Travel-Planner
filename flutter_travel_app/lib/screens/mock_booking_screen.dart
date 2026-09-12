@@ -1,3 +1,4 @@
+import '../config/app_config.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
@@ -147,7 +148,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
                   CircularProgressIndicator(
                     value: _progress,
                     strokeWidth: 8,
-                    backgroundColor: Colors.grey.shade800,
+                    backgroundColor: AppConfig.textSecondary,
                     valueColor: const AlwaysStoppedAnimation<Color>(
                       Color(0xFF00D9FF),
                     ),
@@ -230,7 +231,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
               child: Text(
                 'Your trip has been confirmed',
                 style: TextStyle(
-                  color: Colors.grey.shade400,
+                  color: AppConfig.textTertiary,
                   fontSize: 16,
                 ),
               ),
@@ -457,7 +458,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
           Text(
             hotel['location']?.toString() ?? '',
             style: TextStyle(
-              color: Colors.grey.shade400,
+              color: AppConfig.textTertiary,
               fontSize: 14,
             ),
           ),
@@ -536,7 +537,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
             Text(
               transport['details'].toString(),
               style: TextStyle(
-                color: Colors.grey.shade400,
+                color: AppConfig.textTertiary,
                 fontSize: 14,
               ),
             ),
@@ -662,7 +663,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
           Text(
             label,
             style: TextStyle(
-              color: isTotal ? Colors.white : Colors.grey.shade400,
+              color: isTotal ? Colors.white : AppConfig.textTertiary,
               fontSize: isTotal ? 18 : 15,
               fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
             ),
@@ -735,7 +736,7 @@ class _MockBookingScreenState extends State<MockBookingScreen>
               Navigator.of(context).pop();
             },
             style: TextButton.styleFrom(
-              foregroundColor: Colors.grey.shade400,
+              foregroundColor: AppConfig.textTertiary,
             ),
             child: const Text('Back to Home'),
           ),

@@ -28,12 +28,12 @@ class HotelShortlistScreen extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.favorite_border,
-                        size: 56, color: Colors.grey[400]),
+                        size: 56, color: AppConfig.textTertiary),
                     const SizedBox(height: 12),
                     Text(
                       'No hotel selected yet.\nTap the heart on a hotel to select it for your trip.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey[600]),
+                      style: TextStyle(color: AppConfig.textTertiary),
                     ),
                   ],
                 ),
@@ -107,7 +107,7 @@ class _ShortlistCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(hotel.city,
                           style:
-                              TextStyle(fontSize: 12, color: Colors.grey[600])),
+                              TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
                       const SizedBox(height: 6),
                       Row(
                         children: [

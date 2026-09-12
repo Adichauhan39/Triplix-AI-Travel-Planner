@@ -341,7 +341,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                         label: const Text('Refresh Analysis'),
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor: Colors.white,
+                          backgroundColor: AppConfig.cardColor,
                           foregroundColor: AppConfig.primaryColor,
                         ),
                       ),

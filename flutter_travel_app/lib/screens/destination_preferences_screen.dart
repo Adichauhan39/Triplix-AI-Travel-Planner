@@ -199,7 +199,7 @@ class _DestinationPreferencesScreenState
           children: [
             Text(
               '"$query" matches multiple places:',
-              style: TextStyle(color: Colors.grey[600], fontSize: 14),
+              style: TextStyle(color: AppConfig.textTertiary, fontSize: 14),
             ),
             const SizedBox(height: 16),
             ...options.map((option) {
@@ -214,7 +214,7 @@ class _DestinationPreferencesScreenState
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey[300]!),
+                      border: Border.all(color: AppConfig.borderColor!),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Column(
@@ -233,7 +233,7 @@ class _DestinationPreferencesScreenState
                             desc,
                             style: TextStyle(
                               fontSize: 13,
-                              color: Colors.grey[500],
+                              color: AppConfig.textTertiary,
                             ),
                           ),
                         ],
@@ -371,7 +371,7 @@ class _DestinationPreferencesScreenState
                                   Expanded(
                                     child: Container(
                                       decoration: BoxDecoration(
-                                        color: Colors.grey[100],
+                                        color: AppConfig.cardColor,
                                         borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: TextField(
@@ -435,7 +435,7 @@ class _DestinationPreferencesScreenState
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
                                     border:
-                                        Border.all(color: Colors.grey[300]!),
+                                        Border.all(color: AppConfig.borderColor!),
                                     boxShadow: const [
                                       BoxShadow(
                                         color: Color(0x11000000),
@@ -481,7 +481,7 @@ class _DestinationPreferencesScreenState
                                                   : Border(
                                                       bottom: BorderSide(
                                                         color:
-                                                            Colors.grey[200]!,
+                                                            AppConfig.borderColor!,
                                                       ),
                                                     ),
                                             ),
@@ -567,12 +567,12 @@ class _DestinationPreferencesScreenState
                                     child: Column(
                                       children: [
                                         Icon(Icons.explore,
-                                            size: 64, color: Colors.grey[300]),
+                                            size: 64, color: AppConfig.borderColor),
                                         const SizedBox(height: 16),
                                         Text(
                                           'Enter a destination above and tap Explore\nto see area-specific interests',
                                           style: TextStyle(
-                                            color: Colors.grey[500],
+                                            color: AppConfig.textTertiary,
                                             fontSize: 14,
                                           ),
                                           textAlign: TextAlign.center,
@@ -589,7 +589,7 @@ class _DestinationPreferencesScreenState
                                   style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
+                                    color: AppConfig.textPrimary,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
@@ -597,7 +597,7 @@ class _DestinationPreferencesScreenState
                                   'Select the activities you\'re interested in',
                                   style: TextStyle(
                                     fontSize: 13,
-                                    color: Colors.grey[600],
+                                    color: AppConfig.textTertiary,
                                   ),
                                 ),
                                 const SizedBox(height: 16),
@@ -659,7 +659,7 @@ class _DestinationPreferencesScreenState
                                                 style: TextStyle(
                                                   color: isSelected
                                                       ? Colors.white
-                                                      : Colors.black87,
+                                                      : AppConfig.textPrimary,
                                                   fontWeight: isSelected
                                                       ? FontWeight.w600
                                                       : FontWeight.normal,
@@ -678,7 +678,7 @@ class _DestinationPreferencesScreenState
                                                   }
                                                 });
                                               },
-                                              backgroundColor: Colors.grey[100],
+                                              backgroundColor: AppConfig.cardColor,
                                               selectedColor: color,
                                               checkmarkColor: Colors.white,
                                               shape: RoundedRectangleBorder(

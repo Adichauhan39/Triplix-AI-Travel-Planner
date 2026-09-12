@@ -399,7 +399,7 @@ class _TypeSelector extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: Colors.grey[200],
+        color: AppConfig.borderColor,
         borderRadius: BorderRadius.circular(12),
       ),
       child: SingleChildScrollView(
@@ -466,14 +466,14 @@ class _TypeChip extends StatelessWidget {
               Icon(
                 icon,
                 size: 20,
-                color: isSelected ? Colors.white : Colors.grey[600],
+                color: isSelected ? Colors.white : AppConfig.textTertiary,
               ),
               const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 11,
-                  color: isSelected ? Colors.white : Colors.grey[600],
+                  color: isSelected ? Colors.white : AppConfig.textTertiary,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
               ),
@@ -893,9 +893,9 @@ class _MiniCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[300]!),
+        border: Border.all(color: AppConfig.borderColor!),
       ),
       child: Row(
         children: [
@@ -983,7 +983,7 @@ class _ComparisonSheet extends StatelessWidget {
               height: 4,
               margin: const EdgeInsets.only(bottom: 16),
               decoration: BoxDecoration(
-                color: Colors.grey[300],
+                color: AppConfig.borderColor,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -1180,9 +1180,9 @@ class _CompareRow extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey[200]!),
+        border: Border.all(color: AppConfig.borderColor!),
       ),
       child: Row(
         children: [

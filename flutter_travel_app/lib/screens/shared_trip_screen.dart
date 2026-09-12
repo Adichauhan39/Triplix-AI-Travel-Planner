@@ -272,7 +272,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('You typed "$typed".',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+                style: TextStyle(fontSize: 13, color: AppConfig.textSecondary)),
             const SizedBox(height: 10),
             for (final name in names.take(4))
               ListTile(
@@ -316,7 +316,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
           children: [
             Text(
               'Shown to the trip owner, and beside anything you pay for.',
-              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -396,7 +396,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
             ? TabBar(
                 controller: _tabs,
                 labelColor: AppConfig.primaryColor,
-                unselectedLabelColor: Colors.grey.shade600,
+                unselectedLabelColor: AppConfig.textTertiary,
                 indicatorColor: AppConfig.primaryColor,
                 tabs: const [
                   Tab(icon: Icon(Icons.map_outlined), text: 'Plan'),
@@ -634,7 +634,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
-        border: Border(top: BorderSide(color: Colors.grey.shade300)),
+        border: Border(top: BorderSide(color: AppConfig.borderColor)),
       ),
       child: Row(
         children: [
@@ -726,7 +726,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-            border: Border.all(color: Colors.grey.shade300),
+            border: Border.all(color: AppConfig.borderColor),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -754,7 +754,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                           '${personal > 0 ? ' · ${_money(personal)} just theirs' : ''}'
                       : '${_money(total)} shared'
                           '${personal > 0 ? ' · ${_money(personal)} just theirs' : ''}',
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
                 )
               else
                 Text(
@@ -762,7 +762,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                       ? 'Nothing yet. Add what you paid and it is split '
                           'between everyone on the trip.'
                       : 'Nothing yet.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
                 ),
 
               // Who owes whom. The one line everybody actually opens this for.
@@ -793,7 +793,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
-                      color: Colors.orange.shade800),
+                      color: AppConfig.warningColor),
                 ),
                 const SizedBox(height: 4),
                 for (final row in waiting)
@@ -840,14 +840,14 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                               '— not accepted',
                               style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade600,
+                                  color: AppConfig.textTertiary,
                                   decoration: TextDecoration.lineThrough),
                             ),
                           ),
                           Text(formatRupees(row.paise),
                               style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade600,
+                                  color: AppConfig.textTertiary,
                                   decoration: TextDecoration.lineThrough)),
                         ],
                       ),
@@ -886,14 +886,14 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   Row(
                     children: [
                       Icon(Icons.schedule,
-                          size: 15, color: Colors.orange.shade800),
+                          size: 15, color: AppConfig.warningColor),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           'You have asked to join. Once the owner says yes, '
                           'you can add what you paid.',
                           style: TextStyle(
-                              fontSize: 12, color: Colors.grey.shade700),
+                              fontSize: 12, color: AppConfig.textSecondary),
                         ),
                       ),
                     ],
@@ -986,7 +986,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               padding: const EdgeInsets.only(right: 8),
               child: Text('waiting',
                   style: TextStyle(
-                      fontSize: 11, color: Colors.orange.shade800)),
+                      fontSize: 11, color: AppConfig.warningColor)),
             ),
           Text(
             _money(row.paise),
@@ -1128,7 +1128,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     if (!mine && !(_access == TripAccess.owner)) return null;
     return PopupMenuButton<String>(
       tooltip: 'Change this expense',
-      icon: Icon(Icons.more_vert, size: 16, color: Colors.grey.shade600),
+      icon: Icon(Icons.more_vert, size: 16, color: AppConfig.textTertiary),
       itemBuilder: (context) => const [
         PopupMenuItem(
           value: 'edit',
@@ -1189,7 +1189,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('You typed "${raw.trim()}".',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+                style: TextStyle(fontSize: 13, color: AppConfig.textSecondary)),
             const SizedBox(height: 10),
             Row(children: [
               const Icon(Icons.check, size: 16),
@@ -1387,7 +1387,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                               ? Icons.swap_horiz
                               : Icons.remove_circle_outline,
                       size: 16,
-                      color: Colors.grey.shade700,
+                      color: AppConfig.textSecondary,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -1402,7 +1402,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                 padding: const EdgeInsets.only(top: 6),
                 child: Text('…and ${changes.length - 8} more',
                     style: TextStyle(
-                        fontSize: 12, color: Colors.grey.shade600)),
+                        fontSize: 12, color: AppConfig.textTertiary)),
               ),
           ],
         ),
@@ -1484,7 +1484,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
-        border: Border(top: BorderSide(color: Colors.grey.shade300)),
+        border: Border(top: BorderSide(color: AppConfig.borderColor)),
       ),
       child: Row(
         children: [
@@ -1552,7 +1552,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               'Sign in to open it. The owner sees who you are, and approves '
               'you before you can change the plan or add what you paid.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+              style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
             ),
             const SizedBox(height: 22),
             SizedBox(
@@ -1573,7 +1573,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
             const SizedBox(height: 14),
             Text(
               'New here? Signing in makes your account.',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              style: TextStyle(fontSize: 12, color: AppConfig.textTertiary),
             ),
           ],
         ),
@@ -1628,9 +1628,9 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: AppConfig.borderColor),
       ),
       child: Row(
         children: [
@@ -1655,7 +1655,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   Widget _placeActions(int dayIndex, String title, int dayCount) {
     return PopupMenuButton<String>(
       tooltip: 'Suggest a change',
-      icon: Icon(Icons.more_vert, size: 18, color: Colors.grey.shade600),
+      icon: Icon(Icons.more_vert, size: 18, color: AppConfig.textTertiary),
       itemBuilder: (context) => [
         const PopupMenuItem(
           value: 'remove',
@@ -1719,15 +1719,15 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   ? Container(
                       width: 44,
                       height: 44,
-                      color: Colors.grey[200],
+                      color: AppConfig.borderColor,
                       child: Icon(Icons.place_outlined,
-                          size: 18, color: Colors.grey[500]))
+                          size: 18, color: AppConfig.textTertiary))
                   : Image.network(photo,
                       width: 44,
                       height: 44,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => Container(
-                          width: 44, height: 44, color: Colors.grey[200])),
+                          width: 44, height: 44, color: AppConfig.borderColor)),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -1738,11 +1738,11 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   if (rating != null)
                     Text('$rating ★',
                         style: TextStyle(
-                            fontSize: 11, color: Colors.grey[600])),
+                            fontSize: 11, color: AppConfig.textTertiary)),
                 ],
               ),
             ),
-            Icon(Icons.chevron_right, size: 18, color: Colors.grey[400]),
+            Icon(Icons.chevron_right, size: 18, color: AppConfig.textTertiary),
           ],
         ),
       ),
@@ -1770,7 +1770,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Row(
             children: [
-              Icon(Icons.flight_takeoff, size: 14, color: Colors.grey[600]),
+              Icon(Icons.flight_takeoff, size: 14, color: AppConfig.textTertiary),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(line, style: const TextStyle(fontSize: 12)),
@@ -1783,9 +1783,9 @@ class _SharedTripScreenState extends State<SharedTripScreen>
           margin: const EdgeInsets.only(top: 6),
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: AppConfig.cardColor,
             borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(color: AppConfig.borderColor),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1794,7 +1794,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
-                      color: Colors.grey[700])),
+                      color: AppConfig.textSecondary)),
               const SizedBox(height: 4),
               for (final line in notes)
                 Padding(
@@ -1814,9 +1814,9 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
+        color: AppConfig.cardColor,
         borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-        border: Border.all(color: Colors.blue.shade200),
+        border: Border.all(color: AppConfig.borderColor),
       ),
       child: Text(
         count == 1
@@ -1844,9 +1844,9 @@ class _SharedTripScreenState extends State<SharedTripScreen>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: Colors.blue.shade50,
+              color: AppConfig.cardColor,
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Colors.blue.shade200),
+              border: Border.all(color: AppConfig.borderColor),
             ),
             child: Icon(proposal.isAdd ? Icons.add : Icons.remove,
                 size: 18, color: Colors.blue.shade400),
@@ -1859,7 +1859,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                 Text(proposal.title,
                     style: TextStyle(
                         fontSize: 14,
-                        color: Colors.grey[600],
+                        color: AppConfig.textTertiary,
                         fontStyle: FontStyle.italic)),
                 Text(
                   proposal.isAdd
@@ -1923,7 +1923,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   Text('Nothing planned yet',
                       style: TextStyle(
                           fontSize: 13,
-                          color: Colors.grey[600],
+                          color: AppConfig.textTertiary,
                           fontStyle: FontStyle.italic))
                 else
                   for (final item in days[i].items)

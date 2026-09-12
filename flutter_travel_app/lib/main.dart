@@ -124,11 +124,31 @@ class MyApp extends StatelessWidget {
         theme: ThemeData(
           // Theme is centralized so screens stay visually consistent.
           useMaterial3: false, // Temporarily disable Material 3 to fix icons
+          // Dark, app-wide.
+          //
+          // This is what catches the text nobody coloured. A Text with no
+          // colour inherits from here, so under the old light theme every one
+          // of them would have sat near-black on ink -- invisible rather than
+          // merely wrong.
+          brightness: Brightness.dark,
+          canvasColor: AppConfig.backgroundColor,
+          dividerColor: AppConfig.borderColor,
+          iconTheme: const IconThemeData(color: AppConfig.textSecondary),
+          popupMenuTheme: const PopupMenuThemeData(
+              color: Color(0xFF17233A)),
+          dialogTheme: const DialogThemeData(
+              backgroundColor: AppConfig.cardColor),
+          bottomSheetTheme: const BottomSheetThemeData(
+              backgroundColor: AppConfig.cardColor),
+          snackBarTheme: const SnackBarThemeData(
+            backgroundColor: Color(0xFF17233A),
+            contentTextStyle: TextStyle(color: Colors.white),
+          ),
           primaryColor: AppConfig.primaryColor,
           scaffoldBackgroundColor: AppConfig.backgroundColor,
           colorScheme: ColorScheme.fromSeed(
             seedColor: AppConfig.primaryColor,
-            brightness: Brightness.light,
+            brightness: Brightness.dark,
             primary: AppConfig.primaryColor,
             secondary: AppConfig.secondaryColor,
             tertiary: AppConfig.accentColor,

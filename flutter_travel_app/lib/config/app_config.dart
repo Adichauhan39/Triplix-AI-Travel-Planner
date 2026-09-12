@@ -71,22 +71,31 @@ class AppConfig {
   static const String appVersion = '1.0.0';
 
   // Colors - Exact EaseMyTrip color scheme
-  static const Color primaryColor = Color.fromARGB(255, 181, 181, 183); // Deep Blue
-  static const Color secondaryColor = Color(0xFFdc2626); // Red
-  static const Color accentColor = Color(0xFFea580c); // Orange
-  static const Color backgroundColor =
-      Color(0xFFF8FAFC); // Light gray background
-  static const Color cardColor = Colors.white;
-  static const Color surfaceColor = Color.fromARGB(255, 176, 142, 142);
-  static const Color textPrimary = Color(0xFF1e293b); // Dark slate
-  static const Color textSecondary = Color(0xFF64748b); // Medium gray
-  static const Color textTertiary = Color(0xFF94a3b8); // Light gray
-  static const Color borderColor = Color(0xFFE2E8F0); // Very light gray
-  static const Color dividerColor = Color(0xFFF1F5F9);
-  static const Color successColor = Color(0xFF10b981); // Green
-  static const Color warningColor = Color(0xFFf59e0b); // Amber
-  static const Color errorColor = Color(0xFFef4444); // Red
-  static const Color infoColor = Color(0xFF3b82f6); // Blue
+  // The logo, and nothing else.
+  //
+  // primaryColor was Color.fromARGB(255, 181, 181, 183) -- a grey, with a
+  // comment calling it "Deep Blue" -- and 26 files refer to it, so the whole
+  // app spoke in a colour the brand does not own. These now hold the pin's own
+  // teal and its orange sun, which is why every screen changes at once.
+  //
+  // Kept here as well as in Brand because these names are wired through
+  // dozens of files; Brand is the vocabulary, this is the adapter. When the
+  // last reference is gone, so is this block.
+  static const Color primaryColor = Color(0xFF1FA7C4); // the pin
+  static const Color secondaryColor = Color(0xFFF7941D); // the sun
+  static const Color accentColor = Color(0xFFF7941D);
+  static const Color backgroundColor = Color(0xFF0B1220); // ink
+  static const Color cardColor = Color(0xFF111A2B);
+  static const Color surfaceColor = Color(0xFF111A2B);
+  static const Color textPrimary = Colors.white;
+  static const Color textSecondary = Color(0xB3FFFFFF);
+  static const Color textTertiary = Color(0x66FFFFFF);
+  static const Color borderColor = Color(0x24FFFFFF);
+  static const Color dividerColor = Color(0x24FFFFFF);
+  static const Color successColor = Color(0xFF30A46C);
+  static const Color warningColor = Color(0xFFF5A524);
+  static const Color errorColor = Color(0xFFE5484D);
+  static const Color infoColor = Color(0xFF1FA7C4);
 
   // Shadows - EaseMyTrip style
   static const BoxShadow cardShadow = BoxShadow(

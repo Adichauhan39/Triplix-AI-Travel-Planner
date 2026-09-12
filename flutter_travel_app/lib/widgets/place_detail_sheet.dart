@@ -160,7 +160,7 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
   Widget _buildFailed() => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.cloud_off, size: 40, color: Colors.grey[500]),
+          Icon(Icons.cloud_off, size: 40, color: AppConfig.textTertiary),
           const SizedBox(height: 12),
           Text(widget.name,
               style:
@@ -170,7 +170,7 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
             "Couldn't load details for this place — check the server is "
             'running, then try again.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            style: TextStyle(fontSize: 13, color: AppConfig.textTertiary),
           ),
         ],
       );
@@ -203,14 +203,14 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
                         fontSize: 13, fontWeight: FontWeight.w600)),
                 const SizedBox(width: 6),
                 Text('($ratingCount ratings)',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                    style: TextStyle(fontSize: 12, color: AppConfig.textTertiary)),
               ],
             ),
           ],
           if (address.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(address,
-                style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+                style: TextStyle(fontSize: 12, color: AppConfig.textSecondary)),
           ],
 
           if (photos.isNotEmpty) ...[
@@ -233,14 +233,14 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
                     errorBuilder: (_, __, ___) => Container(
                       width: 200,
                       height: 140,
-                      color: Colors.grey[200],
+                      color: AppConfig.borderColor,
                     ),
                     loadingBuilder: (_, child, progress) => progress == null
                         ? child
                         : Container(
                             width: 200,
                             height: 140,
-                            color: Colors.grey[200],
+                            color: AppConfig.borderColor,
                           ),
                   ),
                 ),
@@ -265,12 +265,12 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
             const SizedBox(height: 14),
             Row(
               children: [
-                Icon(Icons.schedule, size: 15, color: Colors.grey[700]),
+                Icon(Icons.schedule, size: 15, color: AppConfig.textSecondary),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(_todayHours(hours)!,
                       style:
-                          TextStyle(fontSize: 12, color: Colors.grey[800])),
+                          TextStyle(fontSize: 12, color: AppConfig.textSecondary)),
                 ),
               ],
             ),
@@ -322,9 +322,9 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.grey.shade50,
+                color: AppConfig.cardColor,
                 borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: AppConfig.borderColor),
               ),
               child: Text(_answer!,
                   style: const TextStyle(fontSize: 12.5, height: 1.35)),
@@ -336,12 +336,12 @@ class _PlaceDetailSheetState extends State<PlaceDetailSheet> {
             // facts and which are not.
             Text('Answered using Google data and a web search — check '
                 'anything important.',
-                style: TextStyle(fontSize: 10.5, color: Colors.grey[600])),
+                style: TextStyle(fontSize: 10.5, color: AppConfig.textTertiary)),
           ],
           if (_answerFailed) ...[
             const SizedBox(height: 8),
             Text("Couldn't answer that just now — check the server is running.",
-                style: TextStyle(fontSize: 12, color: Colors.orange[800])),
+                style: TextStyle(fontSize: 12, color: AppConfig.warningColor)),
           ],
 
           if (reviews.isNotEmpty) ...[

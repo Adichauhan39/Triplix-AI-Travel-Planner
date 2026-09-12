@@ -1,3 +1,4 @@
+import '../config/app_config.dart';
 import 'package:flutter/material.dart';
 
 class TripItineraryScreen extends StatelessWidget {
@@ -47,11 +48,11 @@ class TripItineraryScreen extends StatelessWidget {
                       child: Icon(
                         Icons.circle,
                         size: 12,
-                        color: Colors.blue[700],
+                        color: AppConfig.primaryColor,
                       ),
                     ),
                     if (i < days.length - 1)
-                      Container(width: 2, height: 60, color: Colors.grey[300]),
+                      Container(width: 2, height: 60, color: AppConfig.borderColor),
                   ],
                 ),
                 const SizedBox(width: 16),

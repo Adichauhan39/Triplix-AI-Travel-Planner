@@ -181,7 +181,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.black87,
+                                color: AppConfig.textPrimary,
                               ),
                             ),
                             const SizedBox(height: 12),
@@ -191,7 +191,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 12),
                                   decoration: BoxDecoration(
-                                    color: Colors.grey[100],
+                                    color: AppConfig.cardColor,
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: DropdownButtonHideUnderline(
@@ -200,7 +200,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                       style: const TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w600,
-                                        color: Colors.black87,
+                                        color: AppConfig.textPrimary,
                                       ),
                                       icon: const Icon(Icons.arrow_drop_down),
                                       items:
@@ -223,7 +223,7 @@ class _BudgetPreferencesScreenState extends State<BudgetPreferencesScreen> {
                                 Expanded(
                                   child: Container(
                                     decoration: BoxDecoration(
-                                      color: Colors.grey[100],
+                                      color: AppConfig.cardColor,
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: TextField(

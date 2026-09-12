@@ -290,7 +290,7 @@ class _BookingCard extends StatelessWidget {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey[300],
+                    color: AppConfig.borderColor,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),

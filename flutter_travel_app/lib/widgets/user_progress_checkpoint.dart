@@ -299,7 +299,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: Colors.black87,
+                color: AppConfig.textPrimary,
               ),
             ),
             const Spacer(),
@@ -318,7 +318,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
           borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
             value: completionPct / 100,
-            backgroundColor: Colors.grey[200],
+            backgroundColor: AppConfig.borderColor,
             color: AppConfig.primaryColor,
             minHeight: 6,
           ),
@@ -354,7 +354,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
                     title,
                     style: TextStyle(
                       fontSize: 11,
-                      color: isCompleted ? Colors.black87 : Colors.grey[600],
+                      color: isCompleted ? AppConfig.textPrimary : AppConfig.textTertiary,
                       fontWeight:
                           isCompleted ? FontWeight.w500 : FontWeight.normal,
                       decoration: isCompleted
@@ -408,7 +408,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 4),
@@ -427,7 +427,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 4),
@@ -447,7 +447,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 4),
@@ -466,7 +466,7 @@ class _UserProgressCheckpointState extends State<UserProgressCheckpoint> {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Colors.black87,
+              color: AppConfig.textPrimary,
             ),
           ),
           const SizedBox(height: 4),

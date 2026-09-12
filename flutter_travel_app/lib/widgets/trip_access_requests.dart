@@ -62,9 +62,9 @@ class _TripAccessRequestsState extends State<TripAccessRequests> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.amber.shade50,
+            color: AppConfig.cardColor,
             borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-            border: Border.all(color: Colors.amber.shade200),
+            border: Border.all(color: AppConfig.borderColor),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -80,7 +80,7 @@ class _TripAccessRequestsState extends State<TripAccessRequests> {
               Text(
                 'They can already read it. Approving lets them add and remove '
                 'places.',
-                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                style: TextStyle(fontSize: 11, color: AppConfig.textSecondary),
               ),
               const SizedBox(height: 8),
               for (final person in waiting)
@@ -100,7 +100,7 @@ class _TripAccessRequestsState extends State<TripAccessRequests> {
                             if (person.subtitle.isNotEmpty)
                               Text(person.subtitle,
                                   style: TextStyle(
-                                      fontSize: 11, color: Colors.grey[600]),
+                                      fontSize: 11, color: AppConfig.textTertiary),
                                   overflow: TextOverflow.ellipsis),
                           ],
                         ),
@@ -204,9 +204,9 @@ class _TripProposalReviewState extends State<TripProposalReview> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.blue.shade50,
+            color: AppConfig.cardColor,
             borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
-            border: Border.all(color: Colors.blue.shade200),
+            border: Border.all(color: AppConfig.borderColor),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -221,7 +221,7 @@ class _TripProposalReviewState extends State<TripProposalReview> {
               const SizedBox(height: 2),
               Text(
                 'Nothing changes in your trip until you accept it.',
-                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                style: TextStyle(fontSize: 11, color: AppConfig.textSecondary),
               ),
               const SizedBox(height: 8),
               for (final proposal in open)

@@ -129,7 +129,7 @@ class _TransportPreferencesScreenState
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.black87,
+                                color: AppConfig.textPrimary,
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -137,16 +137,16 @@ class _TransportPreferencesScreenState
                               'Describe how you prefer to travel and our AI will find the best options for you.',
                               style: TextStyle(
                                 fontSize: 14,
-                                color: Colors.grey[600],
+                                color: AppConfig.textTertiary,
                               ),
                             ),
                             const SizedBox(height: 24),
                             Container(
                               decoration: BoxDecoration(
-                                color: Colors.grey[100],
+                                color: AppConfig.cardColor,
                                 borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
-                                    color: Colors.grey[300]!, width: 1),
+                                    color: AppConfig.borderColor!, width: 1),
                               ),
                               child: TextField(
                                 controller: _transportController,
@@ -174,7 +174,7 @@ class _TransportPreferencesScreenState
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.black54,
+                                color: AppConfig.textTertiary,
                               ),
                             ),
                             const SizedBox(height: 10),
@@ -197,7 +197,7 @@ class _TransportPreferencesScreenState
                                   label: Text(label,
                                       style: const TextStyle(fontSize: 12)),
                                   selected: selected,
-                                  backgroundColor: Colors.grey[100],
+                                  backgroundColor: AppConfig.cardColor,
                                   selectedColor: AppConfig.primaryColor
                                       .withValues(alpha: 0.15),
                                   showCheckmark: false,

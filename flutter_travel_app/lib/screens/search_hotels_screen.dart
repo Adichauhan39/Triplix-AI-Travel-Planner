@@ -469,7 +469,7 @@ class _SearchHotelsScreenState extends State<SearchHotelsScreen> {
                         color: Colors.white,
                         borderRadius:
                             BorderRadius.circular(AppConfig.radiusMedium),
-                        border: Border.all(color: Colors.grey.shade300),
+                        border: Border.all(color: AppConfig.borderColor),
                       ),
                       child: Column(
                         children: _citySuggestions.map((s) {
@@ -783,7 +783,7 @@ class _DatePicker extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: AppConfig.borderColor),
           borderRadius: BorderRadius.circular(AppConfig.radiusMedium),
         ),
         child: Column(

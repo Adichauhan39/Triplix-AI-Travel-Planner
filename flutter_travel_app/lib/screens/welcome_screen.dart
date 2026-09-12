@@ -1,3 +1,4 @@
+import '../config/app_config.dart';
 import 'package:animate_do/animate_do.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -211,7 +212,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           child: ElevatedButton.icon(
             onPressed: _isGoogleLoading ? null : _handleGoogleSignIn,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.white,
+              backgroundColor: AppConfig.cardColor,
               foregroundColor: Brand.ink,
               disabledBackgroundColor: const Color(0xB3FFFFFF),
               elevation: 0,
