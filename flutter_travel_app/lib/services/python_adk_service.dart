@@ -27,6 +27,43 @@ class PlanAdjustment {
   bool get failed => days == null && !needsAnswer;
 }
 
+/// One drive between two stops of a day.
+class RouteLeg {
+  const RouteLeg({
+    required this.from,
+    required this.to,
+    required this.minutes,
+    required this.duration,
+    required this.distance,
+  });
+
+  /// Indexes into the stops as they were sent, so the caller never has to
+  /// assume the order it asked for is the order it got.
+  final int from;
+  final int to;
+
+  final int minutes;
+
+  /// Google's own wording: "41 mins".
+  final String duration;
+  final String distance;
+}
+
+/// What a day costs in driving.
+class DayDrive {
+  const DayDrive({
+    required this.legs,
+    required this.totalMinutes,
+    required this.kilometres,
+  });
+
+  final List<RouteLeg> legs;
+  final int totalMinutes;
+  final double kilometres;
+
+  bool get isEmpty => legs.isEmpty;
+}
+
 class PythonADKService {
   // Python FastAPI backend URL
   static const String _baseUrl = AppConfig.baseUrl;
@@ -652,6 +689,56 @@ class PythonADKService {
   /// Returns the image itself rather than a URL: the Maps key stays on the
   /// server, so the browser is handed a picture and never something it could
   /// be billed for.
+  /// How long a day's drive takes, leg by leg.
+  ///
+  /// Live traffic, so the number moves through the day -- which is honest and
+  /// worth knowing: it is the drive now, not a fixed estimate.
+  ///
+  /// Null means the lookup failed. An empty result is different and not a
+  /// failure: one place has no drive.
+  Future<DayDrive?> tripRoute(List<Map<String, dynamic>> items) async {
+    if (items.length < 2) {
+      return const DayDrive(legs: [], totalMinutes: 0, kilometres: 0);
+    }
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/trip/route'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'items': items}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode != 200) {
+        debugPrint('tripRoute: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') {
+        debugPrint('tripRoute: ${data['message']}');
+        return null;
+      }
+      return DayDrive(
+        legs: [
+          for (final leg in (data['legs'] as List?) ?? const [])
+            if (leg is Map<String, dynamic>)
+              RouteLeg(
+                from: (leg['from'] as num?)?.toInt() ?? 0,
+                to: (leg['to'] as num?)?.toInt() ?? 0,
+                minutes: (leg['minutes'] as num?)?.toInt() ?? 0,
+                duration: (leg['duration'] ?? '').toString(),
+                distance: (leg['distance'] ?? '').toString(),
+              ),
+        ],
+        totalMinutes: (data['total_minutes'] as num?)?.toInt() ?? 0,
+        kilometres:
+            (data['total_distance_km'] as num?)?.toDouble() ?? 0,
+      );
+    } catch (e) {
+      debugPrint('tripRoute failed: $e');
+      return null;
+    }
+  }
+
   Future<List<int>?> tripMap(
     List<Map<String, dynamic>> days, {
     bool route = false,

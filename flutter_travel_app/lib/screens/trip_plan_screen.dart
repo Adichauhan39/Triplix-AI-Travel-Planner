@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/app_config.dart';
+import '../config/brand.dart';
 import '../models/trip_plan.dart';
 import '../models/user_preferences.dart';
 import '../models/confirmed_booking.dart';
@@ -3697,6 +3698,19 @@ class _TripMapDialogState extends State<_TripMapDialog> {
     ];
     final bytes = await widget.adk.tripMap(payload, route: day != null);
     if (!mounted) return;
+
+    // Asked only for a single day. The whole trip is a question about where,
+    // not about the drive, and twelve days of legs is a wall of numbers.
+    if (day != null && payload.isNotEmpty) {
+      final stops = (payload.first['items'] as List)
+          .cast<Map<String, dynamic>>();
+      widget.adk.tripRoute(stops).then((drive) {
+        if (mounted) setState(() => _drive = drive);
+      });
+    } else {
+      _drive = null;
+    }
+
     setState(() {
       _loading = false;
       if (bytes != null) {
@@ -3707,10 +3721,86 @@ class _TripMapDialogState extends State<_TripMapDialog> {
     });
   }
 
+  /// The drive for the day being shown, once it comes back.
+  DayDrive? _drive;
+
   /// How many of a day's places we can actually put on a map.
   int _locatedCount(int day) => widget.plan.days[day].items
       .where((i) => widget.coords[i.title] != null)
       .length;
+
+  /// The day's drive, stop by stop.
+  ///
+  /// The number is the whole point of a map of a day: five pins look identical
+  /// whether they sit on one street or an hour apart. Nahargarh Fort is 41
+  /// minutes from Jantar Mantar, and the pins were a centimetre apart.
+  ///
+  /// Renders nothing for the whole trip, and nothing while it is still coming
+  /// back -- an empty strip is quieter than a spinner that appears under a map
+  /// somebody is already reading.
+  Widget _driveStrip() {
+    final day = _day;
+    final drive = _drive;
+    if (day == null || drive == null || drive.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final stops = [
+      for (final item in widget.plan.days[day].items)
+        if (widget.coords[item.title] != null) widget.placeName(item.title),
+    ];
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      color: Brand.fill,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              for (var i = 0; i < stops.length; i++) ...[
+                Text(
+                  stops[i],
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Brand.text),
+                ),
+                // The leg after this stop, if there is one.
+                if (i < stops.length - 1 && i < drive.legs.length)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Brand.teal.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      drive.legs[i].duration,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Brand.teal),
+                    ),
+                  ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${drive.totalMinutes} min driving today'
+            '${drive.kilometres > 0 ? '  ·  ${drive.kilometres} km' : ''}'
+            '  ·  in traffic now',
+            style: const TextStyle(fontSize: 11, color: Brand.muted),
+          ),
+        ],
+      ),
+    );
+  }
 
   Color _colour(int day) {
     const palette = [
@@ -3732,6 +3822,12 @@ class _TripMapDialogState extends State<_TripMapDialog> {
     final days = widget.plan.days;
     return Dialog(
       insetPadding: const EdgeInsets.all(10),
+      backgroundColor: Brand.ink,
+      surfaceTintColor: Brand.ink,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: const BorderSide(color: Brand.hairline),
+      ),
       child: SizedBox(
         width: MediaQuery.of(context).size.width * 0.96,
         height: MediaQuery.of(context).size.height * 0.92,
@@ -3751,7 +3847,9 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                               ? 'Your whole trip'
                               : 'Day ${_day! + 1}',
                           style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w700),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: Brand.text),
                         ),
                         Text(
                           _day == null
@@ -3763,14 +3861,14 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                                   ? 'Only one place on this day, so there is '
                                       'no route to draw.'
                                   : 'The drive for this day, in order.',
-                          style: TextStyle(
-                              fontSize: 11, color: Colors.grey[600]),
+                          style: const TextStyle(
+                              fontSize: 11, color: Brand.muted),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.close, color: Brand.muted),
                     onPressed: () => Navigator.pop(context),
                   ),
                 ],
@@ -3778,7 +3876,9 @@ class _TripMapDialogState extends State<_TripMapDialog> {
             ),
             Expanded(
               child: Container(
-                color: Colors.grey.shade100,
+                // The same ink the map is drawn on, so the picture has no
+                // edge -- it ends where the sheet ends.
+                color: Brand.ink,
                 width: double.infinity,
                 child: Stack(
                   children: [
@@ -3794,7 +3894,8 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                 ),
               ),
             ),
-            const Divider(height: 1),
+            _driveStrip(),
+            const Divider(height: 1, color: Brand.hairline),
             SizedBox(
               height: 150,
               child: SingleChildScrollView(
@@ -3809,7 +3910,8 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                           onPressed: () => _show(null),
                           icon: const Icon(Icons.arrow_back, size: 15),
                           label: const Text('Back to the whole trip',
-                              style: TextStyle(fontSize: 12)),
+                              style: TextStyle(
+                                  fontSize: 12, color: Brand.teal)),
                           style: TextButton.styleFrom(
                             padding: EdgeInsets.zero,
                             visualDensity: VisualDensity.compact,
@@ -3823,7 +3925,7 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             color: _day == d
-                                ? Colors.blue.shade50
+                                ? Brand.teal.withValues(alpha: 0.16)
                                 : Colors.transparent,
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3848,11 +3950,15 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                                   child: Text(
                                     'Day ${d + 1}  ·  '
                                     '${days[d].items.map((i) => widget.placeName(i.title)).join(', ')}',
-                                    style: const TextStyle(fontSize: 12),
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: _day == d
+                                            ? Brand.text
+                                            : Brand.muted),
                                   ),
                                 ),
-                                Icon(Icons.chevron_right,
-                                    size: 16, color: Colors.grey[400]),
+                                const Icon(Icons.chevron_right,
+                                    size: 16, color: Brand.faint),
                               ],
                             ),
                           ),
@@ -3867,6 +3973,10 @@ class _TripMapDialogState extends State<_TripMapDialog> {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   onPressed: widget.onOpenInMaps,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Brand.text,
+                    side: const BorderSide(color: Brand.hairline),
+                  ),
                   icon: const Icon(Icons.open_in_new, size: 16),
                   label: const Text('Open in Google Maps'),
                 ),
