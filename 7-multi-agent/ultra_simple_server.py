@@ -6333,7 +6333,10 @@ def discover_places(request: DiscoverRequest):
         field_mask = (
             "places.displayName,places.rating,places.userRatingCount,"
             "places.photos,places.regularOpeningHours,places.formattedAddress,"
-            "places.location,places.editorialSummary,places.types,places.id"
+            "places.location,places.editorialSummary,places.types,places.id,"
+            # What it costs. Same billing tier as rating and opening hours,
+            # which this mask already asks for.
+            "places.priceLevel,places.priceRange"
         )
 
         found = []
@@ -6416,6 +6419,7 @@ def discover_places(request: DiscoverRequest):
                         "weekdayDescriptions", []),
                     "lat": (place.get("location") or {}).get("latitude"),
                     "lng": (place.get("location") or {}).get("longitude"),
+                    "price": _price_of(place),
                     "description": (place.get("editorialSummary") or {}).get(
                         "text", ""),
                     "types": [
@@ -6483,7 +6487,10 @@ def get_place_summaries(request: PlaceSummariesRequest):
         field_mask = (
             "places.displayName,places.rating,places.userRatingCount,"
             "places.photos,places.regularOpeningHours,places.formattedAddress,"
-            "places.location,places.editorialSummary,places.types,places.id"
+            "places.location,places.editorialSummary,places.types,places.id,"
+            # What it costs. Same billing tier as rating and opening hours,
+            # which this mask already asks for.
+            "places.priceLevel,places.priceRange"
         )
 
         def summarise(name: str):
@@ -6589,6 +6596,7 @@ def get_place_summaries(request: PlaceSummariesRequest):
                         "weekdayDescriptions", []),
                     "lat": (place.get("location") or {}).get("latitude"),
                     "lng": (place.get("location") or {}).get("longitude"),
+                    "price": _price_of(place),
                     # Google's own one-line description of the place, not a
                     # generated one. Absent for many smaller places, in which
                     # case the caller falls back to the place types rather
@@ -6619,6 +6627,57 @@ def get_place_summaries(request: PlaceSummariesRequest):
     except Exception as e:
         print(f"[SUMMARY] failed: {e}")
         return {"status": "error", "message": str(e), "summaries": {}}
+
+
+# What Google says a place costs, per person.
+#
+# priceRange is what Google Maps shows as "200-400 per person" for a
+# restaurant. priceLevel is the cruder one-to-four scale, kept as a fallback
+# and never converted into rupees -- turning a symbol into a number would be
+# inventing a figure and putting our name to it.
+#
+# Returns None when Google knows nothing, which for anything that sells
+# tickets is almost always: zoos, museums and water parks carry neither field.
+_PRICE_LEVELS = {
+    "PRICE_LEVEL_FREE": "free",
+    "PRICE_LEVEL_INEXPENSIVE": "cheap",
+    "PRICE_LEVEL_MODERATE": "moderate",
+    "PRICE_LEVEL_EXPENSIVE": "pricey",
+    "PRICE_LEVEL_VERY_EXPENSIVE": "very pricey",
+}
+
+
+def _price_of(place: dict) -> Any:
+    """{'min', 'max', 'currency', 'level'} for a place, or None."""
+    level = _PRICE_LEVELS.get(str(place.get("priceLevel") or ""))
+    span = place.get("priceRange") or {}
+
+    def rupees(side: str) -> Any:
+        money = span.get(side) or {}
+        units = money.get("units")
+        if units is None:
+            return None
+        try:
+            return int(str(units))
+        except (TypeError, ValueError):
+            return None
+
+    low, high = rupees("startPrice"), rupees("endPrice")
+    currency = ((span.get("startPrice") or {}).get("currencyCode")
+                or (span.get("endPrice") or {}).get("currencyCode") or "INR")
+
+    if low is None and high is None and level is None:
+        return None
+    return {
+        "min": low,
+        "max": high,
+        "currency": currency,
+        "level": level,
+        # Google's ranges for restaurants are what a person spends, not what
+        # the table spends. Said explicitly so the caller does not have to
+        # guess, and does not multiply by the group twice.
+        "per": "person",
+    }
 
 
 @app.post("/api/places/details")
@@ -6658,7 +6717,9 @@ def get_place_details(request: dict):
         detail_mask = (
             "id,displayName,formattedAddress,location,rating,userRatingCount,"
             "reviews,photos,websiteUri,nationalPhoneNumber,googleMapsUri,"
-            "regularOpeningHours,types"
+            # No "places." prefix here: this is a single-place lookup, not a
+            # search, and the prefixed form is rejected.
+            "regularOpeningHours,types,priceLevel,priceRange"
         )
         detail_resp = requests.get(
             f"https://places.googleapis.com/v1/places/{place_id}",

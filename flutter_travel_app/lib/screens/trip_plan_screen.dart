@@ -335,10 +335,31 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? [plan.days[day]]
             : const <PlanDay>[]);
 
-    final stops = [
-      for (final d in days)
-        for (final item in d.items) _placeName(item.title)
-    ].where((s) => s.isNotEmpty).toList();
+    // Coordinates where we have them.
+    //
+    // A name is ambiguous and Maps resolves it against the whole country: Day
+    // 4's "Craft Centre" was being matched in Bangalore. The same Places
+    // lookup that draws the pins already gave us a point for most stops, and
+    // a point cannot be misread.
+    final city = plan.destination.split(',').first.trim();
+    final stops = <String>[];
+    for (final d in days) {
+      for (final item in d.items) {
+        final summary = _summaries[item.title];
+        final lat = summary?['lat'];
+        final lng = summary?['lng'];
+        if (lat != null && lng != null) {
+          stops.add('$lat,$lng');
+          continue;
+        }
+        // No point for this one, so the name goes -- but anchored to the
+        // city, which is the difference between "Craft Centre" and "Craft
+        // Centre, Jaipur".
+        final name = _placeName(item.title);
+        if (name.isEmpty) continue;
+        stops.add(city.isEmpty ? name : '$name, $city');
+      }
+    }
     if (stops.isEmpty) return;
 
     // One stop is a place, not a route: /dir/ with the same origin and
