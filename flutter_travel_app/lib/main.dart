@@ -124,31 +124,31 @@ class MyApp extends StatelessWidget {
         theme: ThemeData(
           // Theme is centralized so screens stay visually consistent.
           useMaterial3: false, // Temporarily disable Material 3 to fix icons
-          // Dark, app-wide.
+          // Light, app-wide.
           //
-          // This is what catches the text nobody coloured. A Text with no
-          // colour inherits from here, so under the old light theme every one
-          // of them would have sat near-black on ink -- invisible rather than
-          // merely wrong.
-          brightness: Brightness.dark,
+          // This is what decides the text nobody coloured: a Text with no
+          // colour inherits from here, so the brightness has to agree with the
+          // surfaces or half the app disappears.
+          brightness: Brightness.light,
           canvasColor: AppConfig.backgroundColor,
           dividerColor: AppConfig.borderColor,
           iconTheme: const IconThemeData(color: AppConfig.textSecondary),
-          popupMenuTheme: const PopupMenuThemeData(
-              color: Color(0xFF17233A)),
+          popupMenuTheme: const PopupMenuThemeData(color: Colors.white),
           dialogTheme: const DialogThemeData(
               backgroundColor: AppConfig.cardColor),
           bottomSheetTheme: const BottomSheetThemeData(
               backgroundColor: AppConfig.cardColor),
+          // Dark on purpose, and the only dark thing left: a message that
+          // interrupts should not look like another card.
           snackBarTheme: const SnackBarThemeData(
-            backgroundColor: Color(0xFF17233A),
+            backgroundColor: Color(0xFF1E293B),
             contentTextStyle: TextStyle(color: Colors.white),
           ),
           primaryColor: AppConfig.primaryColor,
           scaffoldBackgroundColor: AppConfig.backgroundColor,
           colorScheme: ColorScheme.fromSeed(
             seedColor: AppConfig.primaryColor,
-            brightness: Brightness.dark,
+            brightness: Brightness.light,
             primary: AppConfig.primaryColor,
             secondary: AppConfig.secondaryColor,
             tertiary: AppConfig.accentColor,

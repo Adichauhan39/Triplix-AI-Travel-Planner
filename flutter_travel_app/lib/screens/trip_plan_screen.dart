@@ -1386,12 +1386,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
   /// The screen's own dark theme.
   ///
-  /// Set here rather than app-wide because the app is being converted a screen
-  /// at a time: a global switch would turn every unconverted page dark at once
-  /// with all its light-mode colours still hard-coded, which is how you get
-  /// black text on ink.
+  /// Kept as a screen theme even though the app theme now matches it, because
+  /// this screen sets a lot of its own colours and having them agree in one
+  /// place is worth more than the few lines it costs.
   ThemeData _brandTheme(BuildContext context) {
-    final base = ThemeData.dark(useMaterial3: false);
+    final base = ThemeData.light(useMaterial3: false);
     return base.copyWith(
       scaffoldBackgroundColor: Brand.ink,
       canvasColor: Brand.ink,
@@ -1411,13 +1410,13 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         foregroundColor: Brand.text,
         elevation: 0,
       ),
-      popupMenuTheme: const PopupMenuThemeData(color: Brand.raised),
+      popupMenuTheme: const PopupMenuThemeData(color: Colors.white),
       dialogTheme: const DialogThemeData(backgroundColor: Brand.surface),
       bottomSheetTheme: const BottomSheetThemeData(
           backgroundColor: Brand.surface),
       snackBarTheme: const SnackBarThemeData(
-        backgroundColor: Brand.raised,
-        contentTextStyle: TextStyle(color: Brand.text),
+        backgroundColor: Color(0xFF1E293B),
+        contentTextStyle: TextStyle(color: Colors.white),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,

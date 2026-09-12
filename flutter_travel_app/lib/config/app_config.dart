@@ -71,30 +71,30 @@ class AppConfig {
   static const String appVersion = '1.0.0';
 
   // Colors - Exact EaseMyTrip color scheme
-  // The logo, and nothing else.
+  // The logo on paper.
   //
-  // primaryColor was Color.fromARGB(255, 181, 181, 183) -- a grey, with a
-  // comment calling it "Deep Blue" -- and 26 files refer to it, so the whole
-  // app spoke in a colour the brand does not own. These now hold the pin's own
-  // teal and its orange sun, which is why every screen changes at once.
+  // primaryColor was Color.fromARGB(255, 181, 181, 183) -- a grey, commented
+  // "Deep Blue" -- and 26 files refer to it, so the app spoke in a colour the
+  // brand does not own. It is the pin's teal now, on white, with the orange
+  // sun as the accent.
   //
-  // Kept here as well as in Brand because these names are wired through
-  // dozens of files; Brand is the vocabulary, this is the adapter. When the
-  // last reference is gone, so is this block.
+  // Kept here as well as in Brand because these names are wired through dozens
+  // of files: Brand is the vocabulary, this is the adapter. Both hold the same
+  // values, so a screen using either reads the same.
   static const Color primaryColor = Color(0xFF1FA7C4); // the pin
   static const Color secondaryColor = Color(0xFFF7941D); // the sun
   static const Color accentColor = Color(0xFFF7941D);
-  static const Color backgroundColor = Color(0xFF0B1220); // ink
-  static const Color cardColor = Color(0xFF111A2B);
-  static const Color surfaceColor = Color(0xFF111A2B);
-  static const Color textPrimary = Colors.white;
-  static const Color textSecondary = Color(0xB3FFFFFF);
-  static const Color textTertiary = Color(0x66FFFFFF);
-  static const Color borderColor = Color(0x24FFFFFF);
-  static const Color dividerColor = Color(0x24FFFFFF);
-  static const Color successColor = Color(0xFF30A46C);
-  static const Color warningColor = Color(0xFFF5A524);
-  static const Color errorColor = Color(0xFFE5484D);
+  static const Color backgroundColor = Color(0xFFF6F7F9);
+  static const Color cardColor = Colors.white;
+  static const Color surfaceColor = Colors.white;
+  static const Color textPrimary = Color(0xFF0F172A);
+  static const Color textSecondary = Color(0xFF475569);
+  static const Color textTertiary = Color(0xFF94A3B8);
+  static const Color borderColor = Color(0xFFE3E8EF);
+  static const Color dividerColor = Color(0xFFEEF2F6);
+  static const Color successColor = Color(0xFF047857);
+  static const Color warningColor = Color(0xFFB45309);
+  static const Color errorColor = Color(0xFFDC2626);
   static const Color infoColor = Color(0xFF1FA7C4);
 
   // Shadows - EaseMyTrip style

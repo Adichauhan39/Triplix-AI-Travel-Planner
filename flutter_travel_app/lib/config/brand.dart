@@ -12,36 +12,46 @@ import 'package:flutter/material.dart';
 /// colour is the new one. AppConfig goes when the last screen is converted.
 class Brand {
   // ---------------------------------------------------------------- colour
-  /// The ground everything sits on.
-  static const Color ink = Color(0xFF0B1220);
+  //
+  // Paper, not ink. The names are kept -- `ink` is still the ground and
+  // `surface` is still a card -- because 190 references across three screens
+  // read better as roles than as colours, and the roles did not change when
+  // the values did.
 
-  /// One step up from the ground: cards, sheets, rows.
-  static const Color surface = Color(0xFF111A2B);
+  /// The page. Not pure white: a hair of grey so a white card reads as raised.
+  static const Color ink = Color(0xFFF6F7F9);
 
-  /// Two steps up, for something raised above a card.
-  static const Color raised = Color(0xFF17233A);
+  /// A card, a sheet, a row.
+  static const Color surface = Colors.white;
 
+  /// Above a card. Same white, told apart by its border and shadow.
+  static const Color raised = Colors.white;
+
+  /// The logo, unchanged. Anything you can press is this.
   static const Color teal = Color(0xFF1FA7C4);
+
+  /// The sun on the pin. One thing per screen, or it stops meaning anything.
   static const Color sun = Color(0xFFF7941D);
 
-  static const Color text = Colors.white;
+  /// Reading text.
+  static const Color text = Color(0xFF0F172A);
 
-  /// Secondary text. Readable, not shouting.
-  static const Color muted = Color(0xB3FFFFFF);
+  /// Secondary text.
+  static const Color muted = Color(0xFF475569);
 
-  /// Third-tier text: captions, disabled, fine print.
-  static const Color faint = Color(0x66FFFFFF);
+  /// Captions, disabled, fine print.
+  static const Color faint = Color(0xFF94A3B8);
 
-  /// A line, not a border -- barely there on purpose.
-  static const Color hairline = Color(0x24FFFFFF);
+  /// A line, not a border.
+  static const Color hairline = Color(0xFFE3E8EF);
 
   /// A wash for a resting surface or a quiet chip.
-  static const Color fill = Color(0x0FFFFFFF);
+  static const Color fill = Color(0xFFF1F4F8);
 
   /// Something wrong, and something worth a second look.
-  static const Color danger = Color(0xFFE5484D);
-  static const Color caution = Color(0xFFF5A524);
-  static const Color good = Color(0xFF30A46C);
+  static const Color danger = Color(0xFFDC2626);
+  static const Color caution = Color(0xFFB45309);
+  static const Color good = Color(0xFF047857);
 
   static const LinearGradient action = LinearGradient(
     colors: [teal, sun],

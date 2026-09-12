@@ -4380,7 +4380,7 @@ def trip_map(request: dict):
                 # over it. Static Maps has no glow, and one flat stroke on a
                 # dark ground reads as a scratch rather than a route.
                 path = (
-                    f"&path=color:0x1FA7C433%7Cweight:11%7Cenc:{trail}"
+                    f"&path=color:0x1FA7C440%7Cweight:11%7Cenc:{trail}"
                     f"&path=color:0x1FA7C4ff%7Cweight:5%7Cenc:{trail}"
                 )
 
@@ -4395,29 +4395,32 @@ def trip_map(request: dict):
         # 640x640 at scale=2 is the most Static Maps will return.
         detailed = request.get("detailed") is True
         size = "640x640" if detailed else "640x480"
-        # Ink, with the clutter turned off.
+        # Paper, with the clutter turned off.
         #
         # The default roadmap is a beige sheet of business pins, transit lines
         # and administrative borders, none of which is the trip. What is left
-        # here is land, water, roads and place names -- so the eye has only
-        # the route and the day's pins to land on.
+        # here is land, water, roads and place names -- so the eye has only the
+        # route and the day's pins to land on.
+        #
+        # Light, because the app is: a dark map inside a white sheet reads as a
+        # hole in the page.
         style = "".join(
             "&style=" + quote(rule, safe="")
             for rule in (
-                "feature:all|element:geometry|color:0x0b1220",
-                "feature:all|element:labels.text.fill|color:0x8295b3",
-                "feature:all|element:labels.text.stroke|color:0x0b1220",
+                "feature:all|element:geometry|color:0xf2f4f7",
+                "feature:all|element:labels.text.fill|color:0x5b6b82",
+                "feature:all|element:labels.text.stroke|color:0xffffff",
                 "feature:all|element:labels.icon|visibility:off",
                 "feature:poi|visibility:off",
-                "feature:poi.park|element:geometry|color:0x122a20",
+                "feature:poi.park|element:geometry|color:0xe4ede4",
                 "feature:transit|visibility:off",
                 "feature:administrative|element:geometry|visibility:off",
-                "feature:road|element:geometry|color:0x1a2438",
-                "feature:road|element:labels.text.fill|color:0x6b7d9c",
-                "feature:road.arterial|element:geometry|color:0x223049",
-                "feature:road.highway|element:geometry|color:0x2d4066",
-                "feature:water|element:geometry|color:0x061426",
-                "feature:landscape.natural|element:geometry|color:0x101a2c",
+                "feature:road|element:geometry|color:0xffffff",
+                "feature:road|element:labels.text.fill|color:0x7c8aa0",
+                "feature:road.arterial|element:geometry|color:0xffffff",
+                "feature:road.highway|element:geometry|color:0xffe0b5",
+                "feature:water|element:geometry|color:0xd6e6f2",
+                "feature:landscape.natural|element:geometry|color:0xeceff3",
             )
         )
         url = (

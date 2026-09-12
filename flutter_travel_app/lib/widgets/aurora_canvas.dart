@@ -16,7 +16,7 @@ class AuroraCanvas extends StatefulWidget {
   const AuroraCanvas({
     super.key,
     required this.child,
-    this.ink = const Color(0xFF0B1220),
+    this.ink = const Color(0xFFF6F7F9),
     this.lights = const [
       Color(0xFF1FA7C4), // the pin
       Color(0xFFF7941D), // the sun
@@ -125,7 +125,10 @@ class _AuroraPainter extends CustomPainter {
       final paint = Paint()
         ..shader = RadialGradient(
           colors: [
-            lights[i].withValues(alpha: 0.42),
+            // Far softer on paper. At the strength this had on ink the
+            // same lights read as four pastel blots rather than as a
+            // tint in the paper.
+            lights[i].withValues(alpha: 0.16),
             lights[i].withValues(alpha: 0.0),
           ],
           stops: const [0.0, 1.0],
@@ -144,7 +147,7 @@ class _AuroraPainter extends CustomPainter {
           radius: 1.1,
           colors: [
             ink.withValues(alpha: 0.0),
-            ink.withValues(alpha: 0.55),
+            ink.withValues(alpha: 0.72),
           ],
         ).createShader(Offset.zero & size),
     );
