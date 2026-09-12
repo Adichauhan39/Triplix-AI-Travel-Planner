@@ -67,13 +67,18 @@ Map<String, int> fairShares(int totalPaise, List<String> people) {
 List<Debt> settleUp({
   required Map<String, int> paidPaise,
   required List<String> people,
+  Map<String, int>? owedPaise,
 }) {
   if (people.length < 2) return const [];
 
   final total = people.fold<int>(0, (sum, p) => sum + (paidPaise[p] ?? 0));
   if (total == 0) return const [];
 
-  final shares = fairShares(total, people);
+  // What each person owes. Given explicitly when expenses are split between
+  // different subsets of the group -- a dinner three of five went to is not
+  // divided by five -- and otherwise the whole total shared equally, which is
+  // what it has always been.
+  final shares = owedPaise ?? fairShares(total, people);
 
   // Positive means owed money back; negative means owing.
   final balances = <String, int>{

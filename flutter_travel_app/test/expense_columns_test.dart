@@ -3,7 +3,10 @@ import 'package:flutter_travel_app/services/expense_columns.dart';
 import 'package:flutter_travel_app/services/trip_sync.dart';
 
 TripExpense expense(String by, int paise,
-        {String note = 'x', String name = '', bool shared = true}) =>
+        {String note = 'x',
+        String name = '',
+        bool shared = true,
+        List<String> between = const []}) =>
     TripExpense(
       id: '$by-$paise-$note',
       by: by,
@@ -13,6 +16,7 @@ TripExpense expense(String by, int paise,
       category: 'Other',
       at: DateTime(2026, 1, 1),
       shared: shared,
+      sharedWith: between,
     );
 
 TripPerson person(String uid, String name) =>
@@ -248,6 +252,101 @@ void main() {
       final row =
           TripExpense.fromDoc('id', {'by': 'u1', 'paise': 1000, 'shared': false});
       expect(row.shared, isFalse);
+    });
+  });
+
+  group('an expense split between only some of the group', () {
+    const five = ['a', 'b', 'c', 'd', 'e'];
+
+    test('empty means everyone, as it always did', () {
+      final owed = owedPerPerson(
+        approved: [expense('a', 50000)],
+        members: five,
+      );
+      expect(owed.values.every((v) => v == 10000), isTrue);
+    });
+
+    test('three of five share a dinner, the other two owe nothing', () {
+      final owed = owedPerPerson(
+        approved: [expense('a', 90000, between: ['a', 'b', 'c'])],
+        members: five,
+      );
+      expect(owed['a'], 30000);
+      expect(owed['b'], 30000);
+      expect(owed['c'], 30000);
+      expect(owed['d'], 0);
+      expect(owed['e'], 0);
+    });
+
+    test('every rupee is still distributed', () {
+      final rows = [
+        expense('a', 90000, between: ['a', 'b', 'c'], note: 'dinner'),
+        expense('b', 40000, between: ['b', 'd'], note: 'cab'),
+        expense('c', 50000, note: 'hotel'),
+        expense('a', 7000, note: 'shirt', shared: false),
+      ];
+      final owed = owedPerPerson(approved: rows, members: five);
+      final distributed = owed.values.fold<int>(0, (x, y) => x + y);
+      // The personal shirt is not in it; everything shared is.
+      expect(distributed, 90000 + 40000 + 50000);
+    });
+
+    test('balances still cancel out', () {
+      final rows = [
+        expense('a', 90000, between: ['a', 'b', 'c']),
+        expense('b', 40000, between: ['b', 'd'], note: 'cab'),
+        expense('c', 50000, note: 'hotel'),
+      ];
+      final columns = buildExpenseColumns(
+        approved: rows,
+        people: [for (final u in five) person(u, u)],
+        me: 'a',
+      );
+      expect(columns.fold<int>(0, (x, c) => x + c.balance), 0);
+    });
+
+    test('an uneven subset leaves no stray paise', () {
+      final owed = owedPerPerson(
+        approved: [expense('a', 10000, between: ['a', 'b', 'c'])],
+        members: five,
+      );
+      expect(owed.values.fold<int>(0, (x, y) => x + y), 10000);
+    });
+
+    test('somebody who has left the trip is dropped from the split', () {
+      final owed = owedPerPerson(
+        approved: [expense('a', 60000, between: ['a', 'b', 'gone'])],
+        members: ['a', 'b', 'c'],
+      );
+      // Divided by the two who are still here, not by three.
+      expect(owed['a'], 30000);
+      expect(owed['b'], 30000);
+      expect(owed['c'], 0);
+    });
+
+    test('if everyone named has left, the group covers it', () {
+      // The money is real and belongs to somebody. It must not vanish
+      // because a name went stale.
+      final owed = owedPerPerson(
+        approved: [expense('a', 60000, between: ['gone', 'also-gone'])],
+        members: ['a', 'b', 'c'],
+      );
+      expect(owed.values.fold<int>(0, (x, y) => x + y), 60000);
+    });
+
+    test('a personal expense is never split, named or not', () {
+      final owed = owedPerPerson(
+        approved: [
+          expense('a', 60000, shared: false, between: ['a', 'b']),
+        ],
+        members: ['a', 'b'],
+      );
+      expect(owed.values.every((v) => v == 0), isTrue);
+    });
+
+    test('old rows carry no participants', () {
+      final row = TripExpense.fromDoc('id', {'by': 'a', 'paise': 100});
+      expect(row.sharedWith, isEmpty);
     });
   });
 

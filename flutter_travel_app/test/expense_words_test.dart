@@ -7,6 +7,13 @@ void main() {
       expect(correctWord('toxi'), 'taxi');
     });
 
+    test('fixes the drink that stayed Dronk', () {
+      // There was no "drink" in the vocabulary, so there was nothing to
+      // correct it to and it went through as typed.
+      expect(correctWord('dronk'), 'drink');
+      expect(correctWord('drinks'), isNull);
+    });
+
     test('fixes a doubled letter', () {
       expect(correctWord('dinnner'), 'dinner');
       expect(correctWord('hotell'), 'hotel');

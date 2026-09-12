@@ -42,6 +42,17 @@ const Map<String, String> _vocabulary = {
   'tea': 'Food',
   'water': 'Food',
   'restaurant': 'Food',
+  // "Dronk" went uncorrected because there was no "drink" to correct it to.
+  // These are the other things people actually buy and mistype.
+  'drink': 'Food',
+  'drinks': 'Food',
+  'juice': 'Food',
+  'beer': 'Food',
+  'chai': 'Food',
+  'sweets': 'Food',
+  'thali': 'Food',
+  'brunch': 'Food',
+  'dessert': 'Food',
   // Stay
   'hotel': 'Stay',
   'hostel': 'Stay',
@@ -63,6 +74,12 @@ const Map<String, String> _vocabulary = {
   'medicine': 'Other',
   'laundry': 'Other',
   'tip': 'Other',
+  'porter': 'Other',
+  'luggage': 'Other',
+  'sim': 'Other',
+  'recharge': 'Other',
+  'charger': 'Other',
+  'umbrella': 'Other',
 };
 
 /// Levenshtein distance, capped: anything past [limit] is not a near miss and

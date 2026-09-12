@@ -75,6 +75,43 @@ int sharedTotal(List<TripExpense> rows) =>
 int personalTotal(List<TripExpense> rows) =>
     rows.fold<int>(0, (sum, row) => sum + (row.shared ? 0 : row.paise));
 
+/// What each person owes, expense by expense.
+///
+/// The split used to be one division of one total by everybody. That cannot
+/// express a dinner three of five people went to, so each expense is now
+/// divided among its own participants and a person's share is the sum of their
+/// portions.
+///
+/// Every expense is distributed in full, so the total owed equals the total
+/// shared spending -- which is what keeps the balances summing to zero.
+Map<String, int> owedPerPerson({
+  required List<TripExpense> approved,
+  required List<String> members,
+}) {
+  final owed = {for (final uid in members) uid: 0};
+  if (members.isEmpty) return owed;
+
+  for (final row in approved) {
+    if (!row.shared || row.paise <= 0) continue;
+
+    // Who was in on it. Anyone named who has since left the trip is dropped,
+    // and if that leaves nobody the expense falls back to the whole group --
+    // money that belongs to somebody must not vanish because a name went
+    // stale.
+    var party = [
+      for (final uid in row.sharedWith)
+        if (members.contains(uid)) uid
+    ];
+    if (party.isEmpty) party = members;
+
+    final portions = fairShares(row.paise, party);
+    portions.forEach((uid, amount) {
+      owed[uid] = (owed[uid] ?? 0) + amount;
+    });
+  }
+  return owed;
+}
+
 /// The name to show for a uid.
 ///
 /// Falls through the trip nickname, then the name copied onto an expense when
@@ -170,13 +207,14 @@ List<PersonColumn> buildExpenseColumns({
   // The split is whatever settle_up says it is. Deriving it again here would
   // let the columns and the settlement drift apart, which is the one thing a
   // shared ledger cannot survive.
-  // Only the shared money is divided. Including somebody's own shopping would
-  // charge everybody a share of it.
+  // The headline figure. The shares are no longer derived from it -- they are
+  // worked out per expense, since not every expense is divided by everyone --
+  // but it is still what the group has spent together.
   final total = approved.fold<int>(
       0, (sum, row) => sum + (row.shared ? row.paise : 0));
   final shares = memberUids.isEmpty
       ? <String, int>{}
-      : fairShares(total, memberUids);
+      : owedPerPerson(approved: approved, members: memberUids);
 
   final columns = [
     for (final uid in uids)

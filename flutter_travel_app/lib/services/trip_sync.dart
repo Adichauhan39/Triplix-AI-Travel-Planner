@@ -45,6 +45,7 @@ class TripExpense {
     required this.at,
     this.status = 'approved',
     this.shared = true,
+    this.sharedWith = const [],
   });
 
   factory TripExpense.fromDoc(String id, Map<String, dynamic> data) {
@@ -64,6 +65,12 @@ class TripExpense {
       // were understood to mean at the time. Defaulting to false would
       // silently rewrite what a group already believes it owes.
       shared: data['shared'] != false,
+      // Absent means everyone, so every row written before this keeps meaning
+      // exactly what it meant.
+      sharedWith: [
+        for (final uid in (data['shared_with'] as List?) ?? const [])
+          uid.toString()
+      ],
       // A row written on this device has no server time for a moment. Treated
       // as "just now" so it sorts to the top rather than to 1970.
       at: stamp is Timestamp ? stamp.toDate() : DateTime.now(),
@@ -87,6 +94,14 @@ class TripExpense {
   /// forgotten, but owed by nobody else -- somebody's shopping, or the drink
   /// they bought only for themselves.
   final bool shared;
+
+  /// Who this is divided between.
+  ///
+  /// Empty means everyone on the trip, which is what every row meant before
+  /// this existed. Otherwise it is the few who were actually there: a dinner
+  /// three of five people went to is divided by three, and the other two owe
+  /// nothing towards it.
+  final List<String> sharedWith;
 
   bool get isApproved => status == 'approved';
   bool get isPending => status == 'pending';
@@ -493,6 +508,7 @@ class TripSync {
     String category = 'Other',
     String? onBehalfOf,
     bool shared = true,
+    List<String> sharedWith = const [],
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || paise <= 0) return false;
@@ -531,6 +547,9 @@ class TripSync {
         // Written only when false, so every row already in the ledger keeps
         // meaning what it meant: absent reads as shared.
         if (!shared) 'shared': false,
+        // Only when it is not everybody. Absent is the common case and the
+        // one that needs no explaining.
+        if (sharedWith.isNotEmpty) 'shared_with': sharedWith,
         // Kept so a row entered by somebody else is not mistaken later for
         // one the payer typed themselves.
         if (payer != uid) 'entered_by': uid,
@@ -659,6 +678,34 @@ class TripSync {
       return true;
     } catch (e) {
       debugPrint('TripSync.setShared failed: $e');
+      return false;
+    }
+  }
+
+  /// Changes who an expense is divided between.
+  ///
+  /// An empty list puts it back to everyone. A member's change returns to
+  /// 'pending' for the same reason an edited amount does: it moves what other
+  /// people owe, so the owner sees it before it counts.
+  Future<bool> setSharedWith({
+    required String tripId,
+    required String expenseId,
+    required List<String> people,
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
+    try {
+      final trip = await fetch(tripId);
+      final isOwner = (trip?['owner'] ?? '').toString() == uid;
+      await _expensesOf(tripId).doc(expenseId).update({
+        'shared_with': people,
+        // Back in the split, since naming who shares it says it is shared.
+        'shared': true,
+        if (!isOwner) 'status': 'pending',
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.setSharedWith failed: $e');
       return false;
     }
   }
