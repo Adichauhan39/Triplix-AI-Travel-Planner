@@ -26,7 +26,16 @@ class TriplixLogo extends StatelessWidget {
     this.borderRadius,
     this.boxShadow,
     this.fit = BoxFit.cover,
+    this.lifted = false,
   });
+
+  /// Draws the mark as a sticker resting on the page: its own teal glow
+  /// beneath it and a soft shadow under the point.
+  ///
+  /// Off by default, because most places show it small and inline, where a
+  /// shadow is noise. The entrance screens turn it on -- there the mark is the
+  /// subject, and a subject wants to sit above the paper rather than in it.
+  final bool lifted;
 
   /// Still referenced by the launcher-icon configuration in pubspec.yaml.
   static const String assetPath = 'assets/images/triplix_sticker.png';
@@ -46,7 +55,7 @@ class TriplixLogo extends StatelessWidget {
     final Widget mark = SizedBox(
       width: size,
       height: size,
-      child: const CustomPaint(painter: _PinPainter()),
+      child: CustomPaint(painter: _PinPainter(lifted: lifted)),
     );
 
     // No clipping. The old widget clipped a square photograph into a circle;
@@ -72,7 +81,9 @@ class TriplixLogo extends StatelessWidget {
 }
 
 class _PinPainter extends CustomPainter {
-  const _PinPainter();
+  const _PinPainter({this.lifted = false});
+
+  final bool lifted;
 
   // The logo's own two colours, and the rim that separates them from whatever
   // is behind.
@@ -123,6 +134,28 @@ class _PinPainter extends CustomPainter {
     final pin = _pin(s);
     final centre = Offset(s / 2, s * 0.375);
 
+    if (lifted) {
+      // A wash of the pin's own teal, spread wider than the pin, so the mark
+      // sits in a little light of its own.
+      canvas.drawPath(
+        pin,
+        Paint()
+          ..color = _body.withValues(alpha: 0.30)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, s * 0.16),
+      );
+      // And a shadow, offset down: what makes it read as resting on the page
+      // rather than printed into it.
+      canvas.save();
+      canvas.translate(0, s * 0.035);
+      canvas.drawPath(
+        pin,
+        Paint()
+          ..color = const Color(0x33101828)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, s * 0.05),
+      );
+      canvas.restore();
+    }
+
     // The rim, drawn as a stroke around the same path rather than as a second
     // larger path: a scaled copy thickens unevenly at the point.
     canvas.drawPath(
@@ -145,5 +178,5 @@ class _PinPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PinPainter oldDelegate) => false;
+  bool shouldRepaint(_PinPainter oldDelegate) => oldDelegate.lifted != lifted;
 }

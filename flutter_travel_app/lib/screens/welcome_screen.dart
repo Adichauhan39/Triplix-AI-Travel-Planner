@@ -144,26 +144,12 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           final lift = Curves.easeInOut.transform(_drift.value) * 8 - 4;
           return Transform.translate(offset: Offset(0, lift), child: child);
         },
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            // White, not a white wash: 8% white over a white page is nothing,
-            // so the mark had no disc to sit on.
-            color: Colors.white,
-            boxShadow: [
-              // The pin's own teal. Far softer than on ink, where it had to
-              // carry the glow alone -- at that strength on paper it reads as
-              // a halo rather than a light.
-              BoxShadow(
-                color: Color(0x2E1FA7C4),
-                blurRadius: 40,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: const TriplixLogo(size: 72, shape: BoxShape.circle),
-        ),
+        // No disc. The mark was 72 pixels inside a padded circle, so the pin
+        // filled barely half of what you saw and the circle's curve closed in
+        // right where the point tapers -- it read as cropped. The mark is the
+        // subject here, so it is simply the subject: bigger, unframed, and
+        // lifted off the paper by its own glow and shadow.
+        child: const TriplixLogo(size: 132, lifted: true),
       ),
     );
   }

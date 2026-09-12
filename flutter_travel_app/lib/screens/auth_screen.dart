@@ -224,7 +224,7 @@ class _HeaderState extends State<_Header> with SingleTickerProviderStateMixin {
                 ),
               ],
             ),
-            child: const TriplixLogo(size: 54, shape: BoxShape.circle),
+            child: const TriplixLogo(size: 76, lifted: true),
           ),
         ),
         const SizedBox(height: 22),
