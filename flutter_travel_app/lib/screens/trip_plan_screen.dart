@@ -1536,6 +1536,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                       ),
                     ),
                   ),
+                _strayBookings(plan, booked),
                 Expanded(child: _buildDays(plan, booked)),
                 _buildRequestBar(),
               ],
@@ -1915,10 +1916,17 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
     final parts = <String>[];
 
-    if (booked.flights.any((f) => sameDay(f.startDate, day.date))) {
+    // The same filter the rows use. Without it a day still announced
+    // "Check-in" for a hotel in another city that is no longer listed on it.
+    final where = context.read<TripPlanProvider>().plan?.destination ?? '';
+    bool here(ConfirmedBooking b) =>
+        _bookingBelongsElsewhere(b, where) == null;
+
+    if (booked.flights
+        .any((f) => sameDay(f.startDate, day.date) && here(f))) {
       parts.add('Flight day');
     }
-    if (booked.hotels.any((h) => sameDay(h.startDate, day.date))) {
+    if (booked.hotels.any((h) => sameDay(h.startDate, day.date) && here(h))) {
       parts.add('Check-in');
     }
 
@@ -2036,6 +2044,8 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
     for (final flight in booked.flights) {
       if (!sameDay(flight.startDate, date)) continue;
+      // Another trip's leg. Said once above the days instead.
+      if (_bookingBelongsElsewhere(flight, destination) != null) continue;
       final number = flight.flightNumber;
       final time = flight.departureTime;
       rows.add(_bookedRow(
@@ -2050,7 +2060,6 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Booked · time not recorded'
             : 'Departs $time',
         verified: flight.flightIsRealFlight,
-        belongsTo: _bookingBelongsElsewhere(flight, destination),
         onEdit: () => _editBooking(flight),
         onRemove: () => _removeBooking(flight),
       ));
@@ -2058,6 +2067,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
 
     for (final hotel in booked.hotels) {
       if (!sameDay(hotel.startDate, date)) continue;
+      if (_bookingBelongsElsewhere(hotel, destination) != null) continue;
       rows.add(_bookedRow(
         icon: Icons.hotel,
         title: hotel.hotelName ?? hotel.title,
@@ -2065,7 +2075,6 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Check in'
             : 'Check in · until ${_dayLabel.format(hotel.endDate!)}',
         verified: hotel.hotelNameIsRealPlace,
-        belongsTo: _bookingBelongsElsewhere(hotel, destination),
         onEdit: () => _editBooking(hotel),
         onRemove: () => _removeBooking(hotel),
       ));
@@ -2216,6 +2225,87 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     if (!mounted || sure != true) return;
     context.read<BookedTripProvider>().remove(booking);
     setState(() {});
+  }
+
+  /// Bookings kept from another trip, named once and kept off the days.
+  ///
+  /// They are not deleted, because the user really did book them and this app
+  /// has no way to know they did not travel. They are simply not part of this
+  /// itinerary, which is the whole of what was wrong with showing them inside
+  /// it -- an orange warning in Day 1 is still a row in Day 1.
+  Widget _strayBookings(TripPlan plan, BookedTripProvider booked) {
+    final strays = [
+      for (final booking in [...booked.flights, ...booked.hotels])
+        if (_bookingBelongsElsewhere(booking, plan.destination) != null)
+          booking,
+    ];
+    if (strays.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(AppConfig.radiusSmall),
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              strays.length == 1
+                  ? 'One booking is for another trip'
+                  : '${strays.length} bookings are for another trip',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.grey[800]),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Kept, but left off this itinerary.',
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 6),
+            for (final booking in strays)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Icon(
+                      booking.kind == BookingKind.flight
+                          ? Icons.flight_takeoff
+                          : Icons.hotel,
+                      size: 14,
+                      color: Colors.grey[600],
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${booking.hotelName ?? booking.title} · '
+                        '${_bookingBelongsElsewhere(booking, plan.destination)}',
+                        style: const TextStyle(fontSize: 12),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _removeBooking(booking),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      child: const Text('Remove',
+                          style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// The place a booking belongs to, when that is not where this trip goes.
