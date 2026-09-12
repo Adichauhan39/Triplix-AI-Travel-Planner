@@ -1607,7 +1607,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                 // Only rendered when it exists — an itinerary that shows a
                 // flight nobody confirmed is a guess, and this app does not
                 // guess about bookings.
-                ..._bookedRowsFor(day.date, booked),
+                ..._bookedRowsFor(day.date, booked,
+                    context.read<TripPlanProvider>().plan?.destination ??
+                        ''),
                 // An empty day is shown as empty rather than hidden — it is a
                 // true statement about the trip, and a missing Day 3 would
                 // misrepresent how long they are staying.
@@ -1989,7 +1991,8 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// A flight lands on its own date. A hotel spans the stay, so it appears
   /// once as a check-in on the first night rather than repeating on every
   /// day, which would bury the actual plan under the same line six times.
-  List<Widget> _bookedRowsFor(DateTime date, BookedTripProvider booked) {
+  List<Widget> _bookedRowsFor(
+      DateTime date, BookedTripProvider booked, String destination) {
     bool sameDay(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day;
 
@@ -2011,7 +2014,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Booked · time not recorded'
             : 'Departs $time',
         verified: flight.flightIsRealFlight,
+        belongsTo: _bookingBelongsElsewhere(flight, destination),
         onEdit: () => _editBooking(flight),
+        onRemove: () => _removeBooking(flight),
       ));
     }
 
@@ -2024,7 +2029,9 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Check in'
             : 'Check in · until ${_dayLabel.format(hotel.endDate!)}',
         verified: hotel.hotelNameIsRealPlace,
+        belongsTo: _bookingBelongsElsewhere(hotel, destination),
         onEdit: () => _editBooking(hotel),
+        onRemove: () => _removeBooking(hotel),
       ));
     }
 
@@ -2038,6 +2045,8 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     required String subtitle,
     required bool verified,
     VoidCallback? onEdit,
+    VoidCallback? onRemove,
+    String? belongsTo,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -2061,6 +2070,30 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                         fontSize: 13, fontWeight: FontWeight.w700)),
                 Text(subtitle,
                     style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                // Left on the plan rather than hidden: the user really did
+                // book this, and making their own record vanish because they
+                // edited the destination would be worse than showing it in
+                // the wrong place. Named, so the fix is obvious.
+                if (belongsTo != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(
+                      children: [
+                        Icon(Icons.error_outline,
+                            size: 12, color: Colors.orange[800]),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            'Booked for $belongsTo — not this trip',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.orange[800]),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
@@ -2075,19 +2108,94 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           // The only two rows on the plan that could not be changed. A wrong
           // departure time is the worst of them: the whole first day is built
           // around it, and fixing it meant booking the leg again.
-          if (onEdit != null)
-            IconButton(
-              tooltip: 'Edit',
-              visualDensity: VisualDensity.compact,
+          if (onEdit != null || onRemove != null)
+            PopupMenuButton<String>(
+              tooltip: 'Change this booking',
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              icon: Icon(Icons.edit_outlined,
+              icon: Icon(Icons.more_vert,
                   size: 16, color: AppConfig.primaryColor),
-              onPressed: onEdit,
+              itemBuilder: (context) => [
+                if (onEdit != null)
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Row(children: [
+                      Icon(Icons.edit_outlined, size: 17),
+                      SizedBox(width: 10),
+                      Text('Edit'),
+                    ]),
+                  ),
+                if (onRemove != null)
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Row(children: [
+                      Icon(Icons.delete_outline, size: 17, color: Colors.red),
+                      SizedBox(width: 10),
+                      Text('Remove', style: TextStyle(color: Colors.red)),
+                    ]),
+                  ),
+              ],
+              onSelected: (choice) =>
+                  choice == 'edit' ? onEdit?.call() : onRemove?.call(),
             ),
         ],
       ),
     );
+  }
+
+  /// Takes a flight or a stay off the plan, after asking.
+  ///
+  /// Asked because this is the user's own record of something they say they
+  /// booked, and nothing here can bring it back. The wording names what is
+  /// going, so a mis-tap on the wrong row is obvious before it happens.
+  Future<void> _removeBooking(ConfirmedBooking booking) async {
+    final isFlight = booking.kind == BookingKind.flight;
+    final what = isFlight
+        ? (booking.flightNumber == null || booking.flightNumber!.isEmpty
+            ? booking.title
+            : '${booking.title} · ${booking.flightNumber}')
+        : (booking.hotelName ?? booking.title);
+
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(isFlight ? 'Remove this flight?' : 'Remove this stay?'),
+        content: Text(
+          '$what will be taken off your plan. This only changes Triplix — '
+          'it does not cancel anything you booked.',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep it'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove',
+                style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || sure != true) return;
+    context.read<BookedTripProvider>().remove(booking);
+    setState(() {});
+  }
+
+  /// The place a booking belongs to, when that is not where this trip goes.
+  ///
+  /// Returns null whenever we cannot tell, which is most of the time for a
+  /// hotel named freehand -- "Hyatt Raipur" is only recognisable as Raipur to
+  /// a reader. Silence is the right answer there: a wrong warning on a
+  /// correct booking would teach people to ignore the right ones.
+  String? _bookingBelongsElsewhere(ConfirmedBooking booking, String where) {
+    final city = where.split(',').first.trim();
+    if (city.isEmpty) return null;
+
+    final claimed = booking.bookedForCity ?? booking.flightDestination;
+    if (claimed == null || claimed.isEmpty) return null;
+
+    return claimed.toLowerCase() == city.toLowerCase() ? null : claimed;
   }
 
   /// Two digits, so 7:5 is never written where 07:05 is meant.

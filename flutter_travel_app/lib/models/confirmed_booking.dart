@@ -22,6 +22,7 @@ class ConfirmedBooking {
     this.flightIsRealFlight = false,
     this.hotelName,
     this.hotelNameIsRealPlace = false,
+    this.forDestination,
     DateTime? recordedAt,
   }) : recordedAt = recordedAt ?? DateTime.now();
 
@@ -73,6 +74,33 @@ class ConfirmedBooking {
   /// an address and map pin for the former and treat the latter as a label.
   final bool hotelNameIsRealPlace;
 
+  /// The trip this was booked for, as the destination read at the time.
+  ///
+  /// Null on records saved before this was kept, and on nothing else. It
+  /// exists because a booking outlives the trip it was made for: changing the
+  /// destination leaves every flight and hotel behind, and without this there
+  /// is no way to tell a stale one from a current one.
+  final String? forDestination;
+
+  /// Just the city, for comparing against another destination.
+  String? get bookedForCity {
+    final whole = (forDestination ?? '').split(',').first.trim();
+    return whole.isEmpty ? null : whole;
+  }
+
+  /// Where a flight ends up, read from its own title.
+  ///
+  /// These titles are written by this app as "<origin> to <destination>", so
+  /// this reads our own format rather than guessing at arbitrary text. It is
+  /// how a booking saved before [forDestination] existed can still be placed.
+  String? get flightDestination {
+    if (kind != BookingKind.flight) return null;
+    final parts = title.split(' to ');
+    if (parts.length < 2) return null;
+    final city = parts.last.split(',').first.trim();
+    return city.isEmpty ? null : city;
+  }
+
   /// When the user told us, not when the booking was made.
   final DateTime recordedAt;
 
@@ -106,6 +134,7 @@ class ConfirmedBooking {
       flightIsRealFlight: flightIsRealFlight ?? this.flightIsRealFlight,
       hotelName: hotelName ?? this.hotelName,
       hotelNameIsRealPlace: hotelNameIsRealPlace ?? this.hotelNameIsRealPlace,
+      forDestination: forDestination,
       recordedAt: recordedAt,
     );
   }
@@ -130,6 +159,8 @@ class ConfirmedBooking {
           'hotel_name': hotelName,
           'hotel_name_is_real_place': hotelNameIsRealPlace,
         },
+        if (forDestination != null && forDestination!.isNotEmpty)
+          'for_destination': forDestination,
         'recorded_at': recordedAt.toIso8601String(),
         'confirmed_by_user': confirmedByUser,
       };
@@ -162,6 +193,7 @@ class ConfirmedBooking {
       flightIsRealFlight: json['flight_is_real_flight'] == true,
       hotelName: text(json['hotel_name']),
       hotelNameIsRealPlace: json['hotel_name_is_real_place'] == true,
+      forDestination: text(json['for_destination']),
       recordedAt: parse(json['recorded_at']),
     );
   }

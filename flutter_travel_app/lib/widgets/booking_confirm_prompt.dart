@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../models/confirmed_booking.dart';
 import '../providers/booked_trip_provider.dart';
+import '../providers/user_preferences_provider.dart';
 import '../services/affiliate_links.dart';
 import '../services/python_adk_service.dart';
 
@@ -351,6 +352,7 @@ class BookingConfirmPrompt {
         hotelName: !isFlight && entered.isNotEmpty ? entered : null,
         hotelNameIsRealPlace:
             !isFlight && entered.isNotEmpty ? result.pickedFromPlaces : false,
+        forDestination: _tripDestination(context),
       ),
       lookupFailed: result.lookupFailed,
     );
@@ -374,6 +376,7 @@ class BookingConfirmPrompt {
           departureTime: result.returnDepartureTime,
           // Only ever set by tapping a card, so it is always a real flight.
           flightIsRealFlight: true,
+          forDestination: _tripDestination(context),
         ),
       );
     }
@@ -381,6 +384,17 @@ class BookingConfirmPrompt {
     return saved;
   }
 
+
+  /// Where the trip was going when this was booked.
+  ///
+  /// Read at the moment of saving rather than passed in, so every caller
+  /// records it without having to remember to.
+  static String? _tripDestination(BuildContext context) {
+    final destination =
+        context.read<UserPreferencesProvider>().preferences.destination;
+    final trimmed = (destination ?? '').trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
 
   static ConfirmedBooking _save(
     BuildContext context,
