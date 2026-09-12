@@ -443,6 +443,20 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     return _stayingAt.trim();
   }
 
+  /// Whether a remembered stay was recorded for this trip.
+  ///
+  /// One may hold the other: what was stored is a full destination
+  /// ("Bhilai, Chhattisgarh, India") while the field may carry either that or
+  /// just the city. A stay recorded before this was kept has no destination at
+  /// all, and is treated as somebody else's -- asking once more costs a
+  /// question, while guessing costs a route that starts in the wrong city.
+  bool _stayBelongsHere(String recordedFor, String destination) {
+    final was = recordedFor.split(',').first.trim().toLowerCase();
+    final now = destination.split(',').first.trim().toLowerCase();
+    if (was.isEmpty || now.isEmpty) return false;
+    return was == now || was.contains(now) || now.contains(was);
+  }
+
   /// Asks where they are staying, when no booking tells us.
   ///
   /// Without it a day reads "set off from where you are staying", which is
@@ -458,9 +472,27 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
       _departure = storedDeparture;
     }
     final remembered = (stored?['staying_at'] ?? '').toString();
-    if (remembered.isNotEmpty) {
+    final rememberedFor = (stored?['staying_at_for'] ?? '').toString();
+    if (remembered.isNotEmpty &&
+        _stayBelongsHere(rememberedFor, plan.destination)) {
       setState(() => _stayingAt = remembered);
       return;
+    }
+    // Kept for a different trip. Dropped rather than reused, and the running
+    // order that was built from it goes with it -- those days began somewhere
+    // else, and leaving them would describe a route from another city in
+    // sentences that read as fact.
+    if (remembered.isNotEmpty) {
+      final shape = Map<String, dynamic>.from(stored ?? const {})
+        ..remove('staying_at')
+        ..remove('staying_at_for');
+      LocalStore.save(LocalStore.keyTripShape, shape);
+      if (_schedules.isNotEmpty || _arrangedFor.isNotEmpty) {
+        setState(() {
+          _schedules = {};
+          _arrangedFor = '';
+        });
+      }
     }
     // Asked once per trip, and only while the trip tab is on screen.
     final signature = '${plan.destination}|stay';
@@ -543,6 +575,8 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     final shape = Map<String, dynamic>.from(
         LocalStore.load(LocalStore.keyTripShape) ?? const {});
     shape['staying_at'] = answer;
+    // Which trip it was for, so the next one does not inherit it.
+    shape['staying_at_for'] = plan.destination;
     LocalStore.save(LocalStore.keyTripShape, shape);
     setState(() {
       _stayingAt = answer;
