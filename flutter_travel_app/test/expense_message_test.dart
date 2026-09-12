@@ -81,6 +81,52 @@ void main() {
     });
   });
 
+  group("taking it out of the split", () {
+    test("the sentence that prompted this", () {
+      final spoken = readExpense("500 for food, but dont share it");
+      expect(spoken!.shared, isFalse);
+      // The instruction is not the name of what was bought.
+      expect(spoken.description, "food");
+      expect(spoken.rupees, 500);
+    });
+
+    test("an apostrophe changes nothing", () {
+      expect(readExpense("500 for food, but don't share it")?.shared, isFalse);
+      expect(readExpense("500 for food, do not split it")?.shared, isFalse);
+    });
+
+    test("other ways of saying it", () {
+      expect(readExpense("2000 for shopping, just mine")?.shared, isFalse);
+      expect(readExpense("2000 for a shirt, only mine")?.shared, isFalse);
+      expect(readExpense("800 for medicine, personal")?.shared, isFalse);
+      expect(readExpense("300 for tea, dont include it")?.shared, isFalse);
+      expect(readExpense("300 for tea, no split")?.shared, isFalse);
+    });
+
+    test("an ordinary expense is still shared", () {
+      final spoken = readExpense("500 for dinner");
+      expect(spoken!.shared, isTrue);
+      expect(spoken.description, "dinner");
+    });
+
+    test("sharing words do not trip it", () {
+      // "shared" appears, but nobody asked for it to be excluded.
+      expect(readExpense("600 for a shared taxi")?.shared, isTrue);
+    });
+
+    test("the instruction alone is not an expense", () {
+      // Nothing names what the money went on.
+      expect(readExpense("500, dont share it"), isNull);
+    });
+
+    test("a payer still comes through", () {
+      final spoken = readExpense("500 paid by bulla for food, dont share it");
+      expect(spoken!.payer, "bulla");
+      expect(spoken.shared, isFalse);
+      expect(spoken.description, "food");
+    });
+  });
+
   group('matchPerson', () {
     const people = {
       'uid-a': 'Bulla',

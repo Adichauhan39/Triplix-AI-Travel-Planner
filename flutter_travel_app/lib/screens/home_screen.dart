@@ -6384,6 +6384,7 @@ class _BudgetTabState extends State<BudgetTab>
       note: spoken.description,
       category: category,
       onBehalfOf: payerUid,
+      shared: spoken.shared,
     );
   }
 

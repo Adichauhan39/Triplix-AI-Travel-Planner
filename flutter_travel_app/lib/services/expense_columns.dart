@@ -59,6 +59,22 @@ class PersonColumn {
   String toString() => '$name paid $paid of $share';
 }
 
+/// Only the rows the group divides between them.
+///
+/// Everything that works out what anybody owes has to start here. When it did
+/// not, one screen showed a total, a set of columns and a settlement that
+/// disagreed with each other about the same money.
+List<TripExpense> sharedOnly(List<TripExpense> rows) =>
+    [for (final row in rows) if (row.shared) row];
+
+/// What the shares are worked out from: the shared rows, and nothing else.
+int sharedTotal(List<TripExpense> rows) =>
+    rows.fold<int>(0, (sum, row) => sum + (row.shared ? row.paise : 0));
+
+/// What people spent on themselves. Shown, never divided.
+int personalTotal(List<TripExpense> rows) =>
+    rows.fold<int>(0, (sum, row) => sum + (row.shared ? 0 : row.paise));
+
 /// The name to show for a uid.
 ///
 /// Falls through the trip nickname, then the name copied onto an expense when

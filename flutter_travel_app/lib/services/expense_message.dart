@@ -16,6 +16,7 @@ class SpokenExpense {
     required this.rupees,
     required this.description,
     this.payer,
+    this.shared = true,
   });
 
   final double rupees;
@@ -24,6 +25,13 @@ class SpokenExpense {
   /// Who paid, as written. Null when the sentence does not say, which means
   /// the person typing it.
   final String? payer;
+
+  /// Whether the sentence asked for this to be divided.
+  ///
+  /// False when it says something like "don't share it" or "just mine". The
+  /// instruction is acted on and removed from the description, so the note
+  /// reads "Food" rather than "Food, but dont share it".
+  final bool shared;
 
   @override
   String toString() =>
@@ -63,6 +71,26 @@ const Set<String> _notNames = {
   'today', 'yesterday', 'now', 'him', 'her', 'them', 'someone',
 };
 
+/// Ways of saying "this one is mine, do not divide it".
+///
+/// Matched on the sentence with its apostrophes removed, so "don't" and "dont"
+/// are one pattern rather than two -- people type both, and a split that
+/// depends on punctuation is a split that will be wrong.
+final RegExp _notShared = RegExp(
+  r"\b("
+  r"dont\s+(?:share|split|include)"
+  r"|do\s+not\s+(?:share|split|include)"
+  r"|not\s+(?:shared|split)"
+  r"|no\s+split"
+  r"|exclude\s+(?:it\s+)?from"
+  r"|just\s+(?:mine|me|for\s+me)"
+  r"|only\s+(?:mine|me|for\s+me)"
+  r"|my\s+own"
+  r"|personal"
+  r")\b",
+  caseSensitive: false,
+);
+
 /// Reads a sentence into an expense, or null if there is no money in it.
 ///
 /// Returning null is the common case and not a failure: most messages in a
@@ -71,6 +99,11 @@ const Set<String> _notNames = {
 SpokenExpense? readExpense(String message) {
   final text = message.trim();
   if (text.isEmpty) return null;
+
+  // Apostrophes dropped for the test only; the original text is still what
+  // the amount and the payer are read from.
+  final plain = text.replaceAll("'", '').replaceAll('\u2019', '');
+  final shared = !_notShared.hasMatch(plain);
 
   final amountMatch = _amount.firstMatch(text);
   if (amountMatch == null) return null;
@@ -113,12 +146,35 @@ SpokenExpense? readExpense(String message) {
         .replaceFirst(RegExp(r'\s+(?:paid\s+)?by\s+.+$', caseSensitive: false), '')
         .trim();
   }
+  // The instruction is not part of what was bought. Cut at the connector so
+  // "food, but dont share it" becomes "food" rather than "food but".
+  if (!shared) {
+    final cut = description.split(RegExp(
+        r'\s*(?:,|\band\b|\bbut\b|\bhowever\b|--|\u2014)\s*',
+        caseSensitive: false));
+    for (final piece in cut) {
+      final trimmed = piece.trim();
+      if (trimmed.isEmpty) continue;
+      if (_notShared.hasMatch(
+          trimmed.replaceAll("'", '').replaceAll('\u2019', ''))) {
+        continue;
+      }
+      description = trimmed;
+      break;
+    }
+    // Everything in it was the instruction, so nothing names the expense.
+    if (_notShared
+        .hasMatch(description.replaceAll("'", '').replaceAll('\u2019', ''))) {
+      description = '';
+    }
+  }
   if (description.isEmpty) return null;
 
   return SpokenExpense(
     rupees: rupees,
     description: description,
     payer: payer,
+    shared: shared,
   );
 }
 

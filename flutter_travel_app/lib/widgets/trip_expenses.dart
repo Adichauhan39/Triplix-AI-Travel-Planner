@@ -553,11 +553,16 @@ class _TripExpensesState extends State<TripExpenses> {
   }
 
   Widget _totals(List<TripExpense> rows) {
-    final total = rows.fold<int>(0, (sum, r) => sum + r.paise);
+    // Only the shared rows. This used to add everything, so a personal
+    // expense inflated both the total and the "each" beneath it, and the
+    // columns two lines down disagreed with their own heading.
+    final total = sharedTotal(rows);
+    final personal = personalTotal(rows);
     final heads = _people.isEmpty ? 1 : _people.length;
     return Text(
-      '${formatRupees(total)} spent'
-      '${_people.length > 1 ? '  ·  ${formatRupees(total ~/ heads)} each' : ''}',
+      '${formatRupees(total)} shared'
+      '${_people.length > 1 ? '  ·  ${formatRupees(total ~/ heads)} each' : ''}'
+      '${personal > 0 ? '  ·  ${formatRupees(personal)} just theirs' : ''}',
       style: TextStyle(fontSize: 12, color: Colors.grey[700]),
     );
   }
@@ -599,8 +604,10 @@ class _TripExpensesState extends State<TripExpenses> {
       );
     }
 
+    // Nobody owes a share of somebody's own spending, so it cannot be counted
+    // as having been put in either. Including it reversed who owed whom.
     final paid = <String, int>{};
-    for (final row in rows) {
+    for (final row in sharedOnly(rows)) {
       paid[row.by] = (paid[row.by] ?? 0) + row.paise;
     }
     final debts = settleUp(

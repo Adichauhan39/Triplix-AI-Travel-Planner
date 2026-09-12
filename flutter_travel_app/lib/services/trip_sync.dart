@@ -492,6 +492,7 @@ class TripSync {
     required String note,
     String category = 'Other',
     String? onBehalfOf,
+    bool shared = true,
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || paise <= 0) return false;
@@ -527,6 +528,9 @@ class TripSync {
         'note': note.trim(),
         'category': category,
         'status': isOwner ? 'approved' : 'pending',
+        // Written only when false, so every row already in the ledger keeps
+        // meaning what it meant: absent reads as shared.
+        if (!shared) 'shared': false,
         // Kept so a row entered by somebody else is not mistaken later for
         // one the payer typed themselves.
         if (payer != uid) 'entered_by': uid,

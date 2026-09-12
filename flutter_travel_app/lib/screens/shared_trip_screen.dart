@@ -613,6 +613,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               for (final person in _members) person.uid: person.name,
             })
           : null,
+      shared: spoken.shared,
     );
     if (!mounted) return;
     setState(() {
@@ -707,12 +708,15 @@ class _SharedTripScreenState extends State<SharedTripScreen>
         final approved = [for (final r in rows) if (r.isApproved) r];
         final waiting = [for (final r in rows) if (r.isPending) r];
 
+        // Only what the group divides. Counting a personal expense here
+        // moved money nobody owed, and reversed the direction of the debt.
         final paid = <String, int>{};
-        for (final row in approved) {
+        for (final row in sharedOnly(approved)) {
           paid[row.by] = (paid[row.by] ?? 0) + row.paise;
         }
         final people = _people;
-        final total = approved.fold<int>(0, (sum, r) => sum + r.paise);
+        final total = sharedTotal(approved);
+        final personal = personalTotal(approved);
         final debts = people.length > 1
             ? settleUp(paidPaise: paid, people: people)
             : const <Debt>[];
@@ -745,9 +749,11 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               if (total > 0)
                 Text(
                   people.length > 1
-                      ? '${_money(total)} so far · '
+                      ? '${_money(total)} shared · '
                           '${_money(total ~/ people.length)} each'
-                      : '${_money(total)} so far',
+                          '${personal > 0 ? ' · ${_money(personal)} just theirs' : ''}'
+                      : '${_money(total)} shared'
+                          '${personal > 0 ? ' · ${_money(personal)} just theirs' : ''}',
                   style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                 )
               else
