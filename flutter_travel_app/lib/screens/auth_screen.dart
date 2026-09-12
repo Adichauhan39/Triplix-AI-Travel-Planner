@@ -823,7 +823,9 @@ class _LoginCardState extends State<_LoginCard>
               Checkbox(
                 value: _rememberMe,
                 activeColor: _Brand.teal,
-                checkColor: _Brand.ink,
+                // The tick sits on teal, so it is white. It was ink back when
+                // ink was the dark end of the palette.
+                checkColor: Colors.white,
                 side: const BorderSide(color: _Brand.faint, width: 1.5),
                 onChanged: (value) =>
                     setState(() => _rememberMe = value ?? false),
@@ -1860,7 +1862,8 @@ class _SlideToVerifyCaptchaState extends State<_SlideToVerifyCaptcha> {
                     alignment: Alignment.center,
                     child: Icon(
                       progress >= 0.9 ? Icons.check : Icons.arrow_forward,
-                      color: _Brand.ink,
+                      // The thumb is white, so the arrow must be dark.
+                      color: _Brand.text,
                     ),
                   ),
                 ),
@@ -1970,7 +1973,9 @@ class _TermsConsentRow extends StatelessWidget {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: accepted
-                    ? const Icon(Icons.check, color: _Brand.ink, size: 16)
+                    // Nothing fills this box -- only its border is teal --
+                    // so the tick is teal as well.
+                    ? const Icon(Icons.check, color: _Brand.teal, size: 16)
                     : null,
               ),
             ),

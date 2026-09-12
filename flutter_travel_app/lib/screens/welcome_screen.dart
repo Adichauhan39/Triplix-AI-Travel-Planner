@@ -148,13 +148,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           padding: const EdgeInsets.all(18),
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
-            color: Color(0x14FFFFFF),
+            // White, not a white wash: 8% white over a white page is nothing,
+            // so the mark had no disc to sit on.
+            color: Colors.white,
             boxShadow: [
-              // The pin's own teal, bleeding into the ink behind it.
+              // The pin's own teal. Far softer than on ink, where it had to
+              // carry the glow alone -- at that strength on paper it reads as
+              // a halo rather than a light.
               BoxShadow(
-                color: Color(0x731FA7C4),
-                blurRadius: 56,
-                spreadRadius: 4,
+                color: Color(0x2E1FA7C4),
+                blurRadius: 40,
+                spreadRadius: 2,
               ),
             ],
           ),
@@ -213,9 +217,16 @@ class _WelcomeScreenState extends State<WelcomeScreen>
             onPressed: _isGoogleLoading ? null : _handleGoogleSignIn,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppConfig.cardColor,
-              foregroundColor: Brand.ink,
-              disabledBackgroundColor: const Color(0xB3FFFFFF),
+              // Was Brand.ink, which meant "dark, because the button is
+              // white". ink is the page now, so the label went white on white
+              // and the button looked empty.
+              foregroundColor: Brand.text,
+              disabledForegroundColor: Brand.faint,
+              disabledBackgroundColor: Brand.fill,
               elevation: 0,
+              // A white button on a near-white page needs an edge, or it is
+              // a rectangle of slightly different nothing.
+              side: const BorderSide(color: Brand.hairline),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
