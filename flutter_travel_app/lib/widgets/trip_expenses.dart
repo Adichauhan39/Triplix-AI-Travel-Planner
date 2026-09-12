@@ -8,6 +8,8 @@ import '../services/expense_words.dart';
 import '../services/expense_columns.dart';
 import 'expense_columns_view.dart';
 import 'share_sheet.dart';
+import 'split_picker.dart';
+import 'trip_access_requests.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 
@@ -109,7 +111,7 @@ class _TripExpensesState extends State<TripExpenses> {
     // nothing on the clipboard, which is the one thing share must never do.
     await showShareSheet(
       context,
-      link: TripSync.shareLink(widget.tripId),
+      link: TripSync.shareLink(widget.tripId, scope: TripScope.money),
       message: 'Come and split the costs of this trip with me on Triplix.',
       note: 'Whoever opens it signs in, tells you their name, and waits for you to approve them before anything they add counts.',
     );
@@ -236,6 +238,16 @@ class _TripExpensesState extends State<TripExpenses> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Who has asked to join the MONEY, approved here rather than on
+            // the trip page. Two separate queues: letting somebody help pick
+            // restaurants is not the same decision as letting them into
+            // everybody's accounts, and the owner should be looking at the
+            // ledger when they make this one.
+            if (_isOwner)
+              TripAccessRequests(
+                tripId: widget.tripId,
+                scope: TripScope.money,
+              ),
             Row(
               children: [
                 const Expanded(
@@ -296,10 +308,17 @@ class _TripExpensesState extends State<TripExpenses> {
                 me: _uid,
                 // The rules allow the row's author or the trip's owner, so
                 // the menu is offered to exactly those two.
-                canChange: (row) => row.by == _uid || _isOwner,
+                // The owner may change any row: they are the one holding
+                // the whole group's receipts, and a ledger whose keeper
+                // cannot fix somebody's typo stays wrong. Everybody else
+                // corrects their own, which is what the rules allow -- a
+                // button that Firestore would refuse is worse than no button.
+                canChange: (row) => _isOwner || row.by == _uid,
+                canDelete: (row) => _isOwner || row.by == _uid,
                 onEdit: _editExpense,
                 onDelete: _deleteExpense,
                 onShared: _setShared,
+                onSplitWith: _pickWhoShares,
               ),
               const SizedBox(height: 10),
               _settlement(approved),
@@ -495,6 +514,36 @@ class _TripExpensesState extends State<TripExpenses> {
   }
 
   /// Takes an expense out of the split, or puts it back.
+  /// Asks who this expense is divided between.
+  Future<void> _pickWhoShares(TripExpense row) async {
+    final chosen = await askWhoShares(
+      context,
+      row: row,
+      people: _people,
+      me: _uid,
+      needsApproval: !_isOwner,
+    );
+    // null is "cancelled", an empty list is "everyone". Treating them alike
+    // would silently put a row back into the whole group's split whenever
+    // somebody closed the dialog.
+    if (chosen == null || !mounted) return;
+
+    final ok = await _sync.setSharedWith(
+      tripId: widget.tripId,
+      expenseId: row.id,
+      people: chosen,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (chosen.isEmpty
+              ? 'Back to everyone.'
+              : 'Split between ${chosen.length}.'
+                  '${_isOwner ? '' : ' Waiting for the owner to approve.'}')
+          : 'That did not save. Check your connection.'),
+    ));
+  }
+
   Future<void> _setShared(TripExpense row, bool shared) async {
     final ok = await _sync.setShared(
       tripId: widget.tripId,

@@ -166,6 +166,36 @@ class TripProposal {
   }
 }
 
+/// The uids in one of a trip's lists, whatever the field holds.
+///
+/// Firestore hands these back as `List<dynamic>`, and a missing field as null.
+/// Every caller wants the same thing out of it.
+List<String> listOfUids(Map<String, dynamic> data, String field) => [
+      for (final entry in (data[field] as List?) ?? const []) entry.toString()
+    ];
+
+/// What somebody can be given access to.
+///
+/// Two grants, asked for and approved separately. A friend helping choose
+/// where to eat has no reason to be inside everybody's money, and the person
+/// settling the bill afterwards does not need to be able to move Day 3. One
+/// combined approval meant the owner was never asked which they meant.
+enum TripScope {
+  /// The itinerary: adding, removing and moving places.
+  trip,
+
+  /// The shared ledger: recording spending and how it is split.
+  money,
+}
+
+/// Where each scope keeps the people it has let in.
+String tripMemberField(TripScope scope) =>
+    scope == TripScope.money ? 'money' : 'members';
+
+/// Where each scope keeps the people still waiting.
+String tripRequestField(TripScope scope) =>
+    scope == TripScope.money ? 'money_requests' : 'requests';
+
 /// What the signed-in user may do with a trip.
 ///
 /// Reading is deliberately open to anyone holding the link -- that is what
@@ -271,6 +301,10 @@ class TripSync {
           'owner': uid,
           'members': [uid],
           'requests': <String>[],
+          // The ledger's own list, separate from the itinerary's from the
+          // start, so a trip made today never needs the fallback below.
+          'money': [uid],
+          'money_requests': <String>[],
           'created_at': FieldValue.serverTimestamp(),
           'updated_at': FieldValue.serverTimestamp(),
           'updated_by': uid,
@@ -307,7 +341,11 @@ class TripSync {
   ///
   /// Reading needs no request. Someone sent a link can look at the trip
   /// immediately; asking is only for changing it.
-  Future<bool> requestAccess(String tripId, {String nickname = ''}) async {
+  Future<bool> requestAccess(
+    String tripId, {
+    String nickname = '',
+    TripScope scope = TripScope.trip,
+  }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty) return false;
     try {
@@ -325,10 +363,11 @@ class TripSync {
       final snapshot = await doc.get();
       if (!snapshot.exists) return false;
 
-      final existing = [
-        for (final entry in (snapshot.data()?['requests'] as List?) ?? const [])
-          entry.toString()
-      ];
+      // Whichever queue they are asking to be in. Asking for the ledger
+      // does not put them in the queue for the itinerary, which is the whole
+      // point of there being two.
+      final field = tripRequestField(scope);
+      final existing = listOfUids(snapshot.data() ?? const {}, field);
       if (existing.contains(uid)) return true;
 
       // The asker's name travels with the request. The owner was being shown
@@ -350,7 +389,7 @@ class TripSync {
       };
 
       await doc.update({
-        'requests': [...existing, uid],
+        field: [...existing, uid],
         'profiles': profiles,
       });
       return true;
@@ -360,12 +399,40 @@ class TripSync {
     }
   }
 
-  /// Grants edit access. Only the owner can do this; the rules enforce it, and
-  /// this checks too so the UI can hide what would fail.
-  Future<bool> approve(String tripId, String uid) async {
+  /// Grants one kind of access. Only the owner can do this; the rules enforce
+  /// it, and this checks too so the UI can hide what would fail.
+  ///
+  /// Approving the ledger does not grant the itinerary, or the other way
+  /// about. Somebody who wants both asks twice, and the owner agrees twice.
+  Future<bool> approve(
+    String tripId,
+    String uid, {
+    TripScope scope = TripScope.trip,
+  }) async {
     if (tripId.isEmpty || uid.isEmpty) return false;
     try {
-      await _trips.doc(tripId).update({
+      final doc = _trips.doc(tripId);
+
+      // The money list is read, extended and written whole rather than
+      // arrayUnion'd.
+      //
+      // Trips published before this existed have no `money` field, and every
+      // member of those could add spending. arrayUnion would have created the
+      // list containing one name -- the person just approved -- and everybody
+      // else would have silently lost access they already had. Built from who
+      // has it now instead.
+      if (scope == TripScope.money) {
+        final snapshot = await doc.get();
+        if (!snapshot.exists) return false;
+        final now = spendersOf(snapshot.data() ?? const {});
+        await doc.update({
+          'money': <String>{...now, uid}.toList(),
+          'money_requests': FieldValue.arrayRemove([uid]),
+        });
+        return true;
+      }
+
+      await doc.update({
         'members': FieldValue.arrayUnion([uid]),
         'requests': FieldValue.arrayRemove([uid]),
       });
@@ -377,11 +444,15 @@ class TripSync {
   }
 
   /// Turns a request down, leaving read access as it was.
-  Future<bool> deny(String tripId, String uid) async {
+  Future<bool> deny(
+    String tripId,
+    String uid, {
+    TripScope scope = TripScope.trip,
+  }) async {
     if (tripId.isEmpty || uid.isEmpty) return false;
     try {
       await _trips.doc(tripId).update({
-        'requests': FieldValue.arrayRemove([uid]),
+        tripRequestField(scope): FieldValue.arrayRemove([uid]),
       });
       return true;
     } catch (e) {
@@ -390,11 +461,28 @@ class TripSync {
     }
   }
 
-  /// Removes someone's edit access without deleting the trip.
-  Future<bool> removeMember(String tripId, String uid) async {
+  /// Takes one kind of access away without deleting the trip.
+  ///
+  /// Taking away the ledger has to write the list whole for the same reason
+  /// approving does: on a trip that never had one, removing a name from a
+  /// missing field would do nothing at all.
+  Future<bool> removeMember(
+    String tripId,
+    String uid, {
+    TripScope scope = TripScope.trip,
+  }) async {
     if (tripId.isEmpty || uid.isEmpty) return false;
     try {
-      await _trips.doc(tripId).update({
+      final doc = _trips.doc(tripId);
+      if (scope == TripScope.money) {
+        final snapshot = await doc.get();
+        if (!snapshot.exists) return false;
+        final now = spendersOf(snapshot.data() ?? const {})
+          ..removeWhere((entry) => entry == uid);
+        await doc.update({'money': now});
+        return true;
+      }
+      await doc.update({
         'members': FieldValue.arrayRemove([uid]),
       });
       return true;
@@ -405,8 +493,9 @@ class TripSync {
   }
 
   /// What the signed-in user is allowed to do with this trip.
-  TripAccess accessFor(Map<String, dynamic> data) =>
-      accessOf(data, _uid);
+  TripAccess accessFor(Map<String, dynamic> data,
+          {TripScope scope = TripScope.trip}) =>
+      accessOf(data, _uid, scope: scope);
 
   /// The access rule itself, as a function of the document and a user id.
   ///
@@ -415,24 +504,49 @@ class TripSync {
   /// exercised by standing up an authenticated app is a rule nobody checks.
   /// Firestore enforces the same thing server-side, which is what actually
   /// stops a modified client -- this decides what the UI offers.
-  static TripAccess accessOf(Map<String, dynamic> data, String? uid) {
+  static TripAccess accessOf(
+    Map<String, dynamic> data,
+    String? uid, {
+    TripScope scope = TripScope.trip,
+  }) {
     if (uid == null || uid.isEmpty) return TripAccess.signedOut;
+    // Owning the trip carries both. There is nobody above the owner to ask.
     if ((data['owner'] ?? '').toString() == uid) return TripAccess.owner;
-    final members = (data['members'] as List?) ?? const [];
+
+    final members = scope == TripScope.money
+        ? spendersOf(data)
+        : listOfUids(data, 'members');
     if (members.contains(uid)) return TripAccess.editor;
-    final requests = (data['requests'] as List?) ?? const [];
-    if (requests.contains(uid)) return TripAccess.pending;
+
+    if (listOfUids(data, tripRequestField(scope)).contains(uid)) {
+      return TripAccess.pending;
+    }
     return TripAccess.viewer;
   }
 
+  /// Who may record spending on this trip.
+  ///
+  /// Falls back to `members` for a trip published before the ledger had its
+  /// own list: those members can add spending today, and a rename of the
+  /// field must not take that away. Once `money` exists it is the only thing
+  /// consulted, so a later approval cannot be widened by accident.
+  static List<String> spendersOf(Map<String, dynamic> data) =>
+      data['money'] is List
+          ? listOfUids(data, 'money')
+          : listOfUids(data, 'members');
+
   /// The people waiting on the owner, named where we know the name.
-  Stream<List<TripPerson>> pendingRequests(String tripId) {
+  Stream<List<TripPerson>> pendingRequests(
+    String tripId, {
+    TripScope scope = TripScope.trip,
+  }) {
     if (tripId.isEmpty) return const Stream<List<TripPerson>>.empty();
+    final field = tripRequestField(scope);
     return _trips.doc(tripId).snapshots().map((snapshot) {
       final data = snapshot.data() ?? const <String, dynamic>{};
       final profiles = (data['profiles'] as Map?) ?? const {};
       return [
-        for (final entry in (data['requests'] as List?) ?? const [])
+        for (final entry in (data[field] as List?) ?? const [])
           TripPerson.from(
             entry.toString(),
             (profiles[entry.toString()] as Map?)?.cast<String, dynamic>(),
@@ -902,8 +1016,16 @@ class TripSync {
   /// Built from wherever the app is actually running, so a link copied on
   /// localhost opens on localhost. Hard-coding the production domain would
   /// hand every developer a link to a site that does not have their trip.
-  static String shareLink(String tripId, {String? base}) {
+  static String shareLink(
+    String tripId, {
+    String? base,
+    TripScope scope = TripScope.trip,
+  }) {
     final origin = base ?? Uri.base.origin;
-    return '$origin/#/trip/$tripId';
+    final link = '$origin/#/trip/$tripId';
+    // The ledger's link says so in the path, so whoever opens it lands on the
+    // money and asks for the money -- not for the itinerary they were never
+    // being invited to.
+    return scope == TripScope.money ? '$link/money' : link;
   }
 }

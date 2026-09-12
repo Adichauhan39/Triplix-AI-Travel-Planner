@@ -17,6 +17,8 @@ import '../services/trip_sync.dart';
 import '../widgets/agent_ask.dart';
 import '../widgets/place_detail_sheet.dart';
 import '../widgets/share_sheet.dart';
+import '../widgets/split_picker.dart';
+import '../widgets/trip_access_requests.dart';
 
 /// A trip somebody shared, opened from its link.
 ///
@@ -24,9 +26,21 @@ import '../widgets/share_sheet.dart';
 /// holding it can forward it to a group chat -- so arriving here shows the
 /// trip and offers to ask for edit access. It never grants it.
 class SharedTripScreen extends StatefulWidget {
-  const SharedTripScreen({super.key, required this.tripId});
+  const SharedTripScreen({
+    super.key,
+    required this.tripId,
+    this.scope = TripScope.trip,
+  });
 
   final String tripId;
+
+  /// What the link they followed was inviting them to.
+  ///
+  /// A link shared from the Budget tab opens on the money and asks for the
+  /// money; one shared from the trip opens on the plan and asks for the plan.
+  /// Somebody invited to split a bill should not have to work out that the
+  /// button they want is under a tab about restaurants.
+  final TripScope scope;
 
   @override
   State<SharedTripScreen> createState() => _SharedTripScreenState();
@@ -39,7 +53,11 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   /// Plan and Money. Built once here rather than by a DefaultTabController,
   /// because the bar lives in the AppBar and the view lives in the body, and
   /// they have to be the same controller.
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  late final TabController _tabs = TabController(
+    length: 2,
+    vsync: this,
+    initialIndex: widget.scope == TripScope.money ? 1 : 0,
+  );
   final PythonADKService _adk = PythonADKService();
   final AuthService _authService = AuthService();
 
@@ -176,6 +194,10 @@ class _SharedTripScreenState extends State<SharedTripScreen>
 
   /// What this user may do, recomputed whenever the trip is (re)loaded.
   TripAccess _access = TripAccess.signedOut;
+
+  /// What this person may do with the ledger, which is a different question
+  /// from what they may do with the plan.
+  TripAccess _moneyAccess = TripAccess.signedOut;
 
   /// Suggests a place for a day. Goes to the owner, not into the plan.
   Future<void> _suggestPlace(int dayIndex) async {
@@ -343,7 +365,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     );
   }
 
-  Future<void> _requestAccess() async {
+  Future<void> _requestAccess({TripScope scope = TripScope.trip}) async {
     // Already introduced themselves on the way in -- asking twice reads as the
     // app having forgotten.
     var nickname = await _sync.nickname(widget.tripId);
@@ -356,15 +378,19 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     }
 
     setState(() => _asking = true);
-    final ok = await _sync.requestAccess(widget.tripId, nickname: nickname);
+    final ok = await _sync.requestAccess(widget.tripId,
+        nickname: nickname, scope: scope);
     if (!mounted) return;
     setState(() => _asking = false);
     if (ok) {
       await _load();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Asked to join. Once the owner says yes, you can add '
-            'what you paid.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(scope == TripScope.money
+            ? 'Asked to join the costs. Once the owner says yes, you can add '
+                'what you paid.'
+            : 'Asked to help plan. Once the owner says yes, you can add and '
+                'remove places.'),
       ));
     } else {
       setState(() => _error =
@@ -377,10 +403,18 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   Widget build(BuildContext context) {
     final data = _trip;
     final where = (data?['destination'] ?? '').toString().split(',').first;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
     final access = data == null
         ? TripAccess.signedOut
-        : TripSync.accessOf(data, FirebaseAuth.instance.currentUser?.uid);
+        : TripSync.accessOf(data, uid);
+    // The ledger's own answer. Being let in to help with the plan does not
+    // put somebody inside everybody's money, so the two are asked separately
+    // and the screen reads whichever one it needs.
+    final moneyAccess = data == null
+        ? TripAccess.signedOut
+        : TripSync.accessOf(data, uid, scope: TripScope.money);
     _access = access;
+    _moneyAccess = moneyAccess;
 
     final ready = !_loading &&
         FirebaseAuth.instance.currentUser != null &&
@@ -467,14 +501,20 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                                       Expanded(
                                         child: ListView(
                                           padding: const EdgeInsets.all(16),
-                                          children: [_spending(access)],
+                                          // The ledger's own access, not
+                                          // the plan's. Passing trip access
+                                          // here is what made one approval
+                                          // grant both.
+                                          children: [
+                                            _spending(moneyAccess)
+                                          ],
                                         ),
                                       ),
                                       // Only for people who may actually add.
                                       // A box that files nothing is worse than
                                       // no box.
-                                      if (access == TripAccess.owner ||
-                                          access == TripAccess.editor)
+                                      if (moneyAccess == TripAccess.owner ||
+                                          moneyAccess == TripAccess.editor)
                                         _spendBar(),
                                     ],
                                   ),
@@ -695,7 +735,11 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   }
 
   Widget _spending(TripAccess access) {
-    final canAdd = access == TripAccess.owner || access == TripAccess.editor;
+    // Money access, not trip access. A friend approved for the itinerary
+    // used to be handed the ledger as well, which was one approval doing two
+    // jobs without the owner being asked about the second.
+    final canAdd =
+        access == TripAccess.owner || access == TripAccess.editor;
     final isOwner = access == TripAccess.owner;
     final me = FirebaseAuth.instance.currentUser?.uid;
 
@@ -867,10 +911,14 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   me: me,
                   // What the rules allow: your own row, or anything if you own
                   // the trip.
-                  canChange: (row) => row.by == me || isOwner,
+                  // The owner may correct any row; everybody else their
+                  // own, which is exactly what the rules allow.
+                  canChange: (row) => isOwner || row.by == me,
+                  canDelete: (row) => isOwner || row.by == me,
                   onEdit: _editExpense,
                   onDelete: _deleteExpense,
                   onShared: _setShared,
+                  onSplitWith: _pickWhoShares,
                 ),
               ],
 
@@ -881,6 +929,14 @@ class _SharedTripScreenState extends State<SharedTripScreen>
               // the banner above -- which is about the plan. Somebody sent
               // this link to split a bill never reads that as the way to do
               // it. Same request underneath; asked where they are standing.
+              // Who has asked to share the costs, decided here -- the page
+              // the money is on. The trip's own queue is on the plan tab.
+              if (isOwner)
+                TripAccessRequests(
+                  tripId: widget.tripId,
+                  scope: TripScope.money,
+                ),
+
               if (!canAdd && access != TripAccess.signedOut) ...[
                 const SizedBox(height: 12),
                 if (access == TripAccess.pending)
@@ -903,7 +959,10 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: _asking ? null : _requestAccess,
+                      onPressed: _asking
+                          ? null
+                          : () =>
+                              _requestAccess(scope: TripScope.money),
                       icon: _asking
                           ? const SizedBox(
                               width: 14,
@@ -1154,6 +1213,34 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   }
 
   /// Takes an expense out of the split, or puts it back.
+  /// Asks who an expense is divided between.
+  Future<void> _pickWhoShares(TripExpense row) async {
+    final chosen = await askWhoShares(
+      context,
+      row: row,
+      people: _members,
+      me: FirebaseAuth.instance.currentUser?.uid,
+      needsApproval: _moneyAccess != TripAccess.owner,
+    );
+    // Cancelled is not "everybody": one leaves the row alone, the other
+    // rewrites who owes for it.
+    if (chosen == null || !mounted) return;
+
+    final ok = await _sync.setSharedWith(
+      tripId: widget.tripId,
+      expenseId: row.id,
+      people: chosen,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (chosen.isEmpty
+              ? 'Back to everyone.'
+              : 'Split between ${chosen.length}.')
+          : 'That did not save. Check your connection.'),
+    ));
+  }
+
   Future<void> _setShared(TripExpense row, bool shared) async {
     final ok = await _sync.setShared(
       tripId: widget.tripId,

@@ -22,6 +22,8 @@ class ExpenseColumnsView extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.onShared,
+    this.onSplitWith,
+    this.canDelete,
   });
 
   /// The rows that count. Pending and rejected ones are not money anybody owes
@@ -34,11 +36,20 @@ class ExpenseColumnsView extends StatelessWidget {
   /// each screen keeps its own rule and no button appears that Firestore would
   /// refuse.
   final bool Function(TripExpense)? canChange;
+  final bool Function(TripExpense)? canDelete;
   final void Function(TripExpense)? onEdit;
   final void Function(TripExpense)? onDelete;
 
   /// Takes a row out of the split, or puts it back.
   final void Function(TripExpense, bool shared)? onShared;
+
+  /// Asks who a row is divided between. Absent means the screen does not
+  /// offer it, so the menu item does not appear.
+  final void Function(TripExpense)? onSplitWith;
+
+  /// Whether this viewer may delete a given row. Separate from [canChange]
+  /// because the two are not the same permission: a correction can be
+  /// reviewed and reversed, a deletion cannot.
 
   static const double _columnWidth = 168;
 
@@ -181,6 +192,15 @@ class ExpenseColumnsView extends StatelessWidget {
                       Text('just theirs',
                           style: TextStyle(
                               fontSize: 10, color: AppConfig.textTertiary)),
+                    ]
+                    // Whose it is, when it is not everybody's. A row divided
+                    // between two of five people looks identical to a row
+                    // divided between all five unless it says so.
+                    else if (row.sharedWith.isNotEmpty) ...[
+                      const SizedBox(width: 5),
+                      Text('between ${row.sharedWith.length}',
+                          style: TextStyle(
+                              fontSize: 10, color: AppConfig.textTertiary)),
                     ],
                   ],
                 ),
@@ -221,18 +241,31 @@ class ExpenseColumnsView extends StatelessWidget {
                           : 'Put back in the split'),
                     ]),
                   ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Row(children: [
-                      Icon(Icons.delete_outline, size: 17, color: Colors.red),
-                      SizedBox(width: 10),
-                      Text('Delete', style: TextStyle(color: Colors.red)),
-                    ]),
-                  ),
+                  // Between some of the group rather than all of it.
+                  if (onSplitWith != null)
+                    const PopupMenuItem(
+                      value: 'who',
+                      child: Row(children: [
+                        Icon(Icons.groups_outlined, size: 17),
+                        SizedBox(width: 10),
+                        Text('Split between...'),
+                      ]),
+                    ),
+                  if (canDelete?.call(row) ?? true)
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Row(children: [
+                        Icon(Icons.delete_outline,
+                            size: 17, color: Colors.red),
+                        SizedBox(width: 10),
+                        Text('Delete', style: TextStyle(color: Colors.red)),
+                      ]),
+                    ),
                 ],
                 onSelected: (choice) => switch (choice) {
                   'edit' => onEdit?.call(row),
                   'split' => onShared?.call(row, !row.shared),
+                  'who' => onSplitWith?.call(row),
                   _ => onDelete?.call(row),
                 },
               ),

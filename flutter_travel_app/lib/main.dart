@@ -10,6 +10,7 @@ import 'firebase_options.dart';
 // App-level configuration, feature screens, state providers, and API bootstrap.
 import 'config/app_config.dart';
 import 'screens/shared_trip_screen.dart';
+import 'services/trip_sync.dart';
 import 'screens/home_screen.dart';
 import 'screens/search_hotels_screen.dart';
 import 'screens/swipe_screen.dart';
@@ -391,6 +392,18 @@ class MyApp extends StatelessWidget {
           // A trip opened from a shared link. The id is part of the path, so
           // the link survives being pasted into a chat -- a query string gets
           // mangled by some clients, and this is a link people forward.
+          // The ledger's own link. Registered before the plain one so the
+          // extra segment is not swallowed, and it lands the visitor on the
+          // money asking for the money -- not on an itinerary they were never
+          // being invited to change.
+          GetPage(
+              name: '/trip/:id/money',
+              page: () => SelectionArea(
+                    child: SharedTripScreen(
+                      tripId: Get.parameters['id'] ?? '',
+                      scope: TripScope.money,
+                    ),
+                  )),
           GetPage(
               name: '/trip/:id',
               page: () => SelectionArea(

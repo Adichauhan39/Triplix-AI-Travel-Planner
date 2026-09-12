@@ -7180,7 +7180,7 @@ class _BudgetTabState extends State<BudgetTab>
     if (!mounted) return;
     await showShareSheet(
       context,
-      link: TripSync.shareLink(tripId),
+      link: TripSync.shareLink(tripId, scope: TripScope.money),
       message: 'Come and split the costs of this trip with me on Triplix.',
       note: 'Whoever opens it signs in, tells you their name, and waits for you to approve them before anything they add counts.',
     );
