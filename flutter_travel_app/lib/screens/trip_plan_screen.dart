@@ -10,6 +10,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config/app_config.dart';
 import '../models/trip_plan.dart';
 import '../models/user_preferences.dart';
+import '../models/confirmed_booking.dart';
+import '../services/plan_diff.dart';
+import '../widgets/agent_ask.dart';
 import '../providers/booked_trip_provider.dart';
 import '../providers/export_job_provider.dart';
 import '../providers/trip_plan_provider.dart';
@@ -1287,26 +1290,62 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     await _captureDeparture(request, plan);
     if (!mounted) return;
 
-    final updated = await _adk.adjustPlan(
+    final result = await _adk.adjustPlan(
       days: plan.toJson(),
       request: request,
       destination: plan.destination,
     );
     if (!mounted) return;
+    setState(() => _applying = false);
 
-    setState(() {
-      _applying = false;
-      if (updated == null) {
-        // The plan on screen is left exactly as it was. Replacing it with
-        // nothing because a request failed would lose the user's own picks.
-        _error = "Couldn't apply that change — check the server is running.";
-      } else {
-        _requestController.clear();
-        context
-            .read<TripPlanProvider>()
-            .replaceDays(updated.map(PlanDay.fromJson).toList());
-      }
-    });
+    // The agent is unsure which place, or which day, is meant. Better asked
+    // than guessed: a guess changes the plan and says nothing about it.
+    if (result.needsAnswer) {
+      final answer =
+          await askAgentQuestion(context, result.question!, result.options);
+      if (!mounted || answer == null || answer.isEmpty) return;
+      _requestController.text = '$request — $answer';
+      await _applyRequest();
+      return;
+    }
+
+    final updated = result.days;
+    if (updated == null) {
+      // The plan on screen is left exactly as it was. Replacing it with
+      // nothing because a request failed would lose the user's own picks.
+      setState(() =>
+          _error = "Couldn't apply that change — check the server is running.");
+      return;
+    }
+
+    // What the answer actually does, in words, before it does it.
+    final before = [
+      for (final day in plan.days) [for (final item in day.items) item.title],
+    ];
+    final after = [
+      for (final day in updated)
+        [
+          for (final item in (day['items'] as List?) ?? const [])
+            if (item is Map<String, dynamic>) (item['title'] ?? '').toString(),
+        ],
+    ];
+    final changes = diffPlans(before, after);
+
+    if (changes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('That would not change anything.'),
+      ));
+      return;
+    }
+
+    final go = await confirmPlanChanges(context, changes);
+    if (!mounted || go != true) return;
+
+    _requestController.clear();
+    context
+        .read<TripPlanProvider>()
+        .replaceDays(updated.map(PlanDay.fromJson).toList());
+    setState(() => _error = null);
   }
 
   @override
@@ -1972,6 +2011,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Booked · time not recorded'
             : 'Departs $time',
         verified: flight.flightIsRealFlight,
+        onEdit: () => _editBooking(flight),
       ));
     }
 
@@ -1984,6 +2024,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ? 'Check in'
             : 'Check in · until ${_dayLabel.format(hotel.endDate!)}',
         verified: hotel.hotelNameIsRealPlace,
+        onEdit: () => _editBooking(hotel),
       ));
     }
 
@@ -1996,6 +2037,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     required String title,
     required String subtitle,
     required bool verified,
+    VoidCallback? onEdit,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -2030,9 +2072,201 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
               child: Icon(Icons.help_outline,
                   size: 15, color: Colors.orange[700]),
             ),
+          // The only two rows on the plan that could not be changed. A wrong
+          // departure time is the worst of them: the whole first day is built
+          // around it, and fixing it meant booking the leg again.
+          if (onEdit != null)
+            IconButton(
+              tooltip: 'Edit',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              icon: Icon(Icons.edit_outlined,
+                  size: 16, color: AppConfig.primaryColor),
+              onPressed: onEdit,
+            ),
         ],
       ),
     );
+  }
+
+  /// Two digits, so 7:5 is never written where 07:05 is meant.
+  String _two(int value) => value.toString().padLeft(2, '0');
+
+  /// Corrects a flight or a stay the user already told us about.
+  ///
+  /// Editing the identifying field drops the "we checked this" mark: a flight
+  /// number retyped by hand is no longer the one looked up in the schedule,
+  /// and a hotel renamed by hand is no longer the Places result. Claiming
+  /// otherwise would put a tick beside something nobody verified.
+  Future<void> _editBooking(ConfirmedBooking booking) async {
+    final isFlight = booking.kind == BookingKind.flight;
+    final text = TextEditingController(
+      text: isFlight
+          ? (booking.flightNumber ?? '')
+          : (booking.hotelName ?? booking.title),
+    );
+    var start = booking.startDate;
+    var end = booking.endDate;
+    var time = booking.departureTime;
+
+    Future<DateTime?> pickDate(BuildContext ctx, DateTime initial) =>
+        showDatePicker(
+          context: ctx,
+          initialDate: initial,
+          firstDate: DateTime(2020),
+          lastDate: DateTime(2100),
+        );
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (innerContext, setSheet) => SafeArea(
+          child: Padding(
+            // Lifted above the keyboard, which otherwise covers the field
+            // being typed into.
+            padding: EdgeInsets.only(
+                bottom: MediaQuery.of(innerContext).viewInsets.bottom),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(isFlight ? 'Edit this flight' : 'Edit this stay',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: text,
+                    decoration: InputDecoration(
+                      labelText:
+                          isFlight ? 'Flight number' : 'Hotel name',
+                      hintText: isFlight ? '6E 405' : 'Hotel Nikhil Regency',
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.event, size: 20),
+                    title: Text(isFlight ? 'Departure date' : 'Check in'),
+                    subtitle: Text(_dayLabel.format(start)),
+                    onTap: () async {
+                      final picked = await pickDate(innerContext, start);
+                      if (picked != null) setSheet(() => start = picked);
+                    },
+                  ),
+                  if (isFlight)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.schedule, size: 20),
+                      title: const Text('Departure time'),
+                      subtitle: Text(time == null || time!.isEmpty
+                          ? 'Not recorded'
+                          : time!),
+                      onTap: () async {
+                        final parts = (time ?? '').split(':');
+                        final picked = await showTimePicker(
+                          context: innerContext,
+                          initialTime: parts.length == 2
+                              ? TimeOfDay(
+                                  hour: int.tryParse(parts[0]) ?? 9,
+                                  minute: int.tryParse(parts[1]) ?? 0)
+                              : const TimeOfDay(hour: 9, minute: 0),
+                        );
+                        if (picked != null) {
+                          setSheet(() =>
+                              time = '${_two(picked.hour)}:'
+                                  '${_two(picked.minute)}');
+                        }
+                      },
+                    )
+                  else
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.event_available, size: 20),
+                      title: const Text('Check out'),
+                      subtitle: Text(
+                          end == null ? 'Not set' : _dayLabel.format(end!)),
+                      onTap: () async {
+                        final picked =
+                            await pickDate(innerContext, end ?? start);
+                        if (picked != null) setSheet(() => end = picked);
+                      },
+                    ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(innerContext, false),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(innerContext, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppConfig.primaryColor,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || saved != true) return;
+
+    final typed = text.text.trim();
+    final booked = context.read<BookedTripProvider>();
+
+    if (isFlight) {
+      final changedNumber = typed != (booking.flightNumber ?? '').trim();
+      booked.replace(
+        booking,
+        booking.copyWith(
+          flightNumber: typed,
+          startDate: start,
+          departureTime: (time ?? '').isEmpty ? null : time,
+          // Retyped by hand, so no longer the schedule's answer.
+          flightIsRealFlight:
+              changedNumber ? false : booking.flightIsRealFlight,
+        ),
+      );
+    } else {
+      // An empty name would leave the row blank, so the old label stands.
+      final name = typed.isEmpty
+          ? (booking.hotelName ?? booking.title)
+          : typed;
+      final changedName = name != (booking.hotelName ?? booking.title);
+      booked.replace(
+        booking,
+        booking.copyWith(
+          hotelName: name,
+          startDate: start,
+          endDate: end,
+          hotelNameIsRealPlace:
+              changedName ? false : booking.hotelNameIsRealPlace,
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    setState(() {});
   }
 
   /// Fills an empty day with real places from the destination.

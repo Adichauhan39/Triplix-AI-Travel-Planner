@@ -5,6 +5,28 @@ import '../config/app_config.dart';
 
 /// Service to communicate with Python ADK Backend
 /// Integrates Flutter frontend with Python Google ADK multi-agent system
+/// What the trip agent came back with.
+///
+/// Three outcomes, kept apart because each needs something different from the
+/// screen: a plan to confirm, a question to answer, or a failure to report.
+/// Folding the question into "failed" would send somebody away to rephrase a
+/// request that was perfectly clear except for one detail.
+class PlanAdjustment {
+  const PlanAdjustment({this.days, this.question, this.options = const []});
+
+  /// The whole plan as it would be afterwards.
+  final List<Map<String, dynamic>>? days;
+
+  /// What the agent needs to know before it can act.
+  final String? question;
+
+  /// Suggested answers, for tapping rather than typing.
+  final List<String> options;
+
+  bool get needsAnswer => (question ?? '').trim().isNotEmpty;
+  bool get failed => days == null && !needsAnswer;
+}
+
 class PythonADKService {
   // Python FastAPI backend URL
   static const String _baseUrl = AppConfig.baseUrl;
@@ -895,7 +917,7 @@ class PythonADKService {
   ///
   /// Returns null on failure so the caller can keep showing the plan the user
   /// already has rather than replacing it with nothing.
-  Future<List<Map<String, dynamic>>?> adjustPlan({
+  Future<PlanAdjustment> adjustPlan({
     required List<Map<String, dynamic>> days,
     required String request,
     String destination = '',
@@ -914,19 +936,35 @@ class PythonADKService {
           .timeout(const Duration(seconds: 60));
       if (response.statusCode != 200) {
         debugPrint('adjustPlan: HTTP ${response.statusCode}');
-        return null;
+        return const PlanAdjustment();
       }
       final data = json.decode(response.body) as Map<String, dynamic>;
+
+      // The agent would rather ask than guess. Carried back as a question
+      // rather than as an error: nothing has gone wrong, it simply needs to
+      // be told which palace.
+      if (data['status'] == 'needs_clarification') {
+        return PlanAdjustment(
+          question: (data['question'] ?? '').toString(),
+          options: [
+            for (final option in (data['options'] as List?) ?? const [])
+              option.toString(),
+          ],
+        );
+      }
+
       if (data['status'] != 'success') {
         debugPrint('adjustPlan: ${data['message']}');
-        return null;
+        return const PlanAdjustment();
       }
-      return ((data['days'] as List?) ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .toList();
+      return PlanAdjustment(
+        days: ((data['days'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .toList(),
+      );
     } catch (e) {
       debugPrint('adjustPlan failed: $e');
-      return null;
+      return const PlanAdjustment();
     }
   }
 

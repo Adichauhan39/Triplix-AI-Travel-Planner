@@ -8,6 +8,9 @@
 /// insurance or anything with money attached must not treat it as fact.
 enum BookingKind { flight, hotel }
 
+/// Marks an argument nobody passed, so null can mean "clear it".
+const Object _unchanged = Object();
+
 class ConfirmedBooking {
   ConfirmedBooking({
     required this.kind,
@@ -72,6 +75,40 @@ class ConfirmedBooking {
 
   /// When the user told us, not when the booking was made.
   final DateTime recordedAt;
+
+  /// The same booking with a few details corrected.
+  ///
+  /// Every argument is optional and absent means "leave it alone" -- except
+  /// the two verified flags, which a caller is expected to reconsider: a
+  /// number the user has just retyped is no longer the one we looked up.
+  ///
+  /// endDate takes a sentinel rather than null-means-keep, because clearing a
+  /// checkout date is a real edit and null is the value it clears to.
+  ConfirmedBooking copyWith({
+    String? title,
+    DateTime? startDate,
+    Object? endDate = _unchanged,
+    String? flightNumber,
+    Object? departureTime = _unchanged,
+    bool? flightIsRealFlight,
+    String? hotelName,
+    bool? hotelNameIsRealPlace,
+  }) {
+    return ConfirmedBooking(
+      kind: kind,
+      title: title ?? this.title,
+      startDate: startDate ?? this.startDate,
+      endDate: endDate == _unchanged ? this.endDate : endDate as DateTime?,
+      flightNumber: flightNumber ?? this.flightNumber,
+      departureTime: departureTime == _unchanged
+          ? this.departureTime
+          : departureTime as String?,
+      flightIsRealFlight: flightIsRealFlight ?? this.flightIsRealFlight,
+      hotelName: hotelName ?? this.hotelName,
+      hotelNameIsRealPlace: hotelNameIsRealPlace ?? this.hotelNameIsRealPlace,
+      recordedAt: recordedAt,
+    );
+  }
 
   /// Always true today: these records only exist because a user said so.
   /// Kept explicit so a future verified source (email parsing, a booking API)

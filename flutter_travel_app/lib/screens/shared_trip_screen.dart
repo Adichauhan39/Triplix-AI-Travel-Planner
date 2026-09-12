@@ -14,6 +14,7 @@ import '../widgets/expense_columns_view.dart';
 import '../services/plan_diff.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
+import '../widgets/agent_ask.dart';
 import '../widgets/place_detail_sheet.dart';
 
 /// A trip somebody shared, opened from its link.
@@ -1309,7 +1310,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     setState(() => _applyingRequest = true);
 
     final before = _dayTitles(data);
-    final updated = await _adk.adjustPlan(
+    final result = await _adk.adjustPlan(
       days: (data['days'] as List?)?.cast<Map<String, dynamic>>() ??
           const <Map<String, dynamic>>[],
       request: text,
@@ -1317,6 +1318,20 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     );
     if (!mounted) return;
 
+    // The agent needs something settled before it can act. Asked here rather
+    // than guessed at, and the answer is joined to the original request so the
+    // second attempt carries both halves.
+    if (result.needsAnswer) {
+      setState(() => _applyingRequest = false);
+      final answer =
+          await askAgentQuestion(context, result.question!, result.options);
+      if (!mounted || answer == null || answer.isEmpty) return;
+      _request.text = '$text — $answer';
+      await _sendRequest();
+      return;
+    }
+
+    final updated = result.days;
     if (updated == null) {
       setState(() => _applyingRequest = false);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

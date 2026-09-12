@@ -4555,9 +4555,21 @@ def adjust_itinerary(request: dict):
             "and keep it false on items that were already there.\n"
             "- Only suggest real, specific places in the destination. Never "
             "invent a name.\n"
-            "Return ONLY a JSON array of days, each "
+            "- If the request is ambiguous, ASK rather than guess. It is "
+            "ambiguous when the place it names is not in the plan, or "
+            "matches more than one item, or when it does not say which day "
+            "it means and more than one day could be intended. Guessing "
+            "changes somebody's plan without their knowing.\n"
+            "\n"
+            "Reply with ONE of these two, and nothing else:\n"
+            "1. The whole plan: a JSON array of days, each "
             '{"date": "YYYY-MM-DD", "items": [{"title": str, '
-            '"added_by_assistant": bool}]}. No prose.'
+            '"added_by_assistant": bool}]}.\n'
+            '2. A question: {"question": "...", "options": ["...", "..."]} '
+            "-- a short question in plain words, with up to four concrete "
+            "answers drawn from the plan itself. Use this whenever you are "
+            "unsure.\n"
+            "No prose either way."
         )
 
         from google import genai as genai_client
@@ -4579,7 +4591,36 @@ def adjust_itinerary(request: dict):
             if text.startswith("json"):
                 text = text[4:]
             text = text.strip()
-        start, end = text.find("["), text.rfind("]")
+        # A question, not a plan.
+        #
+        # Checked before the array, and only when the object comes first, so a
+        # plan that happens to contain braces is still read as a plan. The
+        # original days go back untouched alongside it: the screen keeps
+        # showing what it already has while it asks.
+        obj_start, obj_end = text.find("{"), text.rfind("}")
+        arr_start, arr_end = text.find("["), text.rfind("]")
+        if obj_start != -1 and obj_end > obj_start and (
+                arr_start == -1 or obj_start < arr_start):
+            try:
+                asked = json.loads(text[obj_start:obj_end + 1])
+            except Exception:
+                asked = {}
+            question = str((asked or {}).get("question") or "").strip()
+            if question:
+                options = [
+                    str(o).strip()
+                    for o in ((asked or {}).get("options") or [])
+                    if str(o).strip()
+                ]
+                print(f"[PLAN] agent asked: {question}")
+                return {
+                    "status": "needs_clarification",
+                    "question": question,
+                    "options": options[:4],
+                    "days": days,
+                }
+
+        start, end = arr_start, arr_end
         if start == -1 or end == -1:
             return {"status": "error", "message": "unparseable", "days": days}
 

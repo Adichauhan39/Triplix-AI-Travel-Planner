@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../config/app_config.dart';
 import '../models/trip_plan.dart';
 import '../providers/trip_plan_provider.dart';
+import '../services/plan_diff.dart';
+import 'agent_ask.dart';
 import '../services/python_adk_service.dart';
 
 /// A "change my plan" box that can sit on any screen.
@@ -80,28 +82,61 @@ class _PlanQuickEditSheetState extends State<PlanQuickEditSheet> {
       _done = null;
     });
 
-    final updated = await _adk.adjustPlan(
+    final result = await _adk.adjustPlan(
       days: plan.toJson(),
       request: request,
       destination: plan.destination,
     );
     if (!mounted) return;
+    setState(() => _applying = false);
 
+    // Unsure which place, or which day. Asked rather than guessed: a guess
+    // changes the plan and says nothing about having done so.
+    if (result.needsAnswer) {
+      final answer =
+          await askAgentQuestion(context, result.question!, result.options);
+      if (!mounted || answer == null || answer.isEmpty) return;
+      _controller.text = '$request — $answer';
+      await _apply();
+      return;
+    }
+
+    final updated = result.days;
     if (updated == null) {
       // The plan is left exactly as it was: losing someone's itinerary
       // because one instruction failed would be far worse than not applying
       // it.
-      setState(() {
-        _applying = false;
-        _error = "Couldn't apply that — check the server is running.";
-      });
+      setState(() =>
+          _error = "Couldn't apply that — check the server is running.");
       return;
     }
+
+    // The agent answers with the whole plan rewritten, so the difference is
+    // what actually needs reading -- and it is the only way to notice a place
+    // the user chose quietly going missing.
+    final before = [
+      for (final day in plan.days) [for (final item in day.items) item.title],
+    ];
+    final after = [
+      for (final day in updated)
+        [
+          for (final item in (day['items'] as List?) ?? const [])
+            if (item is Map<String, dynamic>) (item['title'] ?? '').toString(),
+        ],
+    ];
+    final changes = diffPlans(before, after);
+
+    if (changes.isEmpty) {
+      setState(() => _done = 'That would not change anything.');
+      return;
+    }
+
+    final go = await confirmPlanChanges(context, changes);
+    if (!mounted || go != true) return;
 
     provider.replaceDays(updated.map(PlanDay.fromJson).toList());
     if (!mounted) return;
     setState(() {
-      _applying = false;
       _controller.clear();
       _done = 'Plan updated.';
     });

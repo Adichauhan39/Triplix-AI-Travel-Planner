@@ -127,6 +127,23 @@ class BookedTripProvider with ChangeNotifier {
     return destination.isEmpty ? null : destination;
   }
 
+  /// Swaps one record for a corrected version of itself.
+  ///
+  /// Not add(): that matches an existing record by "same leg", and a leg is
+  /// identified by a hotel's check-in date or a flight's destination -- the
+  /// very fields an edit is most likely to change. Editing a check-in date
+  /// through add() would fail to find the old record and leave both on the
+  /// itinerary. Removing by identity first is exact.
+  void replace(ConfirmedBooking old, ConfirmedBooking updated) {
+    final index = _bookings.indexOf(old);
+    if (index < 0) {
+      add(updated);
+      return;
+    }
+    _bookings[index] = updated;
+    notifyListeners();
+  }
+
   void remove(ConfirmedBooking booking) {
     _bookings.remove(booking);
     notifyListeners();
