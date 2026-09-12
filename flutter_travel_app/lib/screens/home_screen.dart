@@ -6140,7 +6140,9 @@ class _BudgetTabState extends State<BudgetTab>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    // Two: the chat, and the ledger. Overview was a third view of the same
+    // numbers, and the numbers belong next to the expenses they come from.
+    _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() => setState(() {}));
     // Load budget from preferences if available
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -6285,7 +6287,6 @@ class _BudgetTabState extends State<BudgetTab>
     } catch (e) {
       // Fallback: handle locally
       _tryParseBudgetFromMessage(message);
-      final expenseBefore = _expenses.length;
       final outcome = await _tryParseExpenseFromMessage(message);
       if (!mounted) return;
       final expenseAdded = outcome == ChatExpense.filed;
@@ -6565,6 +6566,7 @@ class _BudgetTabState extends State<BudgetTab>
         '• "Give me saving tips"';
   }
 
+  // ignore: unused_element
   void _addExpenseDialog() {
     String selectedCategory = 'Food & Dining';
     final descController = TextEditingController();
@@ -6673,7 +6675,6 @@ class _BudgetTabState extends State<BudgetTab>
           unselectedLabelColor: Colors.white60,
           tabs: const [
             Tab(icon: Icon(Icons.chat_bubble_outline), text: 'AI Chat'),
-            Tab(icon: Icon(Icons.pie_chart_outline), text: 'Overview'),
             Tab(icon: Icon(Icons.receipt_long), text: 'Expenses'),
           ],
         ),
@@ -6723,20 +6724,19 @@ class _BudgetTabState extends State<BudgetTab>
               controller: _tabController,
               children: [
                 _buildChatTab(),
-                _buildOverviewTab(),
                 _buildExpensesTab(),
               ],
             ),
           ),
         ],
       ),
-      floatingActionButton: _tabController.index == 2
-          ? FloatingActionButton(
-              onPressed: _addExpenseDialog,
-              backgroundColor: AppConfig.primaryColor,
-              child: const Icon(Icons.add, color: Colors.white),
-            )
-          : null,
+      // No floating add.
+      //
+      // There were two, and they wrote to different places: "+ Add" in the
+      // Shared spending header goes into the ledger everybody on the trip can
+      // see, while this one wrote to a list held on this device alone. Which
+      // button somebody happened to press decided whether their friend could
+      // see the money, which is not a choice anybody knew they were making.
     );
   }
 
@@ -6931,6 +6931,7 @@ class _BudgetTabState extends State<BudgetTab>
   }
 
   // ─── Overview Tab ───
+  // ignore: unused_element
   Widget _buildOverviewTab() {
     if (!_isBudgetSet) {
       return Center(

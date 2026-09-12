@@ -145,22 +145,29 @@ class _TripExpensesState extends State<TripExpenses> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: note,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'What was it',
-                hintText: 'Taxi to the zoo',
-              ),
-            ),
-            const SizedBox(height: 10),
+            // Amount first, and focused.
+            //
+            // "What was it" was first and autofocused, so the number went into
+            // the note, Amount stayed empty, and the only thing the dialog
+            // could say was that the amount was not greater than zero. It was
+            // telling the truth about a field nobody had been pointed at.
             TextField(
               controller: amount,
+              autofocus: true,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(
                 labelText: 'Amount',
                 prefixText: '₹ ',
+                hintText: '500',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: note,
+              decoration: const InputDecoration(
+                labelText: 'What was it',
+                hintText: 'Taxi to the zoo',
               ),
               onSubmitted: (_) => Navigator.pop(dialogContext, true),
             ),
@@ -180,10 +187,15 @@ class _TripExpensesState extends State<TripExpenses> {
     );
     if (!mounted || saved != true) return;
 
-    final rupees = double.tryParse(amount.text.trim());
+    // Named, so it is obvious which box is empty. "Enter an amount greater
+    // than zero" is true and says nothing about where to type it.
+    final typedAmount = amount.text.trim();
+    final rupees = double.tryParse(typedAmount);
     if (rupees == null || rupees <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Enter an amount greater than zero.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(typedAmount.isEmpty
+            ? 'Put the amount in the ₹ box at the top.'
+            : '"$typedAmount" is not an amount I can read. Try 500.'),
       ));
       return;
     }
@@ -423,10 +435,15 @@ class _TripExpensesState extends State<TripExpenses> {
     );
     if (!mounted || saved != true) return;
 
-    final rupees = double.tryParse(amount.text.trim());
+    // Named, so it is obvious which box is empty. "Enter an amount greater
+    // than zero" is true and says nothing about where to type it.
+    final typedAmount = amount.text.trim();
+    final rupees = double.tryParse(typedAmount);
     if (rupees == null || rupees <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Enter an amount greater than zero.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(typedAmount.isEmpty
+            ? 'Put the amount in the ₹ box at the top.'
+            : '"$typedAmount" is not an amount I can read. Try 500.'),
       ));
       return;
     }
