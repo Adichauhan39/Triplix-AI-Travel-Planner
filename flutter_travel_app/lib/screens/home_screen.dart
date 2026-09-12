@@ -6229,14 +6229,12 @@ class _BudgetTabState extends State<BudgetTab>
               {'role': m['sender'] == 'user' ? 'user' : 'assistant',
                'text': m['message'] ?? ''}
           ],
+          // What was spent, and nothing about a budget: there isn't one, and
+          // sending zeroes invited the model to talk about them.
           'budget_info': {
-            'total_budget': _totalBudget,
             'group_size': _groupSize,
             'total_spent': _totalSpent,
-            'remaining': _remaining,
-            'per_person': _perPerson,
             'expenses': _expenses,
-            'allocation': _allocation,
             'spent_by_category': _spentByCategory,
           },
         },
@@ -6246,8 +6244,6 @@ class _BudgetTabState extends State<BudgetTab>
       final aiReply =
           response['response'] ?? 'I\'ll help you with your budget!';
 
-      // Check if AI detected a budget setup command
-      _tryParseBudgetFromMessage(message);
       // Awaited. This used to be fire-and-forget with the count read on the
       // next line, so expenseAdded was false before the work had run and the
       // model's claim was shown instead of the ledger's.
@@ -6263,15 +6259,13 @@ class _BudgetTabState extends State<BudgetTab>
           final lastExp = _expenses.last;
           _chatMessages.add({
             'sender': 'ai',
-            'message': '✅ **Expense Recorded**\n\n'
-                '📂 Category: ${lastExp['category']}\n'
-                '💰 Amount: ₹${(lastExp['amount'] as double).toStringAsFixed(0)}\n'
-                '📝 Description: ${lastExp['description']}\n\n'
-                '━━━━━━━━━━━━━━━━━━━━\n'
-                '💰 Total Budget: ₹${_totalBudget.toStringAsFixed(0)}\n'
-                '💸 Total Spent: ₹${_totalSpent.toStringAsFixed(0)}\n'
-                '✅ Remaining: ₹${_remaining.toStringAsFixed(0)}\n'
-                '📊 Expenses logged: ${_expenses.length}',
+            // No budget lines. They read "Total Budget: 0, Remaining:
+            // -500" -- true about a number that should not have been on
+            // screen, and alarming about money that was fine.
+            'message': '✅ Added to the shared ledger\n\n'
+                '💰 ₹${(lastExp['amount'] as double).toStringAsFixed(0)}'
+                '  ·  ${lastExp['description']}\n'
+                '📂 ${lastExp['category']}',
           });
         } else if (outcome == ChatExpense.needsPurpose) {
           // Asked, rather than letting the model answer for a ledger it
@@ -6291,7 +6285,6 @@ class _BudgetTabState extends State<BudgetTab>
       });
     } catch (e) {
       // Fallback: handle locally
-      _tryParseBudgetFromMessage(message);
       final outcome = await _tryParseExpenseFromMessage(message);
       if (!mounted) return;
       final expenseAdded = outcome == ChatExpense.filed;
@@ -6302,15 +6295,13 @@ class _BudgetTabState extends State<BudgetTab>
           final lastExp = _expenses.last;
           _chatMessages.add({
             'sender': 'ai',
-            'message': '✅ **Expense Recorded**\n\n'
-                '📂 Category: ${lastExp['category']}\n'
-                '💰 Amount: ₹${(lastExp['amount'] as double).toStringAsFixed(0)}\n'
-                '📝 Description: ${lastExp['description']}\n\n'
-                '━━━━━━━━━━━━━━━━━━━━\n'
-                '💰 Total Budget: ₹${_totalBudget.toStringAsFixed(0)}\n'
-                '💸 Total Spent: ₹${_totalSpent.toStringAsFixed(0)}\n'
-                '✅ Remaining: ₹${_remaining.toStringAsFixed(0)}\n'
-                '📊 Expenses logged: ${_expenses.length}',
+            // No budget lines. They read "Total Budget: 0, Remaining:
+            // -500" -- true about a number that should not have been on
+            // screen, and alarming about money that was fine.
+            'message': '✅ Added to the shared ledger\n\n'
+                '💰 ₹${(lastExp['amount'] as double).toStringAsFixed(0)}'
+                '  ·  ${lastExp['description']}\n'
+                '📂 ${lastExp['category']}',
           });
         } else if (outcome == ChatExpense.needsPurpose) {
           _chatMessages.add({'sender': 'ai', 'message': _askForPurpose()});
@@ -6602,65 +6593,33 @@ class _BudgetTabState extends State<BudgetTab>
     return 'Emergency';
   }
 
+  /// What to say when the model cannot be reached.
+  ///
+  /// Only about spending. It used to answer budget questions with totals and
+  /// remaining balances, which is a conversation the app no longer has.
   String _generateLocalResponse(String message) {
     final msg = message.toLowerCase();
-    if (msg.contains('budget') &&
-        (msg.contains('set') ||
-            msg.contains('total') ||
-            RegExp(r'\d').hasMatch(msg))) {
-      if (_isBudgetSet) {
-        return '✅ Budget updated!\n\n'
-            '💰 Total: ₹${_totalBudget.toStringAsFixed(0)}\n'
-            '👥 Group: $_groupSize people\n'
-            '👤 Per person: ₹${_perPerson.toStringAsFixed(0)}\n\n'
-            'You can now add expenses like "Spent ₹3000 on hotel" or ask me to redistribute your budget.';
-      }
-    }
+
     if (msg.contains('summary') ||
-        msg.contains('status') ||
-        msg.contains('how much')) {
-      return '📊 Budget Summary\n\n'
-          '💰 Total: ₹${_totalBudget.toStringAsFixed(0)}\n'
-          '💸 Spent: ₹${_totalSpent.toStringAsFixed(0)} (${(_totalBudget > 0 ? _totalSpent / _totalBudget * 100 : 0).toStringAsFixed(1)}%)\n'
-          '✅ Remaining: ₹${_remaining.toStringAsFixed(0)}\n'
-          '👤 Spent per person: ₹${_spentPerPerson.toStringAsFixed(0)}\n\n'
-          '${_remaining < 0 ? '⚠️ You\'re over budget!' : _remaining < _totalBudget * 0.1 ? '⚠️ Less than 10% budget remaining!' : '✅ Budget is on track!'}';
-    }
-    if (msg.contains('spent') ||
-        msg.contains('paid') ||
-        msg.contains('expense')) {
-      if (_expenses.isNotEmpty) {
-        return '✅ Expense recorded!\n\n'
-            '📊 Total spent: ₹${_totalSpent.toStringAsFixed(0)} of ₹${_totalBudget.toStringAsFixed(0)}\n'
-            '💰 Remaining: ₹${_remaining.toStringAsFixed(0)}';
+        msg.contains('how much') ||
+        msg.contains('total')) {
+      if (_expenses.isEmpty) {
+        return 'Nothing recorded yet. Tell me what you paid -- '
+            '"500 for the cab" -- and it goes in.';
       }
+      return 'So far: ₹${_totalSpent.toStringAsFixed(0)} across '
+          '${_expenses.length} '
+          '${_expenses.length == 1 ? 'expense' : 'expenses'}. '
+          'The Expenses tab shows who paid what and who owes whom.';
     }
-    if (msg.contains('split') ||
-        msg.contains('divide') ||
-        msg.contains('per person')) {
-      return '👥 Group Split ($_groupSize people)\n\n'
-          '💰 Total budget: ₹${_totalBudget.toStringAsFixed(0)}\n'
-          '👤 Per person: ₹${_perPerson.toStringAsFixed(0)}\n'
-          '💸 Spent per person: ₹${_spentPerPerson.toStringAsFixed(0)}\n'
-          '✅ Remaining per person: ₹${(_remaining / _groupSize).toStringAsFixed(0)}';
+
+    if (msg.contains('owe') || msg.contains('split') || msg.contains('share')) {
+      return 'Who owes whom is worked out on the Expenses tab, from the '
+          'expenses everyone has added.';
     }
-    if (msg.contains('tip') ||
-        msg.contains('save') ||
-        msg.contains('suggest')) {
-      return '💡 Smart Budget Tips:\n\n'
-          '1. Book accommodations during off-peak hours for 10-20% savings\n'
-          '2. Use local transport (auto-rickshaw, metro) instead of cabs\n'
-          '3. Eat at local dhabas for authentic food at 50% less\n'
-          '4. Book attractions online in advance for discounts\n'
-          '5. Keep 10% as emergency reserve\n\n'
-          'Want me to analyze your spending pattern?';
-    }
-    return 'I can help you manage your budget! Try:\n\n'
-        '• "Set budget ₹50000 for 3 people"\n'
-        '• "Spent ₹5000 on hotel"\n'
-        '• "Show budget summary"\n'
-        '• "Split expenses per person"\n'
-        '• "Give me saving tips"';
+
+    return 'Tell me what you paid and I will add it -- "500 for the cab", '
+        'or "bulla paid 300 for lunch".';
   }
 
   // ignore: unused_element
@@ -6841,23 +6800,6 @@ class _BudgetTabState extends State<BudgetTab>
   Widget _buildChatTab() {
     return Column(
       children: [
-        // Budget summary bar
-        if (_isBudgetSet)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: const BoxDecoration(
-              gradient: AppConfig.primaryGradient,
-            ),
-            child: Row(
-              children: [
-                _buildMiniStat('Budget', '₹${_formatAmount(_totalBudget)}'),
-                _buildMiniStat('Spent', '₹${_formatAmount(_totalSpent)}'),
-                _buildMiniStat('Left', '₹${_formatAmount(_remaining)}'),
-                if (_groupSize > 1)
-                  _buildMiniStat('Per Head', '₹${_formatAmount(_perPerson)}'),
-              ],
-            ),
-          ),
         // Chat messages
         Expanded(
           child: ListView.builder(
@@ -6908,9 +6850,7 @@ class _BudgetTabState extends State<BudgetTab>
                 child: TextField(
                   controller: _chatController,
                   decoration: InputDecoration(
-                    hintText: _isBudgetSet
-                        ? 'Track expenses, ask for tips...'
-                        : 'Set your budget to get started...',
+                    hintText: 'What did you pay for? e.g. 500 for the cab',
                     border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24)),
                     contentPadding: const EdgeInsets.symmetric(

@@ -3410,12 +3410,9 @@ def handle_manager_request(request: AgentRequest):
         page = context.get('page', '')
         if page == 'budget' or context.get('action') == 'budget_chat':
             budget_info = context.get('budget_info', {})
-            total_budget = budget_info.get('total_budget', 0)
             group_size = budget_info.get('group_size', 1)
             total_spent = budget_info.get('total_spent', 0)
-            remaining = budget_info.get('remaining', total_budget)
             expenses = budget_info.get('expenses', [])
-            allocation = budget_info.get('allocation', {})
             spent_by_category = budget_info.get('spent_by_category', {})
 
             # What was already said. Without it every message was judged on its
@@ -3437,29 +3434,23 @@ def handle_manager_request(request: AgentRequest):
                 if transcript else ""
             )
 
-            budget_prompt = f"""{conversation}You are Triplix Budget Manager AI. You ONLY help with budget and expense management. Do NOT generate itineraries or travel plans.
+            budget_prompt = f"""{conversation}You help a group of travellers keep track of what they have spent. Nothing else -- no itineraries, no travel plans, and no budgets: this app does not have one.
 
 User message: "{message}"
 
-Current Budget Status:
-- Total Budget: ₹{total_budget:,.0f}
-- Group Size: {group_size} people
-- Per Person: ₹{total_budget/group_size if group_size > 0 else total_budget:,.0f}
-- Total Spent: ₹{total_spent:,.0f}
-- Remaining: ₹{remaining:,.0f}
-- Expenses logged: {len(expenses)}
-- Allocation: {json.dumps(allocation)}
-- Spent by category: {json.dumps(spent_by_category)}
+What has been spent so far:
+- Travellers: {group_size}
+- Total spent: ₹{total_spent:,.0f}
+- Expenses recorded: {len(expenses)}
+- By category: {json.dumps(spent_by_category)}
 
-Instructions:
-1. If the user is SETTING a budget (e.g. "my budget is 50000") → confirm the budget setup with a breakdown
-2. If the user is LOGGING an expense (e.g. "spent 2000 on hotel", "paid 500 for lunch") → confirm the expense was recorded, show category, and updated remaining balance
-3. If the user asks for a SUMMARY → show detailed budget summary with category-wise spending
-4. If the user asks for TIPS → give money-saving travel tips
-5. If the user wants to REDISTRIBUTE → suggest new allocation percentages
-6. Keep responses SHORT and focused on budget only (3-5 lines max)
-7. Use ₹ symbol and emojis for visual appeal
-8. NEVER generate an itinerary or travel plan
+Rules:
+1. NEVER say you have recorded, added, updated or excluded anything. You cannot write to the ledger -- the app does that itself and tells the traveller. Claiming otherwise has told people their money was saved when it was not.
+2. If the message is somebody logging an expense, do not confirm it. Say nothing about it, or ask only for the one detail that is missing.
+3. If they ask how much has been spent, answer from the figures above and nothing else. Never invent a total, a balance or a category that is not listed.
+4. There is no budget, no allocation and no remaining balance. If asked, say the app tracks what was spent and splits it, and does not plan a budget.
+5. Who owes whom is worked out on the Expenses tab. Point there rather than doing the arithmetic.
+6. Two or three lines. Plain words, no headings, at most one emoji.
 
 Respond as a budget assistant only:"""
 
