@@ -73,6 +73,9 @@ dependencies:
   
   # Image Picker
   image_picker: ^1.0.5
+  # Resizing a receipt before it is stored. A phone camera photo is 3-5 MB,
+  # and it has to come down to something a Firestore document can hold.
+  image: ^4.3.0
   
   # URL Launcher
   url_launcher: ^6.2.2

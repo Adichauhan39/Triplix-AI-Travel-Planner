@@ -253,6 +253,91 @@ service cloud.firestore {
           && (resource.data.by == request.auth.uid || tripOwner());
       }
 
+      // The photo of a bill, one per expense, keyed by that expense's id --
+      // so there is no way to have two receipts disagreeing about one row.
+      //
+      // In Firestore rather than Firebase Storage, which is not set up on
+      // this project. The metadata lives here and the bytes in a document
+      // beneath it, because a listener cannot ask for some fields and not
+      // others: keeping the blob out is the only way for a screen to know
+      // which rows have a receipt without downloading every one.
+      match /receipts/{expenseId} {
+
+        allow read: if signedIn();
+
+        // Anyone in the split may attach one. It is evidence about money the
+        // group shares, and a bill is not a claim about anybody's balance --
+        // unlike an amount, it moves nothing, so it needs no approval.
+        allow create, update: if canSpend()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.bytes is int
+          && request.resource.data.bytes > 0;
+
+        allow delete: if signedIn()
+          && (resource.data.by == request.auth.uid || tripOwner());
+
+        // The bytes themselves.
+        match /image/{imageId} {
+
+          allow read: if signedIn();
+
+          // Capped in the rules and not only in the client.
+          //
+          // A document over a mebibyte is refused by Firestore with an error
+          // nobody can act on, and a modified client could try to park
+          // megabytes of anything in somebody else's trip. 800,000 leaves
+          // room for the field names and the base64 overhead the client has
+          // already paid for.
+          allow create, update: if canSpend()
+            && request.resource.data.by == request.auth.uid
+            && request.resource.data.jpeg is string
+            && request.resource.data.jpeg.size() > 0
+            && request.resource.data.jpeg.size() < 800000;
+
+          allow delete: if signedIn()
+            && (resource.data.by == request.auth.uid || tripOwner());
+        }
+      }
+
+      // Money one traveller has handed another, closing part of a debt.
+      //
+      // Separate from expenses because it is not money the group spent: filed
+      // as an expense it would inflate the trip total and hand the payer a
+      // share of their own repayment.
+      match /payments/{paymentId} {
+
+        allow read: if signedIn();
+
+        // Only somebody who was actually part of it, or the owner settling
+        // the group's cash. A payment invented by a third party would wipe
+        // out a real debt, and it would look exactly like a genuine one.
+        //
+        // Both ends must be people the split pays out to: recording a payment
+        // to somebody outside it would credit a person the settlement never
+        // reaches.
+        allow create: if canSpend()
+          && request.resource.data.paise is int
+          && request.resource.data.paise > 0
+          && request.resource.data.from is string
+          && request.resource.data.to is string
+          && request.resource.data.from != request.resource.data.to
+          && request.resource.data.by == request.auth.uid
+          && (request.resource.data.from == request.auth.uid
+              || request.resource.data.to == request.auth.uid
+              || tripOwner())
+          && request.resource.data.from in spenders()
+          && request.resource.data.to in spenders();
+
+        // Never editable. A payment either happened or it did not, and a
+        // changed amount is a different payment -- one the other party has
+        // not seen. Wrong ones are removed and re-recorded, which leaves the
+        // removal visible rather than silently rewriting history.
+        allow update: if false;
+
+        allow delete: if signedIn()
+          && (resource.data.by == request.auth.uid || tripOwner());
+      }
+
       match /proposals/{proposalId} {
 
         // Readable by anyone who can read the trip, so a contributor can see

@@ -6,18 +6,31 @@ import '../models/trip_plan.dart';
 
 /// Somebody involved in a trip, named where the name is known.
 class TripPerson {
-  const TripPerson({required this.uid, required this.name, required this.email});
+  const TripPerson({
+    required this.uid,
+    required this.name,
+    required this.email,
+    this.upi = '',
+  });
 
   factory TripPerson.from(String uid, Map<String, dynamic>? profile) =>
       TripPerson(
         uid: uid,
         name: (profile?['name'] ?? '').toString().trim(),
         email: (profile?['email'] ?? '').toString().trim(),
+        upi: (profile?['upi'] ?? '').toString().trim(),
       );
 
   final String uid;
   final String name;
   final String email;
+
+  /// Their UPI id, when they have set one, so whoever owes them can pay from
+  /// the settlement instead of leaving the app to hunt for their number.
+  ///
+  /// Each person writes their own -- the rules see to that -- because a UPI id
+  /// somebody else typed is money sent to the wrong place.
+  final String upi;
 
   /// What to put on screen. Falls back through name, email, then a shortened
   /// uid -- never an invented placeholder, because two anonymous requests
@@ -46,6 +59,7 @@ class TripExpense {
     this.status = 'approved',
     this.shared = true,
     this.sharedWith = const [],
+    this.shares = const {},
   });
 
   factory TripExpense.fromDoc(String id, Map<String, dynamic> data) {
@@ -71,6 +85,10 @@ class TripExpense {
         for (final uid in (data['shared_with'] as List?) ?? const [])
           uid.toString()
       ],
+      shares: {
+        for (final entry in ((data['shares'] as Map?) ?? const {}).entries)
+          entry.key.toString(): (entry.value as num?)?.round() ?? 0
+      },
       // A row written on this device has no server time for a moment. Treated
       // as "just now" so it sorts to the top rather than to 1970.
       at: stamp is Timestamp ? stamp.toDate() : DateTime.now(),
@@ -102,6 +120,14 @@ class TripExpense {
   /// three of five people went to is divided by three, and the other two owe
   /// nothing towards it.
   final List<String> sharedWith;
+
+  /// Exactly what each person owes towards this, in paise.
+  ///
+  /// Empty means divide it equally, which is the common case and the only one
+  /// there used to be. Set when equal is simply wrong: one person had the 900
+  /// thali and the other a 200 chai, and halving that is a worse answer than
+  /// not recording the meal at all.
+  final Map<String, int> shares;
 
   bool get isApproved => status == 'approved';
   bool get isPending => status == 'pending';
@@ -195,6 +221,52 @@ String tripMemberField(TripScope scope) =>
 /// Where each scope keeps the people still waiting.
 String tripRequestField(TripScope scope) =>
     scope == TripScope.money ? 'money_requests' : 'requests';
+
+/// Money one traveller has handed to another, closing part of a debt.
+class TripPayment {
+  const TripPayment({
+    required this.id,
+    required this.from,
+    required this.to,
+    required this.paise,
+    required this.by,
+    this.method = 'cash',
+    this.at,
+  });
+
+  factory TripPayment.fromDoc(
+      QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    return TripPayment(
+      id: doc.id,
+      from: (data['from'] ?? '').toString(),
+      to: (data['to'] ?? '').toString(),
+      paise: (data['paise'] as num?)?.round() ?? 0,
+      by: (data['by'] ?? '').toString(),
+      method: (data['method'] ?? 'cash').toString(),
+      at: (data['at'] as Timestamp?)?.toDate(),
+    );
+  }
+
+  final String id;
+
+  /// Who paid, and who was paid.
+  final String from;
+  final String to;
+
+  final int paise;
+
+  /// Who recorded it, which need not be either of them.
+  final String by;
+
+  /// 'upi' or 'cash'. Kept because "I sent it on UPI" and "I handed you
+  /// notes" are different claims when somebody disputes one.
+  final String method;
+
+  final DateTime? at;
+
+  double get rupees => paise / 100;
+}
 
 /// What the signed-in user may do with a trip.
 ///
@@ -820,6 +892,145 @@ class TripSync {
       return true;
     } catch (e) {
       debugPrint('TripSync.setSharedWith failed: $e');
+      return false;
+    }
+  }
+
+  /// Sets exactly what each person owes towards one expense.
+  ///
+  /// An empty map puts it back to an equal split. A member's change goes to
+  /// 'pending' for the same reason an edited amount does: it moves what
+  /// everybody else owes.
+  Future<bool> setShares({
+    required String tripId,
+    required String expenseId,
+    required Map<String, int> shares,
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
+    try {
+      final trip = await fetch(tripId);
+      final isOwner = (trip?['owner'] ?? '').toString() == uid;
+      await _expensesOf(tripId).doc(expenseId).update({
+        'shares': shares,
+        // Naming who owes what says it is shared.
+        if (shares.isNotEmpty) 'shared': true,
+        // Exact amounts and a participant list say the same thing two ways,
+        // and keeping both invites them to disagree. The amounts win.
+        if (shares.isNotEmpty) 'shared_with': <String>[],
+        if (!isOwner) 'status': 'pending',
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.setShares failed: $e');
+      return false;
+    }
+  }
+
+  /// Saves this person's own UPI id on this trip.
+  ///
+  /// Beside their name rather than in one global place, because it is shown
+  /// to the people who owe them and that is a decision about this group.
+  Future<bool> setUpiId({
+    required String tripId,
+    required String upi,
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty) return false;
+    try {
+      final doc = _trips.doc(tripId);
+      final snapshot = await doc.get();
+      if (!snapshot.exists) return false;
+      final profiles =
+          Map<String, dynamic>.from(snapshot.data()?['profiles'] as Map? ?? {});
+      final mine = Map<String, dynamic>.from(profiles[uid] as Map? ?? const {});
+      mine['upi'] = upi.trim();
+      profiles[uid] = mine;
+      // Only this person's entry, which is what the rules allow.
+      await doc.update({'profiles': profiles});
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.setUpiId failed: $e');
+      return false;
+    }
+  }
+
+  // --- Paying each other back -----------------------------------------
+  //
+  // Deliberately not expenses. A repayment is not money the group spent:
+  // filing it as an expense would inflate the trip total and hand the payer a
+  // share of their own repayment. It closes a debt and does nothing else.
+
+  CollectionReference<Map<String, dynamic>> _paymentsOf(String tripId) =>
+      _trips.doc(tripId).collection('payments');
+
+  /// Records that one traveller has paid another back.
+  ///
+  /// Either party may record it, and so may the owner. Nobody else: a payment
+  /// that never happened would wipe out a real debt.
+  Future<bool> recordPayment({
+    required String tripId,
+    required String from,
+    required String to,
+    required int paise,
+    String method = 'cash',
+  }) async {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty) return false;
+    if (paise <= 0 || from.isEmpty || to.isEmpty || from == to) return false;
+    try {
+      await _paymentsOf(tripId).add({
+        'from': from,
+        'to': to,
+        'paise': paise,
+        // Who recorded it, which is not always who paid: the owner settling
+        // the group's cash writes rows for two other people.
+        'by': uid,
+        'method': method,
+        'at': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.recordPayment failed: $e');
+      return false;
+    }
+  }
+
+  /// Everything already paid back on this trip, newest first.
+  Stream<List<TripPayment>> payments(String tripId) {
+    if (tripId.isEmpty) return const Stream<List<TripPayment>>.empty();
+    return _paymentsOf(tripId).snapshots().map((snapshot) {
+      final rows = [for (final doc in snapshot.docs) TripPayment.fromDoc(doc)];
+      // Sorted here rather than by Firestore. An orderBy on a server
+      // timestamp hides a row from its own author until the server fills the
+      // field in, which reads as the payment not having saved.
+      rows.sort((a, b) {
+        final left = a.at;
+        final right = b.at;
+        if (left == null && right == null) return 0;
+        // A row whose timestamp has not come back yet was written a moment
+        // ago, so it belongs at the top.
+        if (left == null) return -1;
+        if (right == null) return 1;
+        return right.compareTo(left);
+      });
+      return rows;
+    }).handleError((Object e) {
+      debugPrint('TripSync.payments failed: $e');
+    });
+  }
+
+  /// Removes a repayment that did not happen.
+  ///
+  /// Removable but not editable: a payment either happened or it did not, and
+  /// a changed amount is a different payment.
+  Future<bool> removePayment(String tripId, String paymentId) async {
+    if (tripId.isEmpty || paymentId.isEmpty) return false;
+    try {
+      await _paymentsOf(tripId).doc(paymentId).delete();
+      return true;
+    } catch (e) {
+      debugPrint('TripSync.removePayment failed: $e');
       return false;
     }
   }

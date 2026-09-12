@@ -24,6 +24,8 @@ class ExpenseColumnsView extends StatelessWidget {
     this.onShared,
     this.onSplitWith,
     this.canDelete,
+    this.onReceipt,
+    this.hasReceipt,
   });
 
   /// The rows that count. Pending and rejected ones are not money anybody owes
@@ -46,6 +48,13 @@ class ExpenseColumnsView extends StatelessWidget {
   /// Asks who a row is divided between. Absent means the screen does not
   /// offer it, so the menu item does not appear.
   final void Function(TripExpense)? onSplitWith;
+
+  /// Attaches or shows the bill for a row.
+  final void Function(TripExpense)? onReceipt;
+
+  /// Whether a row already has a bill, so the paperclip only appears where
+  /// there is something behind it.
+  final bool Function(TripExpense)? hasReceipt;
 
   /// Whether this viewer may delete a given row. Separate from [canChange]
   /// because the two are not the same permission: a correction can be
@@ -201,6 +210,25 @@ class ExpenseColumnsView extends StatelessWidget {
                       Text('between ${row.sharedWith.length}',
                           style: TextStyle(
                               fontSize: 10, color: AppConfig.textTertiary)),
+                    ]
+                    // Exact amounts read as an equal split unless the row
+                    // says otherwise.
+                    else if (row.shares.isNotEmpty) ...[
+                      const SizedBox(width: 5),
+                      Text('set amounts',
+                          style: TextStyle(
+                              fontSize: 10, color: AppConfig.textTertiary)),
+                    ],
+                    // The bill, where there is one. Tappable on the row
+                    // itself as well as in the menu: somebody checking a
+                    // number wants the bill, not a menu.
+                    if (hasReceipt?.call(row) ?? false) ...[
+                      const SizedBox(width: 5),
+                      InkWell(
+                        onTap: () => onReceipt?.call(row),
+                        child: Icon(Icons.attach_file,
+                            size: 12, color: AppConfig.primaryColor),
+                      ),
                     ],
                   ],
                 ),
@@ -251,6 +279,17 @@ class ExpenseColumnsView extends StatelessWidget {
                         Text('Split between...'),
                       ]),
                     ),
+                  if (onReceipt != null)
+                    PopupMenuItem(
+                      value: 'receipt',
+                      child: Row(children: [
+                        const Icon(Icons.receipt_long_outlined, size: 17),
+                        const SizedBox(width: 10),
+                        Text((hasReceipt?.call(row) ?? false)
+                            ? 'See the bill'
+                            : 'Attach the bill'),
+                      ]),
+                    ),
                   if (canDelete?.call(row) ?? true)
                     const PopupMenuItem(
                       value: 'delete',
@@ -266,6 +305,7 @@ class ExpenseColumnsView extends StatelessWidget {
                   'edit' => onEdit?.call(row),
                   'split' => onShared?.call(row, !row.shared),
                   'who' => onSplitWith?.call(row),
+                  'receipt' => onReceipt?.call(row),
                   _ => onDelete?.call(row),
                 },
               ),

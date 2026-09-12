@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -7,6 +9,9 @@ import '../config/app_config.dart';
 import '../services/expense_words.dart';
 import '../services/expense_columns.dart';
 import 'expense_columns_view.dart';
+import '../services/receipt_store.dart';
+import 'receipt_sheet.dart';
+import 'settle_up_sheet.dart';
 import 'share_sheet.dart';
 import 'split_picker.dart';
 import 'trip_access_requests.dart';
@@ -36,10 +41,39 @@ class _TripExpensesState extends State<TripExpenses> {
   bool _loadingPeople = true;
   bool _isOwner = false;
 
+  /// What has already been paid back.
+  ///
+  /// Held in state and listened to rather than fetched inside build: the
+  /// settlement needs it alongside the expenses, and a second StreamBuilder
+  /// wrapped round the whole ledger would rebuild the tree for a list that
+  /// changes once a trip.
+  List<TripPayment> _payments = const [];
+  StreamSubscription<List<TripPayment>>? _paymentsSub;
+
+  /// Which rows have a bill. Metadata only -- the photos themselves are in
+  /// their own documents and are fetched when somebody asks to see one, so
+  /// this listener costs nothing however many receipts a trip collects.
+  final ReceiptStore _receiptStore = ReceiptStore();
+  Map<String, ReceiptInfo> _receipts = const {};
+  StreamSubscription<Map<String, ReceiptInfo>>? _receiptsSub;
+
   @override
   void initState() {
     super.initState();
     _loadPeople();
+    _paymentsSub = _sync.payments(widget.tripId).listen((rows) {
+      if (mounted) setState(() => _payments = rows);
+    });
+    _receiptsSub = _receiptStore.watch(widget.tripId).listen((found) {
+      if (mounted) setState(() => _receipts = found);
+    });
+  }
+
+  @override
+  void dispose() {
+    _paymentsSub?.cancel();
+    _receiptsSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadPeople() async {
@@ -263,6 +297,12 @@ class _TripExpensesState extends State<TripExpenses> {
                   onPressed: _askNickname,
                 ),
                 IconButton(
+                  tooltip: 'Your UPI id, so people can pay you back',
+                  icon: const Icon(Icons.account_balance_wallet_outlined,
+                      size: 18),
+                  onPressed: _askUpiId,
+                ),
+                IconButton(
                   tooltip: 'Share this trip and its spending',
                   icon: const Icon(Icons.ios_share, size: 18),
                   onPressed: _shareLink,
@@ -319,9 +359,11 @@ class _TripExpensesState extends State<TripExpenses> {
                 onDelete: _deleteExpense,
                 onShared: _setShared,
                 onSplitWith: _pickWhoShares,
+                onReceipt: _receiptFor,
+                hasReceipt: (row) => _receipts.containsKey(row.id),
               ),
               const SizedBox(height: 10),
-              _settlement(approved),
+              _settlement(approved, _payments),
             ],
           ],
         );
@@ -514,6 +556,194 @@ class _TripExpensesState extends State<TripExpenses> {
   }
 
   /// Takes an expense out of the split, or puts it back.
+  /// Attaches a bill to a row, or shows the one that is there.
+  Future<void> _receiptFor(TripExpense row) async {
+    final mine = _receipts[row.id];
+    final has = mine != null;
+
+    final choice = await askAboutReceipt(
+      context,
+      has: has,
+      canRemove: has && (mine.by == _uid || _isOwner),
+    );
+    if (choice == null || !mounted) return;
+
+    final title = row.note.isEmpty ? row.category : row.note;
+
+    switch (choice) {
+      case ReceiptAction.view:
+        await showReceipt(
+          context,
+          store: _receiptStore,
+          tripId: widget.tripId,
+          expenseId: row.id,
+          title: title,
+        );
+      case ReceiptAction.remove:
+        final ok = await _receiptStore.remove(
+            tripId: widget.tripId, expenseId: row.id);
+        if (!mounted) return;
+        if (!ok) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('That could not be removed.'),
+          ));
+        }
+      case ReceiptAction.camera:
+      case ReceiptAction.gallery:
+        // Said before the wait, because shrinking a camera photo takes a
+        // second or two and a screen that does nothing reads as broken.
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Saving the bill...'),
+          duration: Duration(seconds: 2),
+        ));
+        final problem = await _receiptStore.attach(
+          tripId: widget.tripId,
+          expenseId: row.id,
+          fromCamera: choice == ReceiptAction.camera,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(problem ?? 'Bill attached.'),
+        ));
+    }
+  }
+
+  /// Closes a debt: pays it, and records what was paid.
+  Future<void> _settle(Debt debt) async {
+    final payee = _people.firstWhere(
+      (p) => p.uid == debt.to,
+      orElse: () => TripPerson(uid: debt.to, name: '', email: ''),
+    );
+
+    final result = await showSettleUpSheet(
+      context,
+      debt: debt,
+      fromName: _nameOf(debt.from),
+      toName: _nameOf(debt.to),
+      toUpiId: payee.upi,
+      iAmPayer: debt.from == _uid,
+      tripLabel: 'Triplix trip',
+    );
+    if (result == null || !mounted) return;
+
+    final ok = await _sync.recordPayment(
+      tripId: widget.tripId,
+      from: debt.from,
+      to: debt.to,
+      paise: result.paise,
+      method: result.method,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Recorded: ${_nameOf(debt.from)} paid ${_nameOf(debt.to)} '
+              '${formatRupees(result.paise)}.'
+          : 'That did not save. Check your connection.'),
+    ));
+  }
+
+  /// Takes back a payment that did not happen.
+  Future<void> _unpay(TripPayment payment) async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove this payment?'),
+        content: Text(
+          '${_nameOf(payment.from)} paying ${_nameOf(payment.to)} '
+          '${formatRupees(payment.paise)} will go back to being owed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep it'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    await _sync.removePayment(widget.tripId, payment.id);
+  }
+
+  /// Where somebody puts their own UPI id, so the people who owe them can pay
+  /// in one tap instead of asking for their number.
+  Future<void> _askUpiId() async {
+    final controller = TextEditingController(
+      text: _people
+          .firstWhere(
+            (p) => p.uid == _uid,
+            orElse: () => const TripPerson(uid: '', name: '', email: ''),
+          )
+          .upi,
+    );
+
+    final upi = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Your UPI id'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Shown to whoever owes you, so they can pay you from the '
+              'settlement. Nothing is taken from your account -- this only '
+              'fills in their payment screen.',
+              style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(
+                hintText: 'yourname@okhdfcbank',
+                labelText: 'UPI id',
+              ),
+              onSubmitted: (v) => Navigator.pop(dialogContext, v.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (upi == null || !mounted) return;
+
+    // An id without an @ is a typo, and one saved wrong sends somebody's
+    // money to the wrong place.
+    if (upi.isNotEmpty && !upi.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('A UPI id looks like name@bank. Check it and try '
+            'again.'),
+      ));
+      return;
+    }
+
+    final ok = await _sync.setUpiId(tripId: widget.tripId, upi: upi);
+    if (!mounted) return;
+    if (ok) _loadPeople();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (upi.isEmpty
+              ? 'UPI id removed.'
+              : 'Saved. People who owe you can now pay you in one tap.')
+          : 'That did not save. Check your connection.'),
+    ));
+  }
+
   /// Asks who this expense is divided between.
   Future<void> _pickWhoShares(TripExpense row) async {
     final chosen = await askWhoShares(
@@ -523,23 +753,34 @@ class _TripExpensesState extends State<TripExpenses> {
       me: _uid,
       needsApproval: !_isOwner,
     );
-    // null is "cancelled", an empty list is "everyone". Treating them alike
-    // would silently put a row back into the whole group's split whenever
-    // somebody closed the dialog.
+    // null is "cancelled", an empty answer is "everyone, equally". Treating
+    // them alike would silently put a row back into the whole group's split
+    // whenever somebody closed the dialog.
     if (chosen == null || !mounted) return;
 
-    final ok = await _sync.setSharedWith(
-      tripId: widget.tripId,
-      expenseId: row.id,
-      people: chosen,
-    );
+    // Exact amounts and a list of people are two ways of saying the same
+    // thing, so exactly one of them is written and the other is cleared.
+    final ok = chosen.isExact
+        ? await _sync.setShares(
+            tripId: widget.tripId,
+            expenseId: row.id,
+            shares: chosen.shares,
+          )
+        : await _sync.setSharedWith(
+            tripId: widget.tripId,
+            expenseId: row.id,
+            people: chosen.people,
+          );
     if (!mounted) return;
+
+    final waiting = _isOwner ? '' : ' Waiting for the owner to approve.';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
-          ? (chosen.isEmpty
-              ? 'Back to everyone.'
-              : 'Split between ${chosen.length}.'
-                  '${_isOwner ? '' : ' Waiting for the owner to approve.'}')
+          ? (chosen.isExact
+              ? 'Saved the exact amounts.$waiting'
+              : chosen.people.isEmpty
+                  ? 'Back to everyone.$waiting'
+                  : 'Split between ${chosen.people.length}.$waiting')
           : 'That did not save. Check your connection.'),
     ));
   }
@@ -654,7 +895,7 @@ class _TripExpensesState extends State<TripExpenses> {
       );
 
   /// Who owes whom, or nothing at all when it is already even.
-  Widget _settlement(List<TripExpense> rows) {
+  Widget _settlement(List<TripExpense> rows, List<TripPayment> repaid) {
     if (_people.length < 2) {
       return Text(
         'Invite the people you are travelling with and this will split '
@@ -663,15 +904,34 @@ class _TripExpensesState extends State<TripExpenses> {
       );
     }
 
+    final people = [for (final p in _people) p.uid];
+
     // Nobody owes a share of somebody's own spending, so it cannot be counted
     // as having been put in either. Including it reversed who owed whom.
     final paid = <String, int>{};
     for (final row in sharedOnly(rows)) {
       paid[row.by] = (paid[row.by] ?? 0) + row.paise;
     }
+
     final debts = settleUp(
-      paidPaise: paid,
-      people: [for (final p in _people) p.uid],
+      // What has already been handed over. Without this the settlement
+      // repeats a debt that was paid weeks ago, for ever.
+      paidPaise: withRepayments(
+        paidPaise: paid,
+        repayments: [
+          for (final payment in repaid)
+            Repayment(
+                from: payment.from, to: payment.to, paise: payment.paise)
+        ],
+      ),
+      people: people,
+      // The same figure the columns show.
+      //
+      // This used to be left out, so settleUp divided the whole total by
+      // everybody while the columns above divided each expense among its own
+      // participants. Any expense split between some of the group made the
+      // two disagree -- and this line is the one people act on.
+      owedPaise: owedPerPerson(approved: rows, members: people),
     );
 
     String name(String uid) => _nameOf(uid);
@@ -697,13 +957,81 @@ class _TripExpensesState extends State<TripExpenses> {
             for (final debt in debts)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 1),
-                child: Text(
-                  '${name(debt.from)} '
-                  '${debt.from == _uid ? 'owe' : 'owes'} '
-                  '${name(debt.to)} ${formatRupees(debt.paise)}',
-                  style: const TextStyle(fontSize: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${name(debt.from)} '
+                        '${debt.from == _uid ? 'owe' : 'owes'} '
+                        '${name(debt.to)} ${formatRupees(debt.paise)}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    // Offered to the two people in it, and to the owner, who
+                    // is usually the one holding the cash. Anyone else would
+                    // be recording a payment they know nothing about -- and
+                    // the rules would refuse it.
+                    if (debt.from == _uid || debt.to == _uid || _isOwner)
+                      TextButton(
+                        onPressed: () => _settle(debt),
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 28),
+                        ),
+                        child: Text(
+                            debt.from == _uid ? 'Pay' : 'Settle up',
+                            style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w700)),
+                      ),
+                  ],
                 ),
               ),
+
+          // What has already been paid back, so the settlement shrinking is
+          // explained rather than mysterious.
+          if (repaid.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const SizedBox(height: 6),
+            Text('Already paid back',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppConfig.textSecondary)),
+            for (final payment in repaid)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle_outline,
+                        size: 13, color: AppConfig.successColor),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        '${name(payment.from)} paid ${name(payment.to)} '
+                        '${formatRupees(payment.paise)}'
+                        '${payment.method == 'upi' ? ' by UPI' : ''}',
+                        style: TextStyle(
+                            fontSize: 11, color: AppConfig.textSecondary),
+                      ),
+                    ),
+                    // Removable, not editable: a payment either happened or
+                    // it did not, and only whoever recorded it or the owner
+                    // may take it back.
+                    if (payment.by == _uid || _isOwner)
+                      IconButton(
+                        tooltip: 'This did not happen -- remove it',
+                        icon: const Icon(Icons.close, size: 13),
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints(),
+                        padding: const EdgeInsets.all(4),
+                        onPressed: () => _unpay(payment),
+                      ),
+                  ],
+                ),
+              ),
+          ],
         ],
       ),
     );

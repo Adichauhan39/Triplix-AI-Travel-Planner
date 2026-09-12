@@ -94,6 +94,40 @@ Map<String, int> owedPerPerson({
   for (final row in approved) {
     if (!row.shared || row.paise <= 0) continue;
 
+    // Exact amounts, where somebody has set them: one person had the 900
+    // thali and the other a 200 chai, and no equal division of the bill is
+    // the truth about that meal.
+    if (row.shares.isNotEmpty) {
+      final named = <String, int>{
+        for (final entry in row.shares.entries)
+          if (members.contains(entry.key) && entry.value > 0)
+            entry.key: entry.value
+      };
+      final assigned = named.values.fold<int>(0, (sum, p) => sum + p);
+
+      if (named.isNotEmpty && assigned > 0) {
+        named.forEach((uid, amount) {
+          owed[uid] = (owed[uid] ?? 0) + amount;
+        });
+
+        // Whatever the named amounts do not cover is still money somebody
+        // paid, and it has to land on somebody or the books stop balancing.
+        // It happens when a person named in the shares has since left the
+        // trip, so it goes to the people still named -- not to the whole
+        // group, who were never in this expense.
+        final missing = row.paise - assigned;
+        if (missing != 0) {
+          final extra = fairShares(missing.abs(), named.keys.toList());
+          extra.forEach((uid, amount) {
+            owed[uid] = (owed[uid] ?? 0) + (missing > 0 ? amount : -amount);
+          });
+        }
+        continue;
+      }
+      // Nothing usable -- everyone named has left. Falls through to the
+      // equal split below rather than dropping the money.
+    }
+
     // Who was in on it. Anyone named who has since left the trip is dropped,
     // and if that leaves nobody the expense falls back to the whole group --
     // money that belongs to somebody must not vanish because a name went
@@ -110,6 +144,49 @@ Map<String, int> owedPerPerson({
     });
   }
   return owed;
+}
+
+/// A UPI payment request, ready for whatever handles it on the device.
+///
+/// Built rather than integrated with a payment provider on purpose: this is a
+/// standard deep link every UPI app on an Indian phone already answers, it
+/// takes no keys, no merchant account and no cut of anybody's money, and the
+/// payment happens in the app the person already trusts. Nothing here moves
+/// money -- it fills in a form and hands it over.
+///
+/// Returns null when there is no UPI id to pay, so the screen can offer
+/// "mark as paid" alone rather than a button that opens nothing.
+Uri? upiPaymentLink({
+  required String upiId,
+  required String payeeName,
+  required int paise,
+  String note = '',
+}) {
+  final id = upiId.trim();
+  // A UPI id is name@handle. Anything without the @ is a typo or a phone
+  // number, and sending somebody to a payment screen prefilled with a bad
+  // id is worse than not offering the button.
+  if (id.isEmpty || !id.contains('@') || paise <= 0) return null;
+
+  // The query is assembled by hand rather than handed to Uri's
+  // queryParameters, which encodes a space as '+' -- that is correct for an
+  // HTML form and wrong here: several UPI apps show the payee as
+  // "Aditya+Chauhan" on the confirmation screen, which is the one screen
+  // where somebody checks they are paying the right person.
+  final parts = <String, String>{
+    'pa': id,
+    if (payeeName.trim().isNotEmpty) 'pn': payeeName.trim(),
+    // Rupees with two decimals: the spec's amount is in rupees, and a paise
+    // figure sent here would ask for a hundred times too much.
+    'am': (paise / 100).toStringAsFixed(2),
+    'cu': 'INR',
+    if (note.trim().isNotEmpty) 'tn': note.trim(),
+  };
+  final query = parts.entries
+      .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+      .join('&');
+
+  return Uri.parse('upi://pay?$query');
 }
 
 /// The name to show for a uid.
@@ -204,14 +281,10 @@ List<PersonColumn> buildExpenseColumns({
   ];
   if (uids.isEmpty) return const [];
 
-  // The split is whatever settle_up says it is. Deriving it again here would
-  // let the columns and the settlement drift apart, which is the one thing a
-  // shared ledger cannot survive.
-  // The headline figure. The shares are no longer derived from it -- they are
-  // worked out per expense, since not every expense is divided by everyone --
-  // but it is still what the group has spent together.
-  final total = approved.fold<int>(
-      0, (sum, row) => sum + (row.shared ? row.paise : 0));
+  // One source for the split, shared with the settlement below: each expense
+  // divided among its own participants, or by the exact amounts somebody set.
+  // Deriving it a second time here is how the columns and the settlement
+  // drift apart, which is the one thing a shared ledger cannot survive.
   final shares = memberUids.isEmpty
       ? <String, int>{}
       : owedPerPerson(approved: approved, members: memberUids);

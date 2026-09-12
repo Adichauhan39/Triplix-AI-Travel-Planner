@@ -64,6 +64,45 @@ Map<String, int> fairShares(int totalPaise, List<String> people) {
 ///
 /// The result is a short list of payments, not a matrix. Two people who each
 /// owe a third should send two payments, not six.
+/// Money one traveller has actually handed to another.
+///
+/// Not an expense: nothing was bought, and it must not appear in what the
+/// group spent. It exists so a debt can be closed -- without it the
+/// settlement says "Surendra owes you 433" for ever, however many times he
+/// has paid.
+class Repayment {
+  const Repayment({
+    required this.from,
+    required this.to,
+    required this.paise,
+  });
+
+  final String from;
+  final String to;
+  final int paise;
+}
+
+/// Folds repayments into what each person has put in.
+///
+/// In the arithmetic a repayment behaves exactly like an expense paid by the
+/// payer on the receiver's behalf: paying back 500 leaves the payer 500 less
+/// short and the receiver 500 less owed. So one contribution goes up and the
+/// other comes down by the same amount -- the group total is untouched, which
+/// is what keeps the shares and the headline figure honest -- and the
+/// settlement comes out at nothing once everybody has paid.
+Map<String, int> withRepayments({
+  required Map<String, int> paidPaise,
+  required List<Repayment> repayments,
+}) {
+  final out = {...paidPaise};
+  for (final paid in repayments) {
+    if (paid.paise <= 0 || paid.from == paid.to) continue;
+    out[paid.from] = (out[paid.from] ?? 0) + paid.paise;
+    out[paid.to] = (out[paid.to] ?? 0) - paid.paise;
+  }
+  return out;
+}
+
 List<Debt> settleUp({
   required Map<String, int> paidPaise,
   required List<String> people,
@@ -72,7 +111,14 @@ List<Debt> settleUp({
   if (people.length < 2) return const [];
 
   final total = people.fold<int>(0, (sum, p) => sum + (paidPaise[p] ?? 0));
-  if (total == 0) return const [];
+  // No early return on a total of zero any more.
+  //
+  // It used to mean "nothing was spent, so nobody owes anything", which was
+  // true while the only inputs were expenses. Once a repayment can make one
+  // person's contribution negative, a total of zero no longer implies
+  // balances of zero -- a group that spent nothing and then paid each other
+  // has real balances. The balances below are already the answer, so they
+  // decide, and an empty ledger falls out of them as an empty list anyway.
 
   // What each person owes. Given explicitly when expenses are split between
   // different subsets of the group -- a dinner three of five went to is not

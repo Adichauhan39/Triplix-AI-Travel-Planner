@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +18,9 @@ import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 import '../widgets/agent_ask.dart';
 import '../widgets/place_detail_sheet.dart';
+import '../services/receipt_store.dart';
+import '../widgets/receipt_sheet.dart';
+import '../widgets/settle_up_sheet.dart';
 import '../widgets/share_sheet.dart';
 import '../widgets/split_picker.dart';
 import '../widgets/trip_access_requests.dart';
@@ -72,11 +77,19 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   @override
   void initState() {
     super.initState();
+    _repaidSub = _sync.payments(widget.tripId).listen((rows) {
+      if (mounted) setState(() => _repaid = rows);
+    });
+    _receiptsSub = _receiptStore.watch(widget.tripId).listen((found) {
+      if (mounted) setState(() => _receipts = found);
+    });
     _load();
   }
 
   @override
   void dispose() {
+    _repaidSub?.cancel();
+    _receiptsSub?.cancel();
     _tabs.dispose();
     _request.dispose();
     _spend.dispose();
@@ -198,6 +211,16 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   /// What this person may do with the ledger, which is a different question
   /// from what they may do with the plan.
   TripAccess _moneyAccess = TripAccess.signedOut;
+
+  /// What has already been paid back. Listened to rather than fetched in
+  /// build, since the settlement needs it beside the expenses.
+  List<TripPayment> _repaid = const [];
+  StreamSubscription<List<TripPayment>>? _repaidSub;
+
+  /// Which rows have a bill attached. Metadata only.
+  final ReceiptStore _receiptStore = ReceiptStore();
+  Map<String, ReceiptInfo> _receipts = const {};
+  StreamSubscription<Map<String, ReceiptInfo>>? _receiptsSub;
 
   /// Suggests a place for a day. Goes to the owner, not into the plan.
   Future<void> _suggestPlace(int dayIndex) async {
@@ -763,7 +786,26 @@ class _SharedTripScreenState extends State<SharedTripScreen>
         final total = sharedTotal(approved);
         final personal = personalTotal(approved);
         final debts = people.length > 1
-            ? settleUp(paidPaise: paid, people: people)
+            ? settleUp(
+                // Minus what has already been handed over, or the settlement
+                // repeats a debt that was paid weeks ago for ever.
+                paidPaise: withRepayments(
+                  paidPaise: paid,
+                  repayments: [
+                    for (final payment in _repaid)
+                      Repayment(
+                          from: payment.from,
+                          to: payment.to,
+                          paise: payment.paise)
+                  ],
+                ),
+                people: people,
+                // The same figure the columns above show. Left out, settleUp
+                // divides the whole total by everybody, which disagrees with
+                // the columns on any expense split between some of the group
+                // -- and this is the line people act on.
+                owedPaise: owedPerPerson(approved: approved, members: people),
+              )
             : const <Debt>[];
 
         return Container(
@@ -816,10 +858,79 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                 for (final debt in debts)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      _owingLine(debt, rows, me),
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _owingLine(debt, rows, me),
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        // Offered to the two people in it, and to the owner
+                        // who usually holds the cash. Anybody else would be
+                        // recording a payment they know nothing about, and
+                        // the rules would refuse it anyway.
+                        if (debt.from == me || debt.to == me || isOwner)
+                          TextButton(
+                            onPressed: () => _settleDebt(debt),
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              minimumSize: const Size(0, 30),
+                            ),
+                            child: Text(debt.from == me ? 'Pay' : 'Settle up',
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+
+              // What has already been paid back, so a shrinking settlement is
+              // explained rather than mysterious.
+              if (_repaid.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Divider(height: 1),
+                const SizedBox(height: 8),
+                Text('Already paid back',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppConfig.textSecondary)),
+                for (final payment in _repaid)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline,
+                            size: 14, color: AppConfig.successColor),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '${_nameFor(payment.from, approved)} paid '
+                            '${_nameFor(payment.to, approved)} '
+                            '${_money(payment.paise)}'
+                            '${payment.method == 'upi' ? ' by UPI' : ''}',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: AppConfig.textSecondary),
+                          ),
+                        ),
+                        if (payment.by == me || isOwner)
+                          IconButton(
+                            tooltip: 'This did not happen -- remove it',
+                            icon: const Icon(Icons.close, size: 14),
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(),
+                            padding: const EdgeInsets.all(4),
+                            onPressed: () =>
+                                _sync.removePayment(widget.tripId, payment.id),
+                          ),
+                      ],
                     ),
                   ),
               ],
@@ -919,6 +1030,8 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   onDelete: _deleteExpense,
                   onShared: _setShared,
                   onSplitWith: _pickWhoShares,
+                  onReceipt: _receiptFor,
+                  hasReceipt: (row) => _receipts.containsKey(row.id),
                 ),
               ],
 
@@ -1213,6 +1326,99 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   }
 
   /// Takes an expense out of the split, or puts it back.
+  /// Attaches a bill to a row, or shows the one that is there.
+  Future<void> _receiptFor(TripExpense row) async {
+    final me = FirebaseAuth.instance.currentUser?.uid;
+    final mine = _receipts[row.id];
+    final has = mine != null;
+
+    final choice = await askAboutReceipt(
+      context,
+      has: has,
+      canRemove:
+          has && (mine.by == me || _moneyAccess == TripAccess.owner),
+    );
+    if (choice == null || !mounted) return;
+
+    final title = row.note.isEmpty ? row.category : row.note;
+
+    switch (choice) {
+      case ReceiptAction.view:
+        await showReceipt(
+          context,
+          store: _receiptStore,
+          tripId: widget.tripId,
+          expenseId: row.id,
+          title: title,
+        );
+      case ReceiptAction.remove:
+        final ok = await _receiptStore.remove(
+            tripId: widget.tripId, expenseId: row.id);
+        if (!mounted) return;
+        if (!ok) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('That could not be removed.'),
+          ));
+        }
+      case ReceiptAction.camera:
+      case ReceiptAction.gallery:
+        // Said before the wait: shrinking a camera photo takes a second or
+        // two, and a screen doing nothing reads as broken.
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Saving the bill...'),
+          duration: Duration(seconds: 2),
+        ));
+        final problem = await _receiptStore.attach(
+          tripId: widget.tripId,
+          expenseId: row.id,
+          fromCamera: choice == ReceiptAction.camera,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(problem ?? 'Bill attached.'),
+        ));
+    }
+  }
+
+  /// Closes a debt: opens UPI where there is an id to pay, then records it.
+  ///
+  /// Not `_settle` -- that already means approving or rejecting an expense on
+  /// this screen, and two meanings of "settle" in one file is how the wrong
+  /// one gets called.
+  Future<void> _settleDebt(Debt debt) async {
+    final me = FirebaseAuth.instance.currentUser?.uid;
+    final payee = _members.firstWhere(
+      (p) => p.uid == debt.to,
+      orElse: () => TripPerson(uid: debt.to, name: '', email: ''),
+    );
+
+    final result = await showSettleUpSheet(
+      context,
+      debt: debt,
+      fromName: _nameFor(debt.from, const []),
+      toName: _nameFor(debt.to, const []),
+      toUpiId: payee.upi,
+      iAmPayer: debt.from == me,
+      tripLabel: (_trip?['destination'] ?? 'Triplix trip').toString(),
+    );
+    if (result == null || !mounted) return;
+
+    final ok = await _sync.recordPayment(
+      tripId: widget.tripId,
+      from: debt.from,
+      to: debt.to,
+      paise: result.paise,
+      method: result.method,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Recorded: ${_nameFor(debt.from, const [])} paid '
+              '${_nameFor(debt.to, const [])} ${_money(result.paise)}.'
+          : 'That did not save. Check your connection.'),
+    ));
+  }
+
   /// Asks who an expense is divided between.
   Future<void> _pickWhoShares(TripExpense row) async {
     final chosen = await askWhoShares(
@@ -1226,17 +1432,25 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     // rewrites who owes for it.
     if (chosen == null || !mounted) return;
 
-    final ok = await _sync.setSharedWith(
-      tripId: widget.tripId,
-      expenseId: row.id,
-      people: chosen,
-    );
+    final ok = chosen.isExact
+        ? await _sync.setShares(
+            tripId: widget.tripId,
+            expenseId: row.id,
+            shares: chosen.shares,
+          )
+        : await _sync.setSharedWith(
+            tripId: widget.tripId,
+            expenseId: row.id,
+            people: chosen.people,
+          );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
-          ? (chosen.isEmpty
-              ? 'Back to everyone.'
-              : 'Split between ${chosen.length}.')
+          ? (chosen.isExact
+              ? 'Saved the exact amounts.'
+              : chosen.people.isEmpty
+                  ? 'Back to everyone.'
+                  : 'Split between ${chosen.people.length}.')
           : 'That did not save. Check your connection.'),
     ));
   }
