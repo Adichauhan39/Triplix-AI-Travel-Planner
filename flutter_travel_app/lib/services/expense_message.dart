@@ -58,8 +58,59 @@ final RegExp _amount = RegExp(
 );
 
 /// What the money was for: whatever follows "for" or "on".
+/// What the money was for: whatever follows the LAST "for", "on" or
+/// "towards".
+///
+/// It used to take the first, so "put 700 on aditya for the cab" read the
+/// purpose as "aditya for the cab" -- the person became part of what was
+/// bought. Everything before the last one is context; the tail is the thing.
 final RegExp _purpose = RegExp(
-  r'\b(?:for|on|towards)\s+(.+?)\s*$',
+  r'^.*\b(?:for|on|towards)\s+(.+?)\s*$',
+  caseSensitive: false,
+  dotAll: true,
+);
+
+/// Sentences that carry a number and are not an expense.
+///
+/// "my budget is 20000" has an amount and no purpose, which -- once an amount
+/// without a purpose became a question -- got answered with "what was the
+/// 20,000 for?". Setting a budget is a different act, handled elsewhere, and
+/// the reader has to know to keep out of it.
+final RegExp _notAnExpense = RegExp(
+  r'\b('
+  r'budget\s+(?:is|of|:)'
+  r'|my\s+budget'
+  r'|total\s+budget'
+  r'|set\s+(?:a\s+|the\s+)?budget'
+  r'|budget\s+for\s+the\s+trip'
+  r'|per\s+person\s+budget'
+  r'|we\s+are\s+\d+\s+people'
+  r'|group\s+of\s+\d+'
+  r')',
+  caseSensitive: false,
+);
+
+/// Verbs and fillers that start a sentence and are not a person.
+///
+/// "surendra 500 for food" names its payer first with no verb at all, which is
+/// worth reading -- but "add 500 for food" has the same shape, and Add is not
+/// a person.
+const Set<String> _notLeadingNames = {
+  'add', 'put', 'paid', 'pay', 'spent', 'spend', 'log', 'logged', 'record',
+  'note', 'enter', 'i', 'we', 'my', 'our', 'total', 'budget', 'set', 'the',
+  'a', 'an', 'and', 'also', 'please', 'just', 'exclude', 'remove', 'make',
+  'dont', 'do', 'not', 'rs', 'inr',
+};
+
+/// "<name> 500 for food" -- the payer first, with no verb between.
+final RegExp _bareName = RegExp(
+  r"^\s*([a-z][a-z]{1,20})\s+(?:rs\.?|₹|inr)?\s*\d",
+  caseSensitive: false,
+);
+
+/// "put 700 on aditya for the cab" -- the person after "on".
+final RegExp _onName = RegExp(
+  r"\bon\s+([a-z][a-z .]{0,30}?)\s+(?:for|towards)\b",
   caseSensitive: false,
 );
 
@@ -167,6 +218,10 @@ ExpenseDraft readExpenseDraft(String message) {
   final plain = text.replaceAll("'", '').replaceAll('\u2019', '');
   final shared = !_notShared.hasMatch(plain);
 
+  // Somebody setting a budget or saying how many they are. Both carry a
+  // number and neither is money that was spent.
+  if (_notAnExpense.hasMatch(plain)) return const ExpenseDraft();
+
   final amountMatch = _amount.firstMatch(text);
   if (amountMatch == null) return const ExpenseDraft();
   final rupees = double.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
@@ -178,8 +233,13 @@ ExpenseDraft readExpenseDraft(String message) {
   final leading = _namePaid.firstMatch(text);
   final account = _accountOf.firstMatch(text);
   final toward = _toName.firstMatch(text);
+  final onWho = _onName.firstMatch(text);
+  final bare = _bareName.firstMatch(text);
   if (leading != null) {
     payer = leading.group(1)!.trim();
+  } else if (onWho != null) {
+    // "put 700 on aditya for the cab".
+    payer = onWho.group(1)!.trim();
   } else if (account != null) {
     // "5000 in surendra account" -- checked before `by`, since "for" appears
     // in both this pattern and the purpose one.
@@ -188,7 +248,13 @@ ExpenseDraft readExpenseDraft(String message) {
     payer = toward.group(1)!.trim();
   } else {
     final trailing = _byName.firstMatch(text);
-    if (trailing != null) payer = trailing.group(1)!.trim();
+    if (trailing != null) {
+      payer = trailing.group(1)!.trim();
+    } else if (bare != null &&
+        !_notLeadingNames.contains(bare.group(1)!.toLowerCase())) {
+      // "surendra 500 for food" -- a name, then the amount, no verb.
+      payer = bare.group(1)!.trim();
+    }
   }
 
   if (payer != null) {
@@ -251,6 +317,51 @@ ExpenseDraft readExpenseDraft(String message) {
     description: description,
     shared: shared,
   );
+}
+
+/// Asking for an expense to leave the split, or to come back into it.
+///
+/// Returns false for "take it out", true for "put it back", and null when the
+/// sentence is not about that at all.
+///
+/// Which expense is left to the caller, because only the caller has the
+/// ledger: the notes on the rows are what a sentence can name, and matching
+/// against them beats trying to parse a noun out of "exclude that from share".
+bool? readSplitChange(String message) {
+  final plain =
+      message.trim().replaceAll("'", '').replaceAll('\u2019', '').toLowerCase();
+  if (plain.isEmpty) return null;
+
+  // Back in first: "share it again" contains "share it", and so does
+  // "dont share it".
+  final backIn = RegExp(
+    r'\b(?:'
+    r'include\s+(?:it|this|that|the)?[a-z ]*\s*(?:in|into)\s+(?:the\s+)?(?:split|share)'
+    r'|add\s+(?:it|this|that)\s+back'
+    r'|put\s+(?:it|this|that)\s+back'
+    r'|back\s+in\s+(?:the\s+)?(?:split|share)'
+    r'|make\s+(?:it|this|that)\s+shared'
+    r'|share\s+(?:it|this|that)\s+again'
+    r'|do\s+share'
+    r')',
+  );
+  if (backIn.hasMatch(plain)) return true;
+
+  final takeOut = RegExp(
+    r'\b(?:'
+    r'exclude'
+    r'|dont\s+share|do\s+not\s+share'
+    r'|(?:remove|take|drop|keep)\s+[a-z0-9 ]{0,24}?\s*(?:out\s+)?'
+    r'(?:from|of)\s+(?:the\s+)?(?:split|share|sharing)'
+    r'|not\s+(?:shared|split)'
+    r'|make\s+[a-z0-9 ]{0,24}?\s*personal'
+    r'|mark\s+[a-z0-9 ]{0,24}?\s*personal'
+    r'|just\s+mine|only\s+mine'
+    r')',
+  );
+  if (takeOut.hasMatch(plain)) return false;
+
+  return null;
 }
 
 /// Matches a spoken name against the people on the trip.

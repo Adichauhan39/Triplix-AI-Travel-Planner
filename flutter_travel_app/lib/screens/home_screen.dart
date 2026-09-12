@@ -15,6 +15,7 @@ import '../services/voice_input_service.dart';
 import '../services/trip_photo_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
+import '../services/expense_columns.dart';
 import '../services/expense_message.dart';
 import '../services/share_link.dart' as sharing;
 import '../services/settle_up.dart';
@@ -6076,7 +6077,7 @@ class BudgetTab extends StatefulWidget {
 ///
 /// The reply is built from this rather than from the model, because the model
 /// cannot see the ledger and was announcing expenses that were never written.
-enum ChatExpense { filed, needsPurpose, notMoney }
+enum ChatExpense { filed, edited, needsPurpose, askedWhich, notMoney }
 
 class _BudgetTabState extends State<BudgetTab>
     with SingleTickerProviderStateMixin {
@@ -6276,6 +6277,10 @@ class _BudgetTabState extends State<BudgetTab>
           // Asked, rather than letting the model answer for a ledger it
           // cannot write to.
           _chatMessages.add({'sender': 'ai', 'message': _askForPurpose()});
+        } else if (outcome == ChatExpense.edited ||
+            outcome == ChatExpense.askedWhich) {
+          // Already answered, from what the ledger did. Adding the model's
+          // version underneath would be two replies disagreeing.
         } else {
           _chatMessages.add({'sender': 'ai', 'message': aiReply});
         }
@@ -6309,6 +6314,9 @@ class _BudgetTabState extends State<BudgetTab>
           });
         } else if (outcome == ChatExpense.needsPurpose) {
           _chatMessages.add({'sender': 'ai', 'message': _askForPurpose()});
+        } else if (outcome == ChatExpense.edited ||
+            outcome == ChatExpense.askedWhich) {
+          // Already answered.
         } else {
           _chatMessages.add({
             'sender': 'ai',
@@ -6360,8 +6368,20 @@ class _BudgetTabState extends State<BudgetTab>
   /// missing half.
   ExpenseDraft? _pendingExpense;
 
+  /// What the chat last said about, so "exclude that" has a referent.
+  String _lastTouched = '';
+
   Future<ChatExpense> _tryParseExpenseFromMessage(String message) async {
     var draft = readExpenseDraft(message);
+
+    // An instruction about an expense that already exists, rather than a new
+    // one. Checked before anything else, because "dont share the dinner"
+    // carries no amount and would otherwise fall through as "not money" --
+    // which is what left the model free to invent having done it.
+    final wants = readSplitChange(message);
+    if (wants != null && !draft.hasAmount) {
+      return _changeSplit(message, shared: wants);
+    }
 
     // The reply to "what was it for?".
     final pending = _pendingExpense;
@@ -6444,6 +6464,83 @@ class _BudgetTabState extends State<BudgetTab>
       shared: spoken.shared,
     );
     return ChatExpense.filed;
+  }
+
+  /// Takes a row out of the split, or puts it back, from a sentence.
+  ///
+  /// The row is found in the ledger rather than parsed out of the words: each
+  /// expense has a note, so the test is whether the message mentions one.
+  /// Nothing mentioned means the one most recently added, which is what
+  /// "that" refers to.
+  Future<ChatExpense> _changeSplit(String message,
+      {required bool shared}) async {
+    final tripId = context.read<TripPlanProvider>().tripId;
+    if (tripId.isEmpty || FirebaseAuth.instance.currentUser == null) {
+      return ChatExpense.notMoney;
+    }
+
+    final rows = await TripSync().expensesOnce(tripId);
+    final live = [for (final r in rows) if (r.status != 'rejected') r];
+    if (live.isEmpty || !mounted) return ChatExpense.notMoney;
+
+    final said = message.toLowerCase();
+    final named = [
+      for (final r in live)
+        if (r.note.trim().isNotEmpty && said.contains(r.note.toLowerCase())) r
+    ];
+
+    TripExpense? target;
+    if (named.length == 1) {
+      target = named.first;
+    } else if (named.length > 1) {
+      // Two rows both named. Asking costs a sentence; guessing moves money.
+      setState(() {
+        _chatMessages.add({
+          'sender': 'ai',
+          'message': 'Which one do you mean — '
+              '${named.map((r) => r.note).join(', ')}?',
+        });
+      });
+      return ChatExpense.askedWhich;
+    } else {
+      // Nothing named, so "that" is the last thing added.
+      target = live.first;
+    }
+
+    if (target.shared == shared) {
+      setState(() {
+        _chatMessages.add({
+          'sender': 'ai',
+          'message': shared
+              ? '"${target!.note}" is already in the split.'
+              : '"${target!.note}" is already out of the split.',
+        });
+      });
+      return ChatExpense.edited;
+    }
+
+    final ok = await TripSync().setShared(
+      tripId: tripId,
+      expenseId: target.id,
+      shared: shared,
+    );
+    if (!mounted) return ChatExpense.edited;
+
+    setState(() {
+      _lastTouched = target!.note;
+      _chatMessages.add({
+        'sender': 'ai',
+        'message': !ok
+            ? 'That could not be saved. Check your connection.'
+            : shared
+                ? 'Put "${target!.note}" back in the split — '
+                    '${formatRupees(target.paise)}, divided between everyone.'
+                : 'Took "${target!.note}" out of the split — '
+                    '${formatRupees(target.paise)}. Nobody else owes a share '
+                    'of it.',
+      });
+    });
+    return ChatExpense.edited;
   }
 
   /// The question to ask when an amount arrived without a purpose.

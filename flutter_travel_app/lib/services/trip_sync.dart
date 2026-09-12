@@ -680,6 +680,26 @@ class TripSync {
     }
   }
 
+  /// The expenses as they stand right now.
+  ///
+  /// A one-off read, for the chat: it needs to find the row somebody just
+  /// referred to, and opening a live stream to answer one sentence would leave
+  /// a listener behind every time.
+  Future<List<TripExpense>> expensesOnce(String tripId) async {
+    if (tripId.isEmpty) return const [];
+    try {
+      final snapshot = await _expensesOf(tripId).get();
+      final rows = snapshot.docs
+          .map((doc) => TripExpense.fromDoc(doc.id, doc.data()))
+          .toList();
+      rows.sort((a, b) => b.at.compareTo(a.at));
+      return rows;
+    } catch (e) {
+      debugPrint('TripSync.expensesOnce failed: $e');
+      return const [];
+    }
+  }
+
   /// Every expense on the trip, newest first, updating live.
   Stream<List<TripExpense>> expenses(String tripId) {
     if (tripId.isEmpty) return const Stream<List<TripExpense>>.empty();
