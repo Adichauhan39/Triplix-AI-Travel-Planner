@@ -1041,9 +1041,27 @@ def render_day_map(day: Dict[str, Any], destination: str, day_number: int,
 
         spoken = times[n] if n < len(times) else ""
         if spoken and n + 1 < len(items) and y <= HEIGHT - 46:
-            draw.text((MARGIN + 34, y - 4), f"↓  {spoken} drive",
-                      font=_font(21), fill=MUTED)
-            y += 30
+            # The arrow is drawn, not typed.
+            #
+            # A downward arrow is U+2193, and the render server's font does
+            # not have it: the first PDF off the deployed container printed a
+            # tofu box, and the fallback font it fell back to also swallowed
+            # the space, so "5 mins drive" came out as "5 minsdrive". Two
+            # lines and a triangle depend on no font at all.
+            ax = MARGIN + 40
+            draw.line([(ax, y - 2), (ax, y + 14)], fill=MUTED, width=2)
+            draw.polygon([(ax - 5, y + 10), (ax + 5, y + 10), (ax, y + 18)],
+                         fill=MUTED)
+            # Two runs at measured positions rather than one string with a
+            # space in it. The font kerns "s" against a following space so
+            # tightly that "23 mins drive" read as "23 minsdrive" on the
+            # rendered page -- which looks like a typo in a document people
+            # send to each other.
+            small = _font(21)
+            draw.text((ax + 18, y - 2), spoken, font=small, fill=MUTED)
+            gap = draw.textlength(spoken, font=small) + 9
+            draw.text((ax + 18 + gap, y - 2), "drive", font=small, fill=MUTED)
+            y += 32
     return canvas
 
 
