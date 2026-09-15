@@ -33,6 +33,22 @@ class ExportJobProvider extends ChangeNotifier {
   /// notification is shown once and not on every rebuild.
   bool _announced = false;
 
+  /// The plan this render was started from.
+  ///
+  /// A finished PDF is a photograph of the plan at the moment it was asked
+  /// for, and nothing about the file says so. Edit a day afterwards and the
+  /// button still reads "your PDF is ready" -- and it hands over a document
+  /// that no longer matches the trip, which is worse than having no PDF at
+  /// all, because it will be sent to other people.
+  String _madeFrom = '';
+
+  /// Whether the file being held was made from a plan that has since changed.
+  bool staleFor(String contentKey) =>
+      _bytes != null &&
+      _madeFrom.isNotEmpty &&
+      contentKey.isNotEmpty &&
+      contentKey != _madeFrom;
+
   String? get jobId => _jobId;
   String get format => _format;
   double get progress => _progress;
@@ -72,7 +88,9 @@ class ExportJobProvider extends ChangeNotifier {
     required String destination,
     required String format,
     bool includePhotos = true,
+    String contentKey = '',
   }) async {
+    _madeFrom = contentKey;
     _format = format;
     _progress = 0;
     _stage = 'Starting';

@@ -180,6 +180,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   Uint8List? get _exportBytes => _job.bytes;
   String _exportFormat = 'pdf';
 
+  /// Drive times per day, for the lines between the stops.
+  ///
+  /// Keyed by day index. A day that is not in here has not been asked for
+  /// yet, and shows no times at all -- which is the right thing to show while
+  /// the answer is unknown: a guess between two places would be believed.
+  final Map<int, DayDrive> _dayDrives = {};
+
+  /// Days already asked about, so a rebuild does not ask again. Holds days
+  /// whose answer was "no route" too, or an unroutable day would be requested
+  /// on every frame for ever.
+  final Set<int> _drivesAsked = {};
+
   @override
   void dispose() {
     _requestController.dispose();
@@ -1011,6 +1023,171 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
   /// and would interrupt a running video render to ask about a change the user
   /// never made. This way the card, the day map, the PDF and the film all show
   /// one order without anything being rewritten behind them.
+  /// Asks how long the drives on one day take, once.
+  ///
+  /// Called while building a day, so only days somebody actually scrolls to
+  /// cost a request. The stops go in the order the day is *shown* in, not the
+  /// order they are stored in: the reply pairs legs to stops by position, and
+  /// sending one order while reading another would put the drive to lunch
+  /// under the wrong place.
+  void _askForDrive(int index, TripPlan plan) {
+    if (_drivesAsked.contains(index)) return;
+
+    final coords = _mapCoords(plan);
+    final located = _locatedInOrder(plan, index, coords);
+    if (located.length < 2) return;
+
+    _drivesAsked.add(index);
+    final stops = [
+      for (final item in located)
+        {'lat': coords[item.title]![0], 'lng': coords[item.title]![1]}
+    ];
+    _adk.tripRoute(stops).then((drive) {
+      if (!mounted || drive == null || drive.isEmpty) return;
+      setState(() => _dayDrives[index] = drive);
+    });
+  }
+
+  /// The day's stops we know where to find, in the order they are shown.
+  List<PlanItem> _locatedInOrder(
+          TripPlan plan, int index, Map<String, List<double>> coords) =>
+      [
+        for (final item in _orderedItems(plan.days[index]))
+          if (coords[item.title] != null) item
+      ];
+
+  /// The drive from one shown stop to the next, when both are on the map and
+  /// they follow each other on screen.
+  ///
+  /// Deliberately silent when an unplaced stop sits between them. The leg the
+  /// route service returns skips that stop, so drawing its time in the gap
+  /// would put a drive under a pair of rows it does not describe.
+  RouteLeg? _legAfter(TripPlan plan, int index, int shownPosition) {
+    final drive = _dayDrives[index];
+    if (drive == null) return null;
+
+    final shown = _orderedItems(plan.days[index]);
+    if (shownPosition + 1 >= shown.length) return null;
+
+    final here = shown[shownPosition];
+    final next = shown[shownPosition + 1];
+    final coords = _mapCoords(plan);
+    if (coords[here.title] == null || coords[next.title] == null) {
+      return null;
+    }
+
+    final located = _locatedInOrder(plan, index, coords);
+    final at = located.indexOf(here);
+    if (at < 0 || at >= drive.legs.length) return null;
+    return drive.legs[at];
+  }
+
+  /// The line between two stops, saying how far apart they are.
+  Widget _legLine(RouteLeg leg) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 26, top: 2, bottom: 2),
+      child: Row(
+        children: [
+          // A short rule standing in for the road, so the number reads as
+          // the gap between two rows rather than as a property of either.
+          Container(width: 2, height: 18, color: Brand.hairline),
+          const SizedBox(width: 10),
+          Icon(Icons.directions_car_filled_outlined,
+              size: 13, color: Brand.faint),
+          const SizedBox(width: 5),
+          Text(
+            leg.distance.isEmpty
+                ? leg.duration
+                : '${leg.duration} · ${leg.distance}',
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Brand.muted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One place in a day, tappable.
+  ///
+  /// Tapping opens the place: photos, rating, reviews, hours and
+  /// where it is -- all from Google for that exact place. A plan that
+  /// only lists names is a list, not something you can travel with.
+  ///
+  /// Lifted out of the day list when the drive times went in between
+  /// the rows: the loop now emits a row and, underneath it, how long
+  /// it takes to reach the next one.
+  Widget _placeRow(
+      TripPlan plan, PlanDay day, int index, PlanItem item) {
+    return InkWell(
+      onTap: () => PlaceDetailSheet.show(
+        context,
+        name: _placeName(item.title),
+        city: plan.destination,
+      ),
+      child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _thumbnail(item.title),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_placeName(item.title),
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600)),
+                _whatYouCanDo(item.title),
+                _subtitleFor(item.title),
+              ],
+            ),
+          ),
+          // Marked, because we haven't checked it exists —
+          // the user's own picks came from real Places
+          // results, a suggested one did not.
+          if (item.addedByAssistant)
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Brand.fill,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text('suggested',
+                  style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.amber.shade900)),
+            ),
+          const SizedBox(width: 4),
+          // Edits live behind a menu rather than a swipe:
+          // a swipe that deletes is easy to trigger by
+          // accident while scrolling a long trip.
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert,
+                size: 18, color: Brand.faint),
+            tooltip: 'Change this place',
+            onSelected: (choice) => _editItem(
+                plan, index, day.items.indexOf(item), choice),
+            itemBuilder: (_) => [
+              for (var d = 0; d < plan.days.length; d++)
+                if (d != index)
+                  PopupMenuItem(
+                      value: 'move:$d',
+                      child: Text('Move to Day ${d + 1}')),
+              const PopupMenuItem(
+                  value: 'remove', child: Text('Remove')),
+            ],
+          ),
+        ],
+      ),
+    ),
+    );
+  }
   List<PlanItem> _orderedItems(PlanDay day) {
     final notes = _schedules[day.date.toIso8601String().split('T').first] ??
         const <String>[];
@@ -1218,6 +1395,10 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
           days: days,
           destination: plan.destination,
           format: format,
+          // Remembered so the finished file can say whether it still matches
+          // the plan. Without it a PDF made before an edit keeps offering
+          // itself as if it were current.
+          contentKey: context.read<TripPlanProvider>().contentKey,
         );
   }
 
@@ -1640,7 +1821,7 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   ),
                 _strayBookings(plan, booked),
                 Expanded(child: _buildDays(plan, booked)),
-                _buildRequestBar(),
+                _buildRequestBar(plan, booked),
               ],
             ),
     ),
@@ -1706,6 +1887,18 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
         }
         final index = rawIndex - (_summariesFailed ? 1 : 0);
         final day = plan.days[index];
+
+        // Asked for here rather than up front: twelve days would be twelve
+        // Directions requests for a trip somebody may only look at the first
+        // two days of. After the frame, because it can call setState.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _askForDrive(index, plan);
+        });
+
+        // Read once per day rather than per row: the running order is
+        // recomputed from the day's notes each time it is asked for.
+        final shown = _orderedItems(day);
+
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           elevation: 0,
@@ -1793,78 +1986,22 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
                   // Ordered by the running order, so the list reads as the
                   // shape of the day. Edits still resolve through
                   // day.items.indexOf below, which is the real position.
-                  for (final item in _orderedItems(day))
-                    // Tappable: a plan that only lists names is a list, not
-                    // something you can travel with. Opening a place shows
-                    // its photos, rating, reviews, hours and map position -
-                    // all from Google for that specific place.
-                    InkWell(
-                      onTap: () => PlaceDetailSheet.show(
-                        context,
-                        name: _placeName(item.title),
-                        city: plan.destination,
-                      ),
-                      child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(
+                  for (var shownAt = 0; shownAt < shown.length; shownAt++)
+                    Builder(builder: (context) {
+                      final item = shown[shownAt];
+                      final leg = _legAfter(plan, index, shownAt);
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _thumbnail(item.title),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(_placeName(item.title),
-                                    style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600)),
-                                _whatYouCanDo(item.title),
-                                _subtitleFor(item.title),
-                              ],
-                            ),
-                          ),
-                          // Marked, because we haven't checked it exists —
-                          // the user's own picks came from real Places
-                          // results, a suggested one did not.
-                          if (item.addedByAssistant)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Brand.fill,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text('suggested',
-                                  style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.amber.shade900)),
-                            ),
-                          const SizedBox(width: 4),
-                          // Edits live behind a menu rather than a swipe:
-                          // a swipe that deletes is easy to trigger by
-                          // accident while scrolling a long trip.
-                          PopupMenuButton<String>(
-                            icon: Icon(Icons.more_vert,
-                                size: 18, color: Brand.faint),
-                            tooltip: 'Change this place',
-                            onSelected: (choice) => _editItem(
-                                plan, index, day.items.indexOf(item), choice),
-                            itemBuilder: (_) => [
-                              for (var d = 0; d < plan.days.length; d++)
-                                if (d != index)
-                                  PopupMenuItem(
-                                      value: 'move:$d',
-                                      child: Text('Move to Day ${d + 1}')),
-                              const PopupMenuItem(
-                                  value: 'remove', child: Text('Remove')),
-                            ],
-                          ),
+                          _placeRow(plan, day, index, item),
+                          // How long it takes to get to the next one. The
+                          // thing a list of names cannot tell you, and the
+                          // thing that decides whether a day is possible.
+                          if (leg != null) _legLine(leg),
                         ],
-                      ),
-                    ),
-                    ),
-
+                      );
+                    }),
                 // Two or more stops with known positions make a route worth
                 // opening; one stop is just a pin, and the place sheet
                 // already offers that.
@@ -3221,7 +3358,11 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
     return null;
   }
 
-  Widget _buildRequestBar() {
+  Widget _buildRequestBar(TripPlan? plan, BookedTripProvider booked) {
+    // Read here rather than passed down: this is the only part of the bar
+    // that cares, and threading it through every caller would put the
+    // export's business in the day list's signature.
+    final planProvider = context.watch<TripPlanProvider>();
     return Container(
       padding: EdgeInsets.only(
         left: 12,
@@ -3278,23 +3419,71 @@ class _TripPlanScreenState extends State<TripPlanScreen> {
             ),
 
           // Shown until tapped: the second gesture the browser requires.
-          if (_exportBytes != null)
+          if (_exportBytes != null) ...[
+            if (_job.staleFor(planProvider.contentKey))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.history_toggle_off,
+                        size: 15, color: Brand.caution),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Your plan changed after this '
+                        '${_exportFormat.toUpperCase()} was made, so it no '
+                        'longer matches the trip.',
+                        style: const TextStyle(
+                            fontSize: 11, color: Brand.caution),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: _shareBuiltFile,
-                  icon: const Icon(Icons.ios_share, size: 18),
-                  label: Text('Your ${_exportFormat.toUpperCase()} is ready — '
-                      'tap to share or save'),
+                  // Rebuilding is offered instead of sharing, not beside it.
+                  // The stale file is still there if they want it -- the
+                  // build takes a couple of minutes -- but the obvious tap
+                  // should be the one that gives them a document matching
+                  // their trip.
+                  onPressed: _job.staleFor(planProvider.contentKey) &&
+                          plan != null
+                      ? () => _sharePlan(plan, booked, _exportFormat)
+                      : _shareBuiltFile,
+                  icon: Icon(
+                      _job.staleFor(planProvider.contentKey)
+                          ? Icons.refresh
+                          : Icons.ios_share,
+                      size: 18),
+                  label: Text(_job.staleFor(planProvider.contentKey)
+                      ? 'Make a new ${_exportFormat.toUpperCase()} with your '
+                          'changes'
+                      : 'Your ${_exportFormat.toUpperCase()} is ready — '
+                          'tap to share or save'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Brand.teal,
+                    backgroundColor: _job.staleFor(planProvider.contentKey)
+                        ? Brand.sun
+                        : Brand.teal,
                     foregroundColor: Colors.white,
                   ),
                 ),
               ),
             ),
+            if (_job.staleFor(planProvider.contentKey))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: TextButton(
+                  onPressed: _shareBuiltFile,
+                  child: Text(
+                      'Share the old one anyway',
+                      style: TextStyle(fontSize: 12, color: Brand.muted)),
+                ),
+              ),
+          ],
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),

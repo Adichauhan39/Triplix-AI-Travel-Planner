@@ -462,6 +462,11 @@ def fetch_route(points, api_key: str):
     the journey one hop at a time -- it drives to a stop, arrives, and cuts to
     that place before setting off again.
 
+    Each leg also carries how long Google says it takes, in its own words --
+    "41 mins". The film has always had this in the reply and thrown it away,
+    while the number is the one thing a map of pins cannot show: two stops a
+    centimetre apart on screen can be an hour apart on the road.
+
     Returns None when the route cannot be had; the caller then falls back to
     straight lines rather than losing the map shot entirely.
     """
@@ -490,16 +495,18 @@ def fetch_route(points, api_key: str):
 
     route = resp["routes"][0]
     legs = []
+    spoken = []
     for leg in route.get("legs", []):
         shape = []
         for step in leg.get("steps", []):
             shape.extend(
                 _decode_polyline((step.get("polyline") or {}).get("points", "")))
         legs.append(shape)
+        spoken.append((leg.get("duration") or {}).get("text") or "")
     overview = (route.get("overview_polyline") or {}).get("points", "")
     if not overview or not any(legs):
         return None
-    return overview, legs
+    return overview, legs, spoken
 
 
 def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
@@ -537,8 +544,9 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
     # coordinates, which as raw pairs would blow past the length a static map
     # request accepts.
     routed = fetch_route(points, api_key)
+    times = None
     if routed is not None:
-        overview, legs = routed
+        overview, legs, times = routed
         path = ("&path=color:0x0d0d82c0%7Cweight:6%7Cenc:"
                 + quote(overview, safe=""))
     else:
@@ -612,11 +620,112 @@ def fetch_day_map(points, api_key: str, size=(FILM_WIDTH, FILM_HEIGHT)):
         # the car still animates and the shot is unchanged from before.
         leg_pixels = [[pixels[i], pixels[i + 1]]
                       for i in range(len(pixels) - 1)]
-    return canvas, pixels, leg_pixels
+    return canvas, pixels, leg_pixels, times or []
+
+
+# The car, drawn once per size and kept.
+#
+# Rebuilding it per frame would redraw the same twelve polygons twenty-five
+# times a second for no difference on screen.
+_car_cache: Dict[int, Image.Image] = {}
+
+
+def car_sprite(length: int = 104) -> Image.Image:
+    """A side-on car, nose pointing right, on a transparent background.
+
+    Right rather than any other direction because that is zero degrees: the
+    caller rotates by the heading, and a sprite that started out pointing
+    somewhere else would need that offset remembered at every call site.
+
+    Deliberately a silhouette. At the size this appears on a map -- about a
+    centimetre -- panel lines and mirrors turn to mush, while a clean outline
+    still reads as a car at a glance and, more to the point, still reads as a
+    car pointing *somewhere*.
+    """
+    cached = _car_cache.get(length)
+    if cached is not None:
+        return cached
+
+    # Drawn large and shrunk, so the curves come out smooth rather than
+    # stepped: there is no anti-aliased polygon in PIL, and this is the usual
+    # way round that.
+    scale = 4
+    w = length * scale
+    h = int(length * 0.46) * scale
+    sprite = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(sprite)
+
+    def at(fx, fy):
+        return (fx * w, fy * h)
+
+    body = (18, 18, 22, 255)
+    rim = (255, 255, 255, 255)
+
+    # The cabin: windscreen raked forward, roof, rear screen. Drawn before
+    # the lower body so the body's own outline closes the bottom of it.
+    cabin = [
+        at(0.30, 0.44), at(0.40, 0.14), at(0.62, 0.12),
+        at(0.76, 0.44),
+    ]
+    draw.polygon(cabin, fill=body, outline=rim)
+    draw.line(cabin + [cabin[0]], fill=rim, width=3 * scale, joint="curve")
+
+    # The lower body, nose slightly lower than the tail the way a saloon sits.
+    draw.rounded_rectangle(
+        [at(0.03, 0.42)[0], at(0.03, 0.42)[1],
+         at(0.97, 0.74)[0], at(0.97, 0.74)[1]],
+        radius=0.09 * h, fill=body, outline=rim, width=3 * scale)
+
+    # Wheels, sitting proud of the body so the car has ground under it.
+    for cx in (0.26, 0.74):
+        r = 0.20 * h
+        cy = 0.74 * h
+        draw.ellipse([cx * w - r, cy - r, cx * w + r, cy + r],
+                     fill=body, outline=rim, width=3 * scale)
+        hub = r * 0.38
+        draw.ellipse([cx * w - hub, cy - hub, cx * w + hub, cy + hub],
+                     fill=rim)
+
+    sprite = sprite.resize((length, int(length * 0.46)), Image.LANCZOS)
+    _car_cache[length] = sprite
+    return sprite
+
+
+def _heading_degrees(a, b) -> float:
+    """The compass angle from point [a] to [b], in PIL's rotation convention.
+
+    Screen coordinates count y downwards while rotation counts angles
+    anticlockwise, so the y difference is negated -- without which every car
+    would lean the wrong way on exactly half the map.
+    """
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    if dx == 0 and dy == 0:
+        return 0.0
+    return math.degrees(math.atan2(-dy, dx))
+
+
+def paste_car(frame: Image.Image, x: float, y: float, heading: float,
+              length: int = 104) -> None:
+    """Puts the car on the map at (x, y), pointing along [heading]."""
+    sprite = car_sprite(length)
+
+    # Mirrored rather than rotated past vertical. Turning a side-on car
+    # through 150 degrees leaves it driving along on its roof; flipping it and
+    # rotating by the opposite angle keeps the wheels underneath, which is
+    # what every map that draws a vehicle does.
+    if abs(heading) > 90:
+        sprite = sprite.transpose(Image.FLIP_LEFT_RIGHT)
+        heading = heading - 180 if heading > 0 else heading + 180
+
+    turned = sprite.rotate(heading, expand=True, resample=Image.BICUBIC)
+    frame.paste(turned,
+                (int(x - turned.width / 2), int(y - turned.height / 2)),
+                turned)
 
 
 def render_car(base: Image.Image, pixels, roads, progress: float,
-               day_number: int, heading: str = "") -> Image.Image:
+               day_number: int, heading: str = "", times=None) -> Image.Image:
     """The map with the car placed along the route at [progress].
 
     Travels leg by leg at a constant share of the journey per leg, so a day
@@ -681,10 +790,25 @@ def render_car(base: Image.Image, pixels, roads, progress: float,
         draw.ellipse([x1 - ring, y1 - ring, x1 + ring, y1 + ring],
                      outline=(214, 45, 32, fade), width=6)
 
-    r = 26
-    draw.ellipse([x - r, y - r, x + r, y + r], fill=(214, 45, 32),
-                 outline=(255, 255, 255), width=5)
-    draw.ellipse([x - 8, y - 8, x + 8, y + 8], fill=(255, 255, 255))
+    # Which way it is pointing: the direction of the piece of road it is on.
+    #
+    # Taken from the last stretch actually walked rather than from the leg's
+    # two endpoints, so the car turns through a bend with the road instead of
+    # holding the average bearing across it.
+    ahead = walked[-1]
+    behind = walked[-2] if len(walked) > 1 else shape[0]
+    if math.dist(ahead, behind) < 1.0 and len(walked) > 2:
+        behind = walked[-3]
+    # `facing`, not `heading`: this function's `heading` argument is the name
+    # of the stop being driven to, and shadowing it put a float where the
+    # label was expected.
+    facing = _heading_degrees(behind, ahead)
+
+    # Sized for a reel watched on a phone. The marker this replaces was 52px
+    # across on a 1080-wide frame, which was already small; a car has to read
+    # as a shape rather than a dot, and detail it cannot show is detail worth
+    # not drawing.
+    paste_car(frame, x, y, facing, length=164)
 
     draw.rectangle([0, 0, FILM_WIDTH, 96], fill=(13, 13, 130))
     draw.text((MARGIN, 30), f"DAY {day_number}  ·  ON THE ROAD",
@@ -703,6 +827,22 @@ def render_car(base: Image.Image, pixels, roads, progress: float,
         name = heading if len(heading) <= 26 else heading[:25].rstrip() + "…"
         draw.text((MARGIN, band + 66), name,
                   font=_font(40, bold=True), fill=(255, 255, 255))
+
+        # How long this hop takes, on the right of the band.
+        #
+        # Google's own wording rather than a number formatted here: "41 mins"
+        # and "1 hour 5 mins" are what the same service tells the traveller
+        # everywhere else, and inventing a second phrasing for the same fact
+        # invites the two to disagree.
+        spoken = times[leg] if times and leg < len(times) else ""
+        if spoken:
+            width = draw.textlength(spoken, font=_font(34, bold=True))
+            draw.text((FILM_WIDTH - MARGIN - width, band + 62), spoken,
+                      font=_font(34, bold=True), fill=(255, 255, 255))
+            label = "DRIVE"
+            label_width = draw.textlength(label, font=_font(22))
+            draw.text((FILM_WIDTH - MARGIN - label_width, band + 30), label,
+                      font=_font(22), fill=(150, 152, 220))
     return frame
 
 
@@ -802,7 +942,7 @@ def render_film(days: List[Dict[str, Any]], destination: str,
             carried = (mapped[-1]["lat"], mapped[-1]["lng"])
 
         if drawn is not None:
-            base, pixels, roads = drawn
+            base, pixels, roads, drive_times = drawn
             # The lead-in occupies the first pin and the first leg, so today's
             # own stops start one along.
             offset = len(lead_in)
@@ -824,9 +964,11 @@ def render_film(days: List[Dict[str, Any]], destination: str,
                     # the car, not the camera.
                     "animate": (
                         lambda p, b=base, px=pixels, rd=roads, d=i + 1, s=span,
-                        h=str(item.get("title") or item.get("name") or ""):
+                        h=str(item.get("title") or item.get("name") or ""),
+                        t=drive_times:
                         render_car(b, px, rd,
-                                   s[0] + (s[1] - s[0]) * _ease(p), d, h)
+                                   s[0] + (s[1] - s[0]) * _ease(p), d, h,
+                                   times=t)
                     ),
                 })
                 shots.extend(photo_shots(item))
@@ -882,6 +1024,13 @@ def render_day_map(day: Dict[str, Any], destination: str, day_number: int,
 
     canvas.paste(board, ((WIDTH - board.width) // 2, 252))
 
+    # The key, with the drive between each pair of stops.
+    #
+    # A numbered list beside a map says where the day goes and nothing about
+    # what it costs to get round it -- and two pins a centimetre apart can be
+    # an hour apart on the road. Google's own wording, so the PDF, the app and
+    # the film all say "41 mins" rather than three roundings of one number.
+    times = drawn[3] if len(drawn) > 3 else []
     y = 252 + board.height + 26
     for n, item in enumerate(items):
         if y > HEIGHT - 46:
@@ -889,6 +1038,12 @@ def render_day_map(day: Dict[str, Any], destination: str, day_number: int,
         label = f"{n + 1}.  {str(item.get('title', ''))[:46]}"
         draw.text((MARGIN, y), label, font=_font(26), fill=INK)
         y += 36
+
+        spoken = times[n] if n < len(times) else ""
+        if spoken and n + 1 < len(items) and y <= HEIGHT - 46:
+            draw.text((MARGIN + 34, y - 4), f"↓  {spoken} drive",
+                      font=_font(21), fill=MUTED)
+            y += 30
     return canvas
 
 
