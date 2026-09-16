@@ -2,13 +2,19 @@ import 'package:flutter/material.dart';
 
 /// The Triplix mark: a teal pin with an orange sun on it.
 ///
-/// Drawn rather than loaded. The asset it used to show,
-/// `assets/images/triplix_sticker.png`, has a transparency checkerboard baked
-/// into it as opaque grey squares -- a picture *of* transparency -- so the mark
-/// carried a chequered box behind it on every screen it appeared on. It cannot
-/// be cleaned reliably either: the pin's white rim is the same white as the
-/// checker squares, so removing the background by colour eats the rim, and
-/// removing it by flood fill leaves a grey fringe that shows badly on paper.
+/// The real artwork, not a drawing of it.
+///
+/// This was briefly a hand-drawn path. `triplix_sticker.png` has a
+/// transparency checkerboard baked into it as opaque grey squares -- a picture
+/// *of* transparency -- so it carried a chequered box behind the mark on every
+/// screen, and it cannot be cleaned by colour because the pin's white rim is
+/// the same white as the checker squares.
+///
+/// Redrawing it was the wrong answer to that. `triplix (1).png` was sitting in
+/// the same folder with proper transparency all along, and a path traced by
+/// eye is not the logo however close it looks -- the head was narrower and the
+/// point blunter than the real mark, which is exactly the kind of drift a
+/// brand cannot afford. The clean file is now used directly.
 ///
 /// Drawing it also fixes the thing an image could never fix: it is crisp at 20
 /// pixels and at 200, and its colours are the brand's constants rather than
@@ -37,8 +43,10 @@ class TriplixLogo extends StatelessWidget {
   /// subject, and a subject wants to sit above the paper rather than in it.
   final bool lifted;
 
-  /// Still referenced by the launcher-icon configuration in pubspec.yaml.
-  static const String assetPath = 'assets/images/triplix_sticker.png';
+  /// The mark itself. The launcher-icon configuration in pubspec.yaml still
+  /// points at the sticker, which is correct: a launcher icon is composited
+  /// onto its own opaque tile, so the baked checkerboard never shows there.
+  static const String assetPath = 'assets/images/triplix_logo.png';
 
   final double size;
   final EdgeInsetsGeometry padding;
@@ -55,7 +63,19 @@ class TriplixLogo extends StatelessWidget {
     final Widget mark = SizedBox(
       width: size,
       height: size,
-      child: CustomPaint(painter: _PinPainter(lifted: lifted)),
+      child: Image.asset(
+        assetPath,
+        width: size,
+        height: size,
+        // Contain, never cover: the artwork is a pin on a transparent square,
+        // and cropping it cuts the point off.
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+        // If the asset ever goes missing the app shows the mark drawn rather
+        // than a broken-image box.
+        errorBuilder: (_, __, ___) =>
+            CustomPaint(painter: _PinPainter(lifted: lifted)),
+      ),
     );
 
     // No clipping. The old widget clipped a square photograph into a circle;

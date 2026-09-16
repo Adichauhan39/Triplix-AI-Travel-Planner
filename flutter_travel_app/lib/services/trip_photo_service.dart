@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import 'image_shrink.dart';
+import 'python_adk_service.dart';
 import 'trip_photos.dart';
 
 /// Manages trip photos: capture, store, AI-filter, and reel generation.
@@ -66,6 +67,7 @@ class TripPhotoService extends ChangeNotifier {
         timeFromPhoto: row.takenAt != null,
         lat: row.lat,
         lng: row.lng,
+        place: row.place,
         status: _statusOf(row.verdict),
         qualityScore: row.score,
         aiCaption: row.caption,
@@ -177,6 +179,19 @@ class TripPhotoService extends ChangeNotifier {
       // Checked first, then saved with its verdict, so a photo never sits in
       // the trip as "approved" before anything has looked at it.
       await _analyzePhoto(photo);
+
+      // And where it was taken, if it knows. Resolved now rather than when a
+      // film is made, so it is on screen while somebody can still look at it
+      // and say it is wrong.
+      if (origin.lat != null && origin.lng != null) {
+        final nearby = await PythonADKService()
+            .placesAt(origin.lat!, origin.lng!);
+        if (nearby.isNotEmpty) {
+          photo.place = nearby.first;
+          notifyListeners();
+        }
+      }
+
       await _persist(photo, small, origin);
       return photo;
     } catch (e) {
@@ -197,6 +212,7 @@ class TripPhotoService extends ChangeNotifier {
       score: photo.qualityScore,
       caption: photo.aiCaption,
       reason: photo.rejectionReason,
+      place: photo.place,
     );
     // The stored id replaces the local one, so a later verdict change or
     // delete addresses the document that actually exists.
@@ -272,6 +288,31 @@ class TripPhotoService extends ChangeNotifier {
     }
     _isAnalyzing = false;
     notifyListeners();
+  }
+
+  /// Corrects where a photo was taken.
+  ///
+  /// An empty string clears it, which is the right answer when the lookup
+  /// named somewhere the traveller knows they were not: no place at all beats
+  /// the wrong one under a picture in a film they are about to send.
+  Future<void> setPlace(String photoId, String place) async {
+    final photo = _photos.where((p) => p.id == photoId).firstOrNull;
+    if (photo == null) return;
+    photo.place = place.trim();
+    notifyListeners();
+
+    final stored = photo.storedId;
+    if (canSave && stored != null) {
+      await _store.setPlace(
+          tripId: _tripId, photoId: stored, place: photo.place);
+    }
+  }
+
+  /// The places near a photo, for offering alternatives to a wrong one.
+  Future<List<String>> placesNear(String photoId) async {
+    final photo = _photos.where((p) => p.id == photoId).firstOrNull;
+    if (photo?.lat == null || photo?.lng == null) return const [];
+    return PythonADKService().placesAt(photo!.lat!, photo.lng!);
   }
 
   /// Asks the checker to look at a photo again.
@@ -485,6 +526,10 @@ class TripPhoto {
   String aiCaption;
   String rejectionReason;
 
+  /// Where it was taken, in words: looked up from the position, then
+  /// whatever the traveller corrects it to.
+  String place = '';
+
   /// Where the photograph was taken, when it knows.
   ///
   /// Null for anything that arrived through a sharing app -- they strip the
@@ -524,5 +569,6 @@ class TripPhoto {
     this.timeFromPhoto = false,
     this.lat,
     this.lng,
+    this.place = '',
   });
 }

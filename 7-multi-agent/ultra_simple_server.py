@@ -4062,24 +4062,29 @@ def export_itinerary(request: dict):
 # Four decimal places is about eleven metres, so every photograph taken inside
 # one building shares an entry: a reel of twenty pictures from three stops
 # costs three lookups, not twenty.
-_place_at_cache: Dict[str, str] = {}
+_place_at_cache: Dict[str, List[str]] = {}
 
 
-def _place_at(lat: float, lng: float) -> str:
-    """The name of the notable place at a position, or "" when there is none.
+def _places_at(lat: float, lng: float) -> List[str]:
+    """Notable places near a position, nearest first.
 
-    Empty rather than a guess. A photograph captioned with somewhere it was
+    A list rather than one answer, because the nearest is only a guess: phone
+    GPS drifts by tens of metres, and the landmark it lands on can be the one
+    next door. The app offers these so somebody can pick the right one, and
+    the first is used until they do.
+
+    Empty when nothing is near. A photograph captioned with somewhere it was
     not taken is worse than one captioned with nothing, and this goes into a
     film people send to each other.
     """
     # The Places key, which is what _google_headers actually sends -- guarding
     # on the other one would let a request go out with no key at all.
     if not GOOGLE_PLACES_API_KEY:
-        return ""
+        return []
     try:
         key = f"{round(float(lat), 4)},{round(float(lng), 4)}"
     except (TypeError, ValueError):
-        return ""
+        return []
     if key in _place_at_cache:
         return _place_at_cache[key]
 
@@ -4116,15 +4121,22 @@ def _place_at(lat: float, lng: float) -> str:
         ).json()
     except Exception as e:
         print(f"[REEL] place lookup failed: {e}")
-        return ""
+        return []
 
-    places = resp.get("places") or []
-    name = ""
-    if places:
-        name = ((places[0].get("displayName") or {}).get("text") or "").strip()
+    names = []
+    for place in (resp.get("places") or []):
+        name = ((place.get("displayName") or {}).get("text") or "").strip()
+        if name and name not in names:
+            names.append(name)
 
-    _place_at_cache[key] = name
-    return name
+    _place_at_cache[key] = names
+    return names
+
+
+def _place_at(lat: float, lng: float) -> str:
+    """The likeliest place at a position, or "" -- the nearest of the above."""
+    names = _places_at(lat, lng)
+    return names[0] if names else ""
 
 
 def _render_reel(photos, destination, progress=None):
@@ -4219,6 +4231,26 @@ def _run_reel_job(job_id: str, photos, destination):
             job = _export_jobs.get(job_id)
             if job is not None:
                 job.update(state="error", message=str(e), stage="")
+
+
+@app.post("/api/place/at")
+def place_at(request: dict):
+    """What is at a position, nearest first.
+
+    Asked by the app when a photograph is added, so the place is on screen
+    while somebody can still look at it and say it is wrong -- resolving it
+    only at render time meant the first anybody saw of a wrong name was in a
+    finished film.
+    """
+    try:
+        lat = request.get("lat")
+        lng = request.get("lng")
+        if lat is None or lng is None:
+            return {"status": "success", "places": []}
+        return {"status": "success", "places": _places_at(lat, lng)}
+    except Exception as e:
+        print(f"[PLACE AT] {e}")
+        return {"status": "error", "message": str(e), "places": []}
 
 
 @app.post("/api/reel/export")

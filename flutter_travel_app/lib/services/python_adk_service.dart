@@ -620,6 +620,32 @@ class PythonADKService {
     }
   }
 
+  /// What is near a position, nearest first.
+  ///
+  /// Asked when a photograph is added, so its place can be shown while
+  /// somebody can still correct it. Several answers rather than one, because
+  /// the nearest is only a guess and the right one is often second.
+  Future<List<String>> placesAt(double lat, double lng) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/place/at'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'lat': lat, 'lng': lng}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) return const [];
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      return [
+        for (final name in (body['places'] as List?) ?? const [])
+          name.toString()
+      ];
+    } catch (e) {
+      debugPrint('placesAt failed: $e');
+      return const [];
+    }
+  }
+
   /// Queues a reel of the traveller's own photographs.
   ///
   /// The photographs travel in the request. The server has no database

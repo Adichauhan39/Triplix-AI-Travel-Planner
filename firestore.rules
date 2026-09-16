@@ -336,7 +336,11 @@ service cloud.firestore {
           && request.resource.data.by == resource.data.by
           && request.resource.data.verdict in
                ['approved', 'rejected', 'waiting', 'unchecked']
-          && changed().hasOnly(['verdict', 'reason', 'caption', 'score']);
+          // 'place' too: a lookup from a photograph's coordinates is a
+          // guess, and the traveller correcting it is the whole point of
+          // showing it to them.
+          && changed().hasOnly(
+               ['verdict', 'reason', 'caption', 'score', 'place']);
 
         allow delete: if signedIn()
           && (resource.data.by == request.auth.uid || tripOwner());

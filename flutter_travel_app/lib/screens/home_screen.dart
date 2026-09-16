@@ -7373,6 +7373,119 @@ class _ProfileTabState extends State<ProfileTab> {
     setState(() => _isLoadingDemo = false);
   }
 
+  /// Where a photo was taken, and correcting it.
+  ///
+  /// A lookup from coordinates is a guess: phone GPS drifts by tens of
+  /// metres, so the landmark it lands on can be the one across the road. This
+  /// offers the others that were nearby, lets somebody type their own, and
+  /// lets them clear it -- no place at all is better than the wrong one under
+  /// a picture in a film they are about to send.
+  ///
+  /// Typing is also the only way a photo with no coordinates gets a place,
+  /// which is most of them once a picture has been through a sharing app.
+  Future<void> _editPlace(TripPhoto photo) async {
+    final nearby = await _photoService.placesNear(photo.id);
+    if (!mounted) return;
+
+    final typed = TextEditingController(text: photo.place);
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 2),
+                child: Text('Where was this taken?',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: Text(
+                  photo.hasPlace
+                      ? 'We guessed from the photo. Phones are only accurate '
+                          'to a few dozen metres, so it can be the place next '
+                          'door.'
+                      : 'This photo has no location in it, so type where you '
+                          'were.',
+                  style:
+                      TextStyle(fontSize: 12, color: AppConfig.textSecondary),
+                ),
+              ),
+              for (final name in nearby.take(5))
+                ListTile(
+                  dense: true,
+                  leading: Icon(
+                      name == photo.place
+                          ? Icons.check_circle
+                          : Icons.place_outlined,
+                      color: name == photo.place
+                          ? AppConfig.successColor
+                          : AppConfig.primaryColor),
+                  title: Text(name),
+                  onTap: () => Navigator.pop(sheetContext, name),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                child: TextField(
+                  controller: typed,
+                  decoration: const InputDecoration(
+                    labelText: 'Or type it yourself',
+                    hintText: 'Nahargarh Fort',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onSubmitted: (v) => Navigator.pop(sheetContext, v.trim()),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                child: Row(
+                  children: [
+                    TextButton(
+                      // An empty answer, meaning "say nothing", which is a
+                      // real choice rather than a cancel.
+                      onPressed: () => Navigator.pop(sheetContext, ''),
+                      child: const Text('No place'),
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 4),
+                    ElevatedButton(
+                      onPressed: () =>
+                          Navigator.pop(sheetContext, typed.text.trim()),
+                      child: const Text('Save'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    typed.dispose();
+    if (chosen == null || !mounted) return;
+
+    await _photoService.setPlace(photo.id, chosen);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(chosen.isEmpty
+          ? 'Cleared. This photo will not name a place.'
+          : 'Saved: $chosen'),
+    ));
+  }
+
   /// What to do with a photo the checker could not judge.
   ///
   /// Three answers, in the order they are worth trying. Checking again first,
@@ -7502,6 +7615,11 @@ class _ProfileTabState extends State<ProfileTab> {
         // resolved here: the key lives there, the answers cache across every
         // traveller, and a phone would otherwise make a billed lookup per
         // photograph on a connection it may not have.
+        // Whatever it says now, which is the lookup unless somebody
+        // corrected it. Sent as 'where', which the server prefers over its
+        // own lookup -- a person who has typed a place knows better than a
+        // circle drawn round a coordinate.
+        if (photo.place.isNotEmpty) 'where': photo.place,
         if (photo.lat != null) 'lat': photo.lat,
         if (photo.lng != null) 'lng': photo.lng,
       });
@@ -8116,6 +8234,22 @@ class _ProfileTabState extends State<ProfileTab> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Where it was taken, above the destructive one. A lookup
+              // from coordinates is a guess, so this is where somebody puts
+              // it right.
+              ListTile(
+                leading: Icon(Icons.place_outlined,
+                    color: AppConfig.primaryColor),
+                title: Text(photo.place.isEmpty
+                    ? 'Set where it was taken'
+                    : 'Where: ${photo.place}'),
+                subtitle: const Text('Tap to correct it',
+                    style: TextStyle(fontSize: 11)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _editPlace(photo);
+                },
+              ),
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
                 title: const Text('Delete Photo'),

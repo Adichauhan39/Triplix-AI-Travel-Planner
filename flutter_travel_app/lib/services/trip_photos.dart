@@ -56,6 +56,7 @@ class ReelPhoto {
     this.lng,
     this.bytes = 0,
     this.thumb,
+    this.place = '',
   });
 
   factory ReelPhoto.fromDoc(
@@ -75,6 +76,7 @@ class ReelPhoto {
       lng: (data['lng'] as num?)?.toDouble(),
       bytes: (data['bytes'] as num?)?.round() ?? 0,
       thumb: _decodeThumb(data['thumb']),
+      place: (data['place'] ?? '').toString(),
     );
   }
 
@@ -105,6 +107,15 @@ class ReelPhoto {
   final double? lng;
 
   final int bytes;
+
+  /// Where this was taken, in words.
+  ///
+  /// Worked out from the coordinates when the photo is added, and editable
+  /// afterwards -- a lookup is a guess. Phone GPS drifts by tens of metres,
+  /// so the nearest landmark can be the one next door, and the traveller is
+  /// the only one who actually knows. Also the way a photo with no
+  /// coordinates at all gets a place: they type it.
+  final String place;
 
   /// A small copy, carried with the metadata.
   ///
@@ -285,6 +296,7 @@ class TripPhotoStore {
     String caption = '',
     String reason = '',
     String category = 'other',
+    String place = '',
   }) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null || tripId.isEmpty || shrunk.isEmpty) return null;
@@ -309,6 +321,7 @@ class TripPhotoStore {
         'caption': caption,
         'reason': reason,
         'category': category,
+        if (place.isNotEmpty) 'place': place,
         'bytes': shrunk.length,
         if (origin.takenAt != null)
           'taken_at': Timestamp.fromDate(origin.takenAt!),
@@ -341,6 +354,25 @@ class TripPhotoStore {
       return true;
     } catch (e) {
       debugPrint('TripPhotoStore.setVerdict failed: $e');
+      return false;
+    }
+  }
+
+  /// Corrects where a photo was taken.
+  ///
+  /// An empty string clears it, which is the right answer when the lookup
+  /// named somewhere the traveller knows they were not.
+  Future<bool> setPlace({
+    required String tripId,
+    required String photoId,
+    required String place,
+  }) async {
+    if (tripId.isEmpty || photoId.isEmpty) return false;
+    try {
+      await _photosOf(tripId).doc(photoId).update({'place': place.trim()});
+      return true;
+    } catch (e) {
+      debugPrint('TripPhotoStore.setPlace failed: $e');
       return false;
     }
   }
