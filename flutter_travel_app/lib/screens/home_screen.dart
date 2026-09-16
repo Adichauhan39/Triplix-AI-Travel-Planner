@@ -7323,6 +7323,13 @@ class _ProfileTabState extends State<ProfileTab> {
   void initState() {
     super.initState();
     _photoService.addListener(_onPhotoUpdate);
+    // Pointed at the current trip, so the photos are that trip's and survive
+    // a refresh. After the frame, because reading a provider in initState is
+    // not allowed and this loads from the network anyway.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _photoService.bindTrip(context.read<TripPlanProvider>().tripId);
+    });
   }
 
   @override
@@ -7335,11 +7342,26 @@ class _ProfileTabState extends State<ProfileTab> {
     if (mounted) setState(() {});
   }
 
+  /// Whether there is a trip to keep photos against.
+  ///
+  /// Without one they would be collected, checked at the cost of a model call
+  /// each, and lost on the next refresh -- so the screen says so instead.
+  bool get _hasTrip => _photoService.canSave;
+
+  void _needATrip() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Plan a trip first — a reel belongs to a trip, and '
+          'photos are kept with it.'),
+    ));
+  }
+
   Future<void> _capturePhoto() async {
+    if (!_hasTrip) return _needATrip();
     await _photoService.capturePhoto();
   }
 
   Future<void> _pickFromGallery() async {
+    if (!_hasTrip) return _needATrip();
     await _photoService.pickMultiple();
   }
 
@@ -7547,7 +7569,7 @@ class _ProfileTabState extends State<ProfileTab> {
                       ),
                       const SizedBox(height: 10),
                       const Text(
-                        'Loads 10 sample photos (8 travel + 2 documents)\nAI will approve travel photos & filter out documents',
+                        'Sample photos from the internet, not yours — for seeing how the filter works.\nThey are not kept with your trip.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                             color: AppConfig.textTertiary, fontSize: 12),

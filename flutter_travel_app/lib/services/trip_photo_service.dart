@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
+import 'image_shrink.dart';
+import 'trip_photos.dart';
 
 /// Manages trip photos: capture, store, AI-filter, and reel generation.
 class TripPhotoService extends ChangeNotifier {
@@ -11,8 +13,19 @@ class TripPhotoService extends ChangeNotifier {
   TripPhotoService._();
 
   final ImagePicker _picker = ImagePicker();
+  final TripPhotoStore _store = TripPhotoStore();
   final List<TripPhoto> _photos = [];
   bool _isAnalyzing = false;
+
+  /// The trip these photos belong to.
+  ///
+  /// Empty means nothing can be saved: a photo with no trip has nowhere to
+  /// live and nothing to be a reel of. The screen says so rather than
+  /// collecting pictures that will vanish on the next refresh.
+  String _tripId = '';
+
+  String get tripId => _tripId;
+  bool get canSave => _tripId.isNotEmpty;
 
   List<TripPhoto> get photos => List.unmodifiable(_photos);
   List<TripPhoto> get approvedPhotos =>
@@ -27,6 +40,55 @@ class TripPhotoService extends ChangeNotifier {
   List<TripPhoto> get uncheckedPhotos =>
       _photos.where((p) => p.status == PhotoStatus.unchecked).toList();
   bool get isAnalyzing => _isAnalyzing;
+
+  /// Points the reel at a trip and loads what is already there.
+  ///
+  /// Called when the Reel tab opens. Switching trips clears the list first,
+  /// so one trip's pictures never appear under another's name.
+  Future<void> bindTrip(String tripId) async {
+    if (tripId == _tripId) return;
+    _tripId = tripId;
+    _photos.clear();
+    notifyListeners();
+    if (tripId.isEmpty) return;
+
+    final saved = await _store.watch(tripId).first;
+    if (tripId != _tripId) return; // They moved on while this was loading.
+
+    for (final row in saved) {
+      _photos.add(TripPhoto(
+        id: row.id,
+        // The small copy. The full image is fetched when something needs to
+        // show it large, which is the point of storing the two apart.
+        bytes: row.thumb ?? Uint8List(0),
+        fileName: row.caption.isEmpty ? 'photo.jpg' : row.caption,
+        capturedAt: row.takenAt ?? DateTime.now(),
+        status: _statusOf(row.verdict),
+        qualityScore: row.score,
+        aiCaption: row.caption,
+        rejectionReason: row.reason,
+      ));
+    }
+    notifyListeners();
+  }
+
+  static PhotoStatus _statusOf(PhotoVerdict verdict) => switch (verdict) {
+        PhotoVerdict.approved => PhotoStatus.approved,
+        PhotoVerdict.rejected => PhotoStatus.rejected,
+        PhotoVerdict.unchecked => PhotoStatus.unchecked,
+        PhotoVerdict.waiting => PhotoStatus.pending,
+      };
+
+  static PhotoVerdict _verdictOf(PhotoStatus status) => switch (status) {
+        PhotoStatus.approved => PhotoVerdict.approved,
+        PhotoStatus.rejected => PhotoVerdict.rejected,
+        PhotoStatus.unchecked => PhotoVerdict.unchecked,
+        PhotoStatus.pending => PhotoVerdict.waiting,
+      };
+
+  /// The full-size photo, for showing one large or putting it in a film.
+  Future<Uint8List?> fullImage(String photoId) =>
+      _store.image(tripId: _tripId, photoId: photoId);
 
   /// Capture a photo from camera
   Future<TripPhoto?> capturePhoto() async {
@@ -84,23 +146,55 @@ class TripPhotoService extends ChangeNotifier {
 
   Future<TripPhoto?> _addPhoto(XFile file) async {
     try {
-      final bytes = await file.readAsBytes();
+      final raw = await file.readAsBytes();
+
+      // The time and place out of the photo's own EXIF, read before the
+      // resize: re-encoding drops the metadata, and this is what lets a reel
+      // run in the order the trip happened.
+      final origin = readOrigin(raw);
+
+      // Shrunk once, then used for everything -- the checker, the store and
+      // the screen. A phone photo is four megabytes and none of the three
+      // wants that.
+      final small = shrinkImage(raw, maxEdge: 1600) ?? raw;
+
       final photo = TripPhoto(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
-        bytes: bytes,
+        bytes: small,
         fileName: file.name,
-        capturedAt: DateTime.now(),
+        capturedAt: origin.takenAt ?? DateTime.now(),
         status: PhotoStatus.pending,
       );
       _photos.add(photo);
       notifyListeners();
-      // Auto-analyze in background
-      _analyzePhoto(photo);
+
+      // Checked first, then saved with its verdict, so a photo never sits in
+      // the trip as "approved" before anything has looked at it.
+      await _analyzePhoto(photo);
+      await _persist(photo, small, origin);
       return photo;
     } catch (e) {
       debugPrint('[TripPhotoService] Add photo error: $e');
       return null;
     }
+  }
+
+  /// Writes a photo and its verdict to the trip.
+  Future<void> _persist(
+      TripPhoto photo, Uint8List bytes, PhotoOrigin origin) async {
+    if (!canSave) return;
+    final id = await _store.save(
+      tripId: _tripId,
+      shrunk: bytes,
+      origin: origin,
+      verdict: _verdictOf(photo.status),
+      score: photo.qualityScore,
+      caption: photo.aiCaption,
+      reason: photo.rejectionReason,
+    );
+    // The stored id replaces the local one, so a later verdict change or
+    // delete addresses the document that actually exists.
+    if (id != null) photo.storedId = id;
   }
 
   /// Use AI to classify the photo
@@ -174,18 +268,35 @@ class TripPhotoService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Manually override a photo's status
-  void overrideStatus(String photoId, PhotoStatus status) {
-    final photo =
-        _photos.firstWhere((p) => p.id == photoId, orElse: () => _photos.first);
+  /// Manually override a photo's status.
+  ///
+  /// This is a person deciding -- overruling the checker, or settling one it
+  /// could not check -- so it is written to the trip rather than held in
+  /// memory until the next refresh undoes it.
+  Future<void> overrideStatus(String photoId, PhotoStatus status) async {
+    final photo = _photos.firstWhere((p) => p.id == photoId,
+        orElse: () => _photos.first);
     photo.status = status;
+    photo.rejectionReason = '';
     notifyListeners();
+
+    final stored = photo.storedId;
+    if (canSave && stored != null) {
+      await _store.setVerdict(
+          tripId: _tripId, photoId: stored, verdict: _verdictOf(status));
+    }
   }
 
-  /// Remove a photo
-  void removePhoto(String photoId) {
+  /// Remove a photo.
+  Future<void> removePhoto(String photoId) async {
+    final photo = _photos.where((p) => p.id == photoId).firstOrNull;
     _photos.removeWhere((p) => p.id == photoId);
     notifyListeners();
+
+    final stored = photo?.storedId;
+    if (canSave && stored != null) {
+      await _store.remove(tripId: _tripId, photoId: stored);
+    }
   }
 
   /// Clear all photos
@@ -304,6 +415,13 @@ class TripPhoto {
   double qualityScore;
   String aiCaption;
   String rejectionReason;
+
+  /// The id this has in the trip, once it has been written there.
+  ///
+  /// Separate from [id], which is a local timestamp made before anything was
+  /// saved: a verdict change has to address the document that exists, not the
+  /// moment the photo was picked.
+  String? storedId;
 
   TripPhoto({
     required this.id,

@@ -17,6 +17,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
+import 'image_shrink.dart';
+
 /// What the checker decided about a photo.
 enum PhotoVerdict {
   /// Looked at and considered fit for a reel.
@@ -53,6 +55,7 @@ class ReelPhoto {
     this.lat,
     this.lng,
     this.bytes = 0,
+    this.thumb,
   });
 
   factory ReelPhoto.fromDoc(
@@ -71,6 +74,7 @@ class ReelPhoto {
       lat: (data['lat'] as num?)?.toDouble(),
       lng: (data['lng'] as num?)?.toDouble(),
       bytes: (data['bytes'] as num?)?.round() ?? 0,
+      thumb: _decodeThumb(data['thumb']),
     );
   }
 
@@ -102,12 +106,32 @@ class ReelPhoto {
 
   final int bytes;
 
+  /// A small copy, carried with the metadata.
+  ///
+  /// The grid has to show something, and fetching every full photo to draw a
+  /// wall of thumbnails would pull megabytes to render a screen of
+  /// postage stamps. Kept deliberately tiny -- a couple of hundred pixels --
+  /// because a Firestore listener hands back whole documents.
+  final Uint8List? thumb;
+
   bool get hasPlace => lat != null && lng != null;
 
   /// Whether this may go in a reel somebody shares.
   ///
   /// Only an actual approval. "Could not check" is not a yes.
   bool get canPublish => verdict == PhotoVerdict.approved;
+}
+
+/// A stored thumbnail, or null when there is not one. A photo saved before
+/// thumbnails existed simply has no small copy, which the grid handles.
+Uint8List? _decodeThumb(Object? value) {
+  final encoded = (value ?? '').toString();
+  if (encoded.isEmpty) return null;
+  try {
+    return base64Decode(encoded);
+  } catch (_) {
+    return null;
+  }
 }
 
 PhotoVerdict _verdictOf(String raw) => switch (raw) {
@@ -272,8 +296,14 @@ class TripPhotoStore {
         'jpeg': base64Encode(shrunk),
         'by': uid,
       });
+      // Small enough to sit in the metadata document without making the
+      // listener expensive: 240px at low quality is a handful of kilobytes,
+      // and this is what the grid draws.
+      final thumb = shrinkImage(shrunk, maxEdge: 240, budget: 28 * 1024);
+
       await doc.set({
         'by': uid,
+        if (thumb != null) 'thumb': base64Encode(thumb),
         'verdict': _nameOf(verdict),
         'score': score,
         'caption': caption,

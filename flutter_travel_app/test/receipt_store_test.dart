@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:flutter_travel_app/services/receipt_store.dart';
+import 'package:flutter_travel_app/services/image_shrink.dart';
 
 /// Noise: the worst case for JPEG, and nothing like a bill. Used only where
 /// the point is that compression cannot always win.
@@ -48,20 +48,20 @@ void main() {
       expect(big.length, greaterThan(maxReceiptBytes),
           reason: 'the fixture has to be too big, or this proves nothing');
 
-      final small = shrinkReceipt(big);
+      final small = shrinkImage(big);
       expect(small, isNotNull);
       expect(small!.length, lessThanOrEqualTo(maxReceiptBytes));
     });
 
     test('the long edge is brought down to the limit', () {
-      final small = shrinkReceipt(bill(width: 2400, height: 1800));
+      final small = shrinkImage(bill(width: 2400, height: 1800));
       final decoded = img.decodeImage(small!)!;
       expect(decoded.width, receiptMaxEdge);
       expect(decoded.height, 1050, reason: 'the shape is kept');
     });
 
     test('a portrait photo is measured on its own long edge', () {
-      final small = shrinkReceipt(bill(width: 1500, height: 3000));
+      final small = shrinkImage(bill(width: 1500, height: 3000));
       final decoded = img.decodeImage(small!)!;
       expect(decoded.height, receiptMaxEdge);
       expect(decoded.width, 700);
@@ -69,7 +69,7 @@ void main() {
 
     test('a small photo is not blown up', () {
       // Enlarging a picture of a bill adds no detail and costs bytes.
-      final small = shrinkReceipt(bill(width: 600, height: 400));
+      final small = shrinkImage(bill(width: 600, height: 400));
       final decoded = img.decodeImage(small!)!;
       expect(decoded.width, 600);
       expect(decoded.height, 400);
@@ -77,25 +77,25 @@ void main() {
 
     test('quality drops as far as it has to, and no further', () {
       // A tight budget must still produce something rather than giving up.
-      final small = shrinkReceipt(bill(width: 2400, height: 1800),
+      final small = shrinkImage(bill(width: 2400, height: 1800),
           budget: 90 * 1024);
       expect(small, isNotNull);
       expect(small!.length, lessThanOrEqualTo(90 * 1024));
     });
 
     test('an impossible budget fails rather than storing something broken', () {
-      expect(shrinkReceipt(noise(width: 2400, height: 1800), budget: 200),
+      expect(shrinkImage(noise(width: 2400, height: 1800), budget: 200),
           isNull);
     });
 
     test('bytes that are not an image are refused', () {
-      expect(shrinkReceipt(Uint8List.fromList([1, 2, 3, 4, 5])), isNull);
-      expect(shrinkReceipt(Uint8List(0)), isNull);
+      expect(shrinkImage(Uint8List.fromList([1, 2, 3, 4, 5])), isNull);
+      expect(shrinkImage(Uint8List(0)), isNull);
     });
 
     test('what comes back is a readable JPEG', () {
       // Stored base64 is useless if it does not decode on the way out.
-      final small = shrinkReceipt(bill(width: 2000, height: 1500));
+      final small = shrinkImage(bill(width: 2000, height: 1500));
       expect(img.decodeJpg(small!), isNotNull);
     });
   });
