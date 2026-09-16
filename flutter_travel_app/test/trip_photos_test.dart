@@ -29,6 +29,27 @@ void main() {
       expect(origin.lng, isNull);
     });
 
+    test('a photo with no EXIF has no time to show', () {
+      // The case that matters most in practice. Sharing apps strip EXIF
+      // wholesale, so a picture that arrived over WhatsApp has neither a time
+      // nor a place -- and the upload moment must never stand in for the
+      // shutter, because it would be printed under somebody's holiday photo
+      // as if it were true.
+      final bytes = File('test/fixtures/no_exif.jpg').readAsBytesSync();
+      expect(readOrigin(bytes).takenAt, isNull);
+    });
+
+    test('GPS off still leaves the time', () {
+      // Location and time are separate EXIF fields. Turning location services
+      // off costs the position and nothing else, so a reel still runs in the
+      // order the trip happened.
+      final bytes = File('test/fixtures/time_only.jpg').readAsBytesSync();
+      final origin = readOrigin(bytes);
+      expect(origin.takenAt, DateTime(2026, 9, 14, 11, 40, 32));
+      expect(origin.lat, isNull);
+      expect(origin.lng, isNull);
+    });
+
     test('rubbish bytes do not throw', () {
       final origin = readOrigin(Uint8List.fromList([1, 2, 3, 4]));
       expect(origin.takenAt, isNull);

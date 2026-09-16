@@ -7373,6 +7373,99 @@ class _ProfileTabState extends State<ProfileTab> {
     setState(() => _isLoadingDemo = false);
   }
 
+  /// What to do with a photo the checker could not judge.
+  ///
+  /// Three answers, in the order they are worth trying. Checking again first,
+  /// because most of these failures are a moment's trouble rather than
+  /// anything about the photograph -- and a machine settling it is better
+  /// than a person having to. Then the two decisions, stated plainly, with
+  /// neither of them the quiet default.
+  Future<void> _decideAboutPhoto(TripPhoto photo) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(photo.bytes,
+                        width: 56, height: 56, fit: BoxFit.cover),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text('We could not check this one',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+              child: Text(
+                'It has not been looked at, so it is not in your reel. That '
+                'is usually a moment of bad connection rather than anything '
+                'about the photo.',
+                style: TextStyle(
+                    fontSize: 13, color: AppConfig.textSecondary),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.refresh, color: AppConfig.primaryColor),
+              title: const Text('Check it again'),
+              subtitle: const Text('Usually all it needs',
+                  style: TextStyle(fontSize: 11)),
+              onTap: () => Navigator.pop(sheetContext, 'again'),
+            ),
+            ListTile(
+              leading: Icon(Icons.check_circle_outline,
+                  color: AppConfig.successColor),
+              title: const Text('Include it anyway'),
+              subtitle: const Text('You have looked at it yourself',
+                  style: TextStyle(fontSize: 11)),
+              onTap: () => Navigator.pop(sheetContext, 'include'),
+            ),
+            ListTile(
+              leading: Icon(Icons.block, color: AppConfig.errorColor),
+              title: const Text('Leave it out'),
+              onTap: () => Navigator.pop(sheetContext, 'out'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    switch (choice) {
+      case 'again':
+        await _photoService.recheck(photo.id);
+        if (!mounted) return;
+        final now = _photoService.photos
+            .where((p) => p.id == photo.id)
+            .firstOrNull;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(switch (now?.status) {
+            PhotoStatus.approved => 'Checked — it is in your reel.',
+            PhotoStatus.rejected => 'Checked — left out: '
+                '${now?.rejectionReason ?? 'not a travel photo'}',
+            _ => 'Still could not check it. You can include it yourself.',
+          }),
+        ));
+      case 'include':
+        await _photoService.overrideStatus(photo.id, PhotoStatus.approved);
+      case 'out':
+        await _photoService.overrideStatus(photo.id, PhotoStatus.rejected);
+    }
+  }
+
   /// True while the photographs are being gathered and sent up.
   bool _buildingReel = false;
 
@@ -7400,7 +7493,17 @@ class _ProfileTabState extends State<ProfileTab> {
         'caption': photo.aiCaption,
         // From the photograph's own clock, which is what makes the film read
         // as a record of a day rather than a set of pictures.
-        'when': _whenLabel(photo.capturedAt),
+        // Only a time the photograph actually carries. Where it has none
+        // -- a picture that came through a sharing app, which strips EXIF --
+        // the frame says nothing rather than captioning somebody's holiday
+        // with the minute they happened to upload it.
+        'when': photo.timeFromPhoto ? _whenLabel(photo.capturedAt) : '',
+        // The server turns these into the name of the place. Sent rather than
+        // resolved here: the key lives there, the answers cache across every
+        // traveller, and a phone would otherwise make a billed lookup per
+        // photograph on a connection it may not have.
+        if (photo.lat != null) 'lat': photo.lat,
+        if (photo.lng != null) 'lng': photo.lng,
       });
     }
 
@@ -7792,7 +7895,12 @@ class _ProfileTabState extends State<ProfileTab> {
     final isUnchecked = photo.status == PhotoStatus.unchecked;
 
     return GestureDetector(
-      onTap: () => _showPhotoDetail(photo),
+      // An unchecked photo goes straight to the decision, because that is
+      // what the banner above tells people to tap it for. Sending them to a
+      // detail view with no buttons on it made that instruction untrue.
+      onTap: () => photo.status == PhotoStatus.unchecked
+          ? _decideAboutPhoto(photo)
+          : _showPhotoDetail(photo),
       onLongPress: () => _showPhotoActions(photo),
       child: Stack(
         fit: StackFit.expand,

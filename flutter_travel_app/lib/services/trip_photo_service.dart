@@ -63,6 +63,9 @@ class TripPhotoService extends ChangeNotifier {
         bytes: row.thumb ?? Uint8List(0),
         fileName: row.caption.isEmpty ? 'photo.jpg' : row.caption,
         capturedAt: row.takenAt ?? DateTime.now(),
+        timeFromPhoto: row.takenAt != null,
+        lat: row.lat,
+        lng: row.lng,
         status: _statusOf(row.verdict),
         qualityScore: row.score,
         aiCaption: row.caption,
@@ -163,6 +166,9 @@ class TripPhotoService extends ChangeNotifier {
         bytes: small,
         fileName: file.name,
         capturedAt: origin.takenAt ?? DateTime.now(),
+        timeFromPhoto: origin.takenAt != null,
+        lat: origin.lat,
+        lng: origin.lng,
         status: PhotoStatus.pending,
       );
       _photos.add(photo);
@@ -268,6 +274,34 @@ class TripPhotoService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Asks the checker to look at a photo again.
+  ///
+  /// The first thing to try on one it could not judge. Most of those failures
+  /// are a moment's trouble -- a timeout, a hiccup, a reply that did not
+  /// parse -- and the photograph itself is perfectly decidable, so asking
+  /// again settles most of them without the person having to judge anything.
+  Future<void> recheck(String photoId) async {
+    final photo = _photos.where((p) => p.id == photoId).firstOrNull;
+    if (photo == null) return;
+
+    photo.status = PhotoStatus.pending;
+    photo.rejectionReason = '';
+    notifyListeners();
+
+    await _analyzePhoto(photo);
+
+    // The new verdict replaces the old one in the trip, so the answer sticks
+    // rather than reverting on the next refresh.
+    final stored = photo.storedId;
+    if (canSave && stored != null) {
+      await _store.setVerdict(
+          tripId: _tripId,
+          photoId: stored,
+          verdict: _verdictOf(photo.status));
+    }
+    notifyListeners();
+  }
+
   /// Manually override a photo's status.
   ///
   /// This is a person deciding -- overruling the checker, or settling one it
@@ -315,46 +349,77 @@ class TripPhotoService extends ChangeNotifier {
     notifyListeners();
 
     // Good travel photos (should be APPROVED by AI)
-    final demoImages = <Map<String, String>>[
+    // Position and time attached here rather than read from the files.
+    //
+    // These are stock pictures fetched over HTTP and they carry no metadata
+    // whatsoever, so without this the demo could never show the part that
+    // reads it. Everything downstream is the real path: the server looks each
+    // position up the same way it would for a photograph off somebody's
+    // phone, and the screen says plainly that these are samples.
+    final demoImages = <Map<String, dynamic>>[
       {
         'url':
             'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=800',
-        'name': 'taj_mahal.jpg'
+        'name': 'taj_mahal.jpg',
+        'lat': 27.1751,
+        'lng': 78.0421,
+        'at': DateTime(2026, 9, 13, 6, 40)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1477587458883-47145ed94245?w=800',
-        'name': 'kerala_backwaters.jpg'
+        'name': 'kerala_backwaters.jpg',
+        'lat': 9.4981,
+        'lng': 76.3388,
+        'at': DateTime(2026, 9, 13, 9, 15)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1506461883276-594a12b11cf3?w=800',
-        'name': 'jaipur_palace.jpg'
+        'name': 'jaipur_palace.jpg',
+        'lat': 26.9255,
+        'lng': 75.8235,
+        'at': DateTime(2026, 9, 13, 11, 30)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?w=800',
-        'name': 'goa_beach.jpg'
+        'name': 'goa_beach.jpg',
+        'lat': 15.5527,
+        'lng': 73.7517,
+        'at': DateTime(2026, 9, 13, 17, 50)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1585135497273-1a86d9d39438?w=800',
-        'name': 'varanasi_ghats.jpg'
+        'name': 'varanasi_ghats.jpg',
+        'lat': 25.282,
+        'lng': 83.01,
+        'at': DateTime(2026, 9, 14, 5, 55)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1567157577867-05ccb1388e13?w=800',
-        'name': 'mumbai_gateway.jpg'
+        'name': 'mumbai_gateway.jpg',
+        'lat': 18.922,
+        'lng': 72.8347,
+        'at': DateTime(2026, 9, 14, 10, 20)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=800',
-        'name': 'rajasthan_fort.jpg'
+        'name': 'rajasthan_fort.jpg',
+        'lat': 26.9855,
+        'lng': 75.8513,
+        'at': DateTime(2026, 9, 14, 16, 5)
       },
       {
         'url':
             'https://images.unsplash.com/photo-1552566626-52f8b828add9?w=800',
-        'name': 'indian_food.jpg'
+        'name': 'indian_food.jpg',
+        'lat': 26.9196,
+        'lng': 75.8267,
+        'at': DateTime(2026, 9, 14, 19, 40)
       },
       // Bad photos (should be REJECTED by AI) — a document and a blurry text image
       {
@@ -375,11 +440,15 @@ class TripPhotoService extends ChangeNotifier {
             .get(Uri.parse(img['url']!))
             .timeout(const Duration(seconds: 15));
         if (response.statusCode == 200) {
+          final when = img['at'] as DateTime?;
           final photo = TripPhoto(
             id: DateTime.now().millisecondsSinceEpoch.toString(),
             bytes: response.bodyBytes,
-            fileName: img['name']!,
-            capturedAt: DateTime.now(),
+            fileName: img['name'] as String,
+            capturedAt: when ?? DateTime.now(),
+            timeFromPhoto: when != null,
+            lat: (img['lat'] as num?)?.toDouble(),
+            lng: (img['lng'] as num?)?.toDouble(),
             status: PhotoStatus.pending,
           );
           _photos.add(photo);
@@ -416,6 +485,26 @@ class TripPhoto {
   String aiCaption;
   String rejectionReason;
 
+  /// Where the photograph was taken, when it knows.
+  ///
+  /// Null for anything that arrived through a sharing app -- they strip the
+  /// metadata -- and for a phone with location switched off. Nothing may
+  /// depend on it being here.
+  double? lat;
+  double? lng;
+
+  bool get hasPlace => lat != null && lng != null;
+
+  /// Whether [capturedAt] is the photograph's own time or merely when it
+  /// was added.
+  ///
+  /// The two must not be confused where anybody can see them. A photo that
+  /// reached the phone through a sharing app has no EXIF at all -- most of
+  /// them strip it -- so its time falls back to the upload, and printing that
+  /// under a holiday picture states a time the photograph was not taken. Only
+  /// a real one is ever shown.
+  bool timeFromPhoto = false;
+
   /// The id this has in the trip, once it has been written there.
   ///
   /// Separate from [id], which is a local timestamp made before anything was
@@ -432,5 +521,8 @@ class TripPhoto {
     this.qualityScore = 0,
     this.aiCaption = '',
     this.rejectionReason = '',
+    this.timeFromPhoto = false,
+    this.lat,
+    this.lng,
   });
 }

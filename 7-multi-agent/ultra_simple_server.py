@@ -4057,6 +4057,76 @@ def export_itinerary(request: dict):
         return {"status": "error", "message": str(e)}
 
 
+# Places already asked about, by rounded position.
+#
+# Four decimal places is about eleven metres, so every photograph taken inside
+# one building shares an entry: a reel of twenty pictures from three stops
+# costs three lookups, not twenty.
+_place_at_cache: Dict[str, str] = {}
+
+
+def _place_at(lat: float, lng: float) -> str:
+    """The name of the notable place at a position, or "" when there is none.
+
+    Empty rather than a guess. A photograph captioned with somewhere it was
+    not taken is worse than one captioned with nothing, and this goes into a
+    film people send to each other.
+    """
+    # The Places key, which is what _google_headers actually sends -- guarding
+    # on the other one would let a request go out with no key at all.
+    if not GOOGLE_PLACES_API_KEY:
+        return ""
+    try:
+        key = f"{round(float(lat), 4)},{round(float(lng), 4)}"
+    except (TypeError, ValueError):
+        return ""
+    if key in _place_at_cache:
+        return _place_at_cache[key]
+
+    try:
+        resp = requests.post(
+            "https://places.googleapis.com/v1/places:searchNearby",
+            headers=_google_headers("places.displayName,places.primaryType"),
+            json={
+                # Nearest first, so a photograph taken inside a fort resolves
+                # to the fort rather than to whatever is biggest nearby.
+                "rankPreference": "DISTANCE",
+                "maxResultCount": 5,
+                # The kinds of place somebody photographs and would name.
+                # Without a list this returns car parks and bus stops, which
+                # are true and useless under a holiday picture.
+                "includedTypes": [
+                    "tourist_attraction", "historical_landmark", "museum",
+                    "park", "hindu_temple", "mosque", "church",
+                    "art_gallery", "restaurant", "cafe", "zoo",
+                    "amusement_park", "national_park", "beach",
+                ],
+                "locationRestriction": {
+                    "circle": {
+                        "center": {"latitude": float(lat),
+                                   "longitude": float(lng)},
+                        # Phone GPS is good to tens of metres, and a landmark
+                        # is large. Wider than this starts naming the place
+                        # across the road.
+                        "radius": 200.0,
+                    }
+                },
+            },
+            timeout=10,
+        ).json()
+    except Exception as e:
+        print(f"[REEL] place lookup failed: {e}")
+        return ""
+
+    places = resp.get("places") or []
+    name = ""
+    if places:
+        name = ((places[0].get("displayName") or {}).get("text") or "").strip()
+
+    _place_at_cache[key] = name
+    return name
+
+
 def _render_reel(photos, destination, progress=None):
     """Renders a reel of the traveller's own photographs. Returns (data, ...)."""
     import trip_export
@@ -4065,7 +4135,7 @@ def _render_reel(photos, destination, progress=None):
         if progress:
             progress(stage, fraction)
 
-    say("Reading your photos", 0.05)
+    say("Working out where they were taken", 0.05)
 
     decoded = []
     for entry in photos:
@@ -4073,11 +4143,20 @@ def _render_reel(photos, destination, progress=None):
         if not raw_b64:
             continue
         try:
+            # Where it was taken, from the photograph's own position.
+            # Absent for anything that came through a sharing app, since
+            # those strip the metadata -- so this is often blank, and the
+            # frame simply says less rather than saying something wrong.
+            where = entry.get("where") or ""
+            if not where and entry.get("lat") is not None \
+                    and entry.get("lng") is not None:
+                where = _place_at(entry["lat"], entry["lng"])
+
             decoded.append({
                 "bytes": base64.b64decode(raw_b64),
                 "caption": entry.get("caption") or "",
                 "when": entry.get("when") or "",
-                "where": entry.get("where") or "",
+                "where": where,
             })
         except Exception as e:
             # One unreadable photo is not a failed reel.
