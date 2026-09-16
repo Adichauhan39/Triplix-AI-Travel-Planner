@@ -620,6 +620,51 @@ class PythonADKService {
     }
   }
 
+  /// Queues a reel of the traveller's own photographs.
+  ///
+  /// The photographs travel in the request. The server has no database
+  /// credentials of its own, and giving it some means a dependency, a service
+  /// account and IAM before a single frame is rendered -- while these are
+  /// already small, because the device shrank them to store them.
+  ///
+  /// Comes back with a job id the existing export polling understands: a reel
+  /// joins the same queue as the trip film, so status and download are the
+  /// code that was already there.
+  Future<Map<String, dynamic>?> startReel({
+    required List<Map<String, dynamic>> photos,
+    String destination = '',
+  }) async {
+    if (photos.isEmpty) return null;
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/reel/export'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'photos': photos,
+              'destination': destination,
+            }),
+          )
+          // Longer than the others: this request carries several megabytes of
+          // photographs up a phone connection, and 20 seconds is not enough
+          // to get them there.
+          .timeout(const Duration(seconds: 120));
+      if (response.statusCode != 200) {
+        debugPrint('startReel: HTTP ${response.statusCode}');
+        return null;
+      }
+      final body = json.decode(response.body) as Map<String, dynamic>;
+      if (body['status'] != 'success' || body['job_id'] == null) {
+        debugPrint('startReel: ${body['message']}');
+        return null;
+      }
+      return body;
+    } catch (e) {
+      debugPrint('startReel failed: $e');
+      return null;
+    }
+  }
+
   /// How far along a queued export is: state, progress (0–1) and a stage line.
   Future<Map<String, dynamic>?> exportStatus(String jobId) async {
     try {

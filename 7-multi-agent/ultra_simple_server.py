@@ -4057,6 +4057,162 @@ def export_itinerary(request: dict):
         return {"status": "error", "message": str(e)}
 
 
+def _render_reel(photos, destination, progress=None):
+    """Renders a reel of the traveller's own photographs. Returns (data, ...)."""
+    import trip_export
+
+    def say(stage, fraction):
+        if progress:
+            progress(stage, fraction)
+
+    say("Reading your photos", 0.05)
+
+    decoded = []
+    for entry in photos:
+        raw_b64 = entry.get("jpeg") or ""
+        if not raw_b64:
+            continue
+        try:
+            decoded.append({
+                "bytes": base64.b64decode(raw_b64),
+                "caption": entry.get("caption") or "",
+                "when": entry.get("when") or "",
+                "where": entry.get("where") or "",
+            })
+        except Exception as e:
+            # One unreadable photo is not a failed reel.
+            print(f"[REEL] undecodable photo skipped: {e}")
+
+    if not decoded:
+        return b"", "", ""
+
+    say("Laying out the frames", 0.15)
+    shots = trip_export.render_reel(decoded, destination)
+
+    # The same music the trip film uses, when there is any on the box.
+    music_path = None
+    music_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "music")
+    if os.path.isdir(music_dir):
+        for track in sorted(os.listdir(music_dir)):
+            if track.lower().endswith((".mp3", ".m4a", ".aac", ".wav")):
+                music_path = os.path.join(music_dir, track)
+                break
+
+    def frame_progress(done, total):
+        say("Rolling the film", 0.2 + 0.72 * (done / max(1, total)))
+
+    data = trip_export.build_video(shots, music_path=music_path,
+                                   on_progress=frame_progress)
+    say("Finishing up", 0.95)
+    return data, "video/mp4", "triplix-reel.mp4"
+
+
+def _run_reel_job(job_id: str, photos, destination):
+    """Worker body for a reel, recording how far it has got."""
+    def progress(stage: str, fraction: float):
+        with _export_lock:
+            job = _export_jobs.get(job_id)
+            if job is not None:
+                job.update(state="running", stage=stage, progress=fraction)
+
+    try:
+        data, media, filename = _render_reel(photos, destination,
+                                             progress=progress)
+        if not data:
+            raise ValueError("nothing_to_render")
+
+        os.makedirs(_export_dir, exist_ok=True)
+        path = os.path.join(_export_dir, f"{job_id}-{filename}")
+        with open(path, "wb") as handle:
+            handle.write(data)
+
+        with _export_lock:
+            job = _export_jobs.get(job_id)
+            if job is not None:
+                job.update(state="done", progress=1.0, stage="Ready",
+                           path=path, media=media, filename=filename)
+        _export_evict()
+        print(f"[REEL] {job_id} done ({len(data)} bytes)")
+    except Exception as e:
+        print(f"[REEL] {job_id} failed: {e}")
+        with _export_lock:
+            job = _export_jobs.get(job_id)
+            if job is not None:
+                job.update(state="error", message=str(e), stage="")
+
+
+@app.post("/api/reel/export")
+def export_reel(request: dict):
+    """The traveller's own photographs as a film they can share.
+
+    The Reel tab played its slideshow inside the app and stopped there -- no
+    share, no download -- and a reel nobody can post is a screensaver. The
+    renderer for this already existed and was only ever pointed at Google's
+    photographs of places.
+
+    Photographs arrive in the request rather than being read from the
+    database: this server has no Firestore credentials, and giving it some
+    means a dependency, a service account and IAM before a frame is rendered.
+    They are already shrunk on the device, so what comes up is a few megabytes.
+
+    Queued, never inline: a reel takes minutes, and a held-open request times
+    out. It joins the same job table the trip film uses, so the existing
+    status and file endpoints serve it unchanged.
+    """
+    try:
+        photos = request.get("photos") or []
+        destination = str(request.get("destination") or "").strip()
+
+        if not photos:
+            return {"status": "error", "message": "no_photos"}
+        if len(photos) > 60:
+            # Past this a reel is no longer a reel, and the request is tens of
+            # megabytes. Said rather than silently truncated.
+            return {"status": "error", "message": "too_many_photos"}
+
+        try:
+            import trip_export  # noqa: F401
+        except Exception as e:
+            print(f"[REEL] renderer unavailable: {e}")
+            return {"status": "error", "message": "renderer_unavailable"}
+
+        # Fingerprinted on what is actually in the reel, so asking twice for
+        # the same set of photographs returns the film already made instead of
+        # spending another two minutes on a byte-identical one.
+        fingerprint = hashlib.sha256(json.dumps(
+            {"destination": destination,
+             "photos": [
+                 {"caption": p.get("caption"), "when": p.get("when"),
+                  "size": len(p.get("jpeg") or "")} for p in photos]},
+            sort_keys=True).encode("utf-8")).hexdigest()
+
+        with _export_lock:
+            for key, job in _export_jobs.items():
+                if job.get("fingerprint") != fingerprint:
+                    continue
+                if job.get("state") == "done" and \
+                        os.path.exists(job.get("path") or ""):
+                    return {"status": "success", "job_id": key, "cached": True}
+                if job.get("state") in ("queued", "running"):
+                    return {"status": "success", "job_id": key,
+                            "cached": False}
+
+            job_id = uuid.uuid4().hex[:12]
+            _export_jobs[job_id] = {
+                "state": "queued", "progress": 0.0, "stage": "Getting ready",
+                "message": "", "path": "", "media": "", "filename": "",
+                "fingerprint": fingerprint, "created": time.time(),
+            }
+
+        _export_pool.submit(_run_reel_job, job_id, photos, destination)
+        print(f"[REEL] {job_id} queued ({len(photos)} photos)")
+        return {"status": "success", "job_id": job_id, "cached": False}
+    except Exception as e:
+        print(f"[REEL] failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/api/itinerary/export/status/{job_id}")
 def export_status(job_id: str):
     """How far along a queued render is."""

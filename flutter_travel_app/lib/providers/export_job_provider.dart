@@ -120,6 +120,42 @@ class ExportJobProvider extends ChangeNotifier {
     return true;
   }
 
+  /// Queues a reel and watches it, exactly as a film is watched.
+  ///
+  /// The render lives in the same queue on the server, so everything below --
+  /// the polling, the stalled-connection check, the announcement when it is
+  /// ready -- is shared rather than written a second time.
+  Future<bool> startReel({
+    required List<Map<String, dynamic>> photos,
+    required String destination,
+    String contentKey = '',
+  }) async {
+    _madeFrom = contentKey;
+    _format = 'mp4';
+    _progress = 0;
+    _stage = 'Starting';
+    _error = null;
+    _bytes = null;
+    notifyListeners();
+
+    final queued =
+        await _adk.startReel(photos: photos, destination: destination);
+    final jobId = (queued?['job_id'] ?? '').toString();
+    if (jobId.isEmpty) {
+      _error = "Couldn't start your reel. Check your connection.";
+      _stage = '';
+      notifyListeners();
+      return false;
+    }
+
+    LocalStore.save(
+        LocalStore.keyExportJob, {'job_id': jobId, 'format': 'mp4'});
+    _jobId = jobId;
+    notifyListeners();
+    _startPolling();
+    return true;
+  }
+
   /// How many polls in a row have come back empty.
   ///
   /// One failed poll is not a failed render -- the server may simply be busy

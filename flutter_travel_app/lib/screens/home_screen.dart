@@ -7373,6 +7373,97 @@ class _ProfileTabState extends State<ProfileTab> {
     setState(() => _isLoadingDemo = false);
   }
 
+  /// True while the photographs are being gathered and sent up.
+  bool _buildingReel = false;
+
+  /// Builds a film of the approved photographs and hands it to the share
+  /// sheet once the server has made it.
+  Future<void> _shareReel() async {
+    final approved = _photoService.approvedPhotos;
+    if (approved.isEmpty) return;
+    if (!_hasTrip) return _needATrip();
+
+    setState(() => _buildingReel = true);
+    final destination = context.read<TripPlanProvider>().plan?.destination ?? '';
+
+    // The full images, not the thumbnails the grid draws: a reel made from
+    // 240px copies would be a reel of postage stamps.
+    final payload = <Map<String, dynamic>>[];
+    for (final photo in approved) {
+      final stored = photo.storedId;
+      final bytes = stored == null
+          ? photo.bytes
+          : (await _photoService.fullImage(stored) ?? photo.bytes);
+      if (bytes.isEmpty) continue;
+      payload.add({
+        'jpeg': base64Encode(bytes),
+        'caption': photo.aiCaption,
+        // From the photograph's own clock, which is what makes the film read
+        // as a record of a day rather than a set of pictures.
+        'when': _whenLabel(photo.capturedAt),
+      });
+    }
+
+    if (!mounted) return;
+    setState(() => _buildingReel = false);
+
+    if (payload.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Those photos could not be read.'),
+      ));
+      return;
+    }
+
+    final started = await context.read<ExportJobProvider>().startReel(
+          photos: payload,
+          destination: destination,
+        );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(started
+          ? 'Making your reel. Keep using the app \u2014 we will tell you when '
+              'it is ready.'
+          : 'That could not be started. Check your connection.'),
+    ));
+  }
+
+  /// Hands the finished reel to the share sheet, straight from a tap.
+  ///
+  /// Nothing is awaited first: browsers only allow sharing inside the gesture
+  /// that asked for it.
+  Future<void> _shareBuiltReel() async {
+    final job = context.read<ExportJobProvider>();
+    final bytes = job.bytes;
+    if (bytes == null) return;
+    try {
+      await Share.shareXFiles(
+        [
+          XFile.fromData(bytes,
+              name: 'triplix-reel.mp4', mimeType: 'video/mp4')
+        ],
+        text: 'My trip, on Triplix',
+      );
+      if (mounted) job.clearReady();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Sharing is blocked here \u2014 try it on your phone. '
+            '($e)'),
+      ));
+    }
+  }
+
+  /// "14 Sep, 19:05", from the photograph's own clock.
+  String _whenLabel(DateTime when) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final hh = when.hour.toString().padLeft(2, '0');
+    final mm = when.minute.toString().padLeft(2, '0');
+    return '${when.day} ${months[when.month - 1]}, $hh:$mm';
+  }
+
   void _playReel() {
     final approved = _photoService.approvedPhotos;
     if (approved.isEmpty) {
@@ -7504,9 +7595,34 @@ class _ProfileTabState extends State<ProfileTab> {
                   child: ElevatedButton.icon(
                     onPressed: approved.isEmpty ? null : _playReel,
                     icon: const Icon(Icons.slideshow, size: 20),
-                    label: const Text('Play Reel'),
+                    label: const Text('Play'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppConfig.successColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  // The half that was missing. Playing it in the app is not
+                  // the thing anybody wants a reel for.
+                  child: ElevatedButton.icon(
+                    onPressed: approved.isEmpty || _buildingReel
+                        ? null
+                        : _shareReel,
+                    icon: _buildingReel
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.ios_share, size: 20),
+                    label: Text(_buildingReel ? 'Sending…' : 'Make a video'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppConfig.primaryColor,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
@@ -7517,6 +7633,48 @@ class _ProfileTabState extends State<ProfileTab> {
               ],
             ),
           ),
+
+          // While it renders, and when it is done. The render lives on the
+          // server, so this survives leaving the tab and coming back.
+          Builder(builder: (context) {
+            final job = context.watch<ExportJobProvider>();
+            if (job.bytes != null) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _shareBuiltReel,
+                    icon: const Icon(Icons.ios_share, size: 18),
+                    label: const Text('Your video is ready — tap to share'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppConfig.successColor,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              );
+            }
+            if (!job.isRunning) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(job.stage.isEmpty ? 'Working' : job.stage,
+                      style: const TextStyle(fontSize: 12)),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: job.progress <= 0 ? null : job.progress,
+                      minHeight: 5,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
 
           // AI info card
           if (all.isEmpty)

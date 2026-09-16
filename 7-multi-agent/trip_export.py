@@ -23,7 +23,7 @@ import requests
 import math
 from urllib.parse import quote
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 # 1080x1350 is the portrait frame that reads well both printed and on a phone,
 # and is what social platforms accept without cropping.
@@ -844,6 +844,122 @@ def render_car(base: Image.Image, pixels, roads, progress: float,
             draw.text((FILM_WIDTH - MARGIN - label_width, band + 30), label,
                       font=_font(22), fill=(150, 152, 220))
     return frame
+
+
+def render_reel_photo(image: Image.Image, caption: str, when: str = "",
+                      where: str = "") -> tuple:
+    """One of the traveller's photographs, filling the frame, with its caption.
+
+    Returned as (base, overlay) like render_place_layers, so the overlay can
+    fade in a beat after the picture: words that arrive with the image are read
+    instead of it.
+
+    The photograph is cropped to fill rather than letterboxed. A reel is
+    watched full-screen on a phone, and black bars down both sides of somebody
+    holiday photo look like a mistake rather than a choice.
+    """
+    base = Image.new("RGB", (FILM_WIDTH, FILM_HEIGHT), (12, 12, 16))
+
+    # Cover, not contain: scale to the larger ratio and crop the overflow.
+    ratio = max(FILM_WIDTH / image.width, FILM_HEIGHT / image.height)
+    scaled = image.resize(
+        (max(1, int(image.width * ratio)), max(1, int(image.height * ratio))),
+        Image.LANCZOS)
+    base.paste(scaled, ((FILM_WIDTH - scaled.width) // 2,
+                        (FILM_HEIGHT - scaled.height) // 2))
+
+    overlay = Image.new("RGBA", (FILM_WIDTH, FILM_HEIGHT), (0, 0, 0, 0))
+    if not (caption or when or where):
+        return base, overlay
+
+    draw = ImageDraw.Draw(overlay)
+
+    # A gradient rather than a solid band: a bar across a photograph hides a
+    # third of it, and the words still have to stay readable over whatever
+    # happens to be underneath them.
+    band = 420
+    for i in range(band):
+        shade = int(215 * (i / band) ** 1.5)
+        draw.line([(0, FILM_HEIGHT - band + i), (FILM_WIDTH,
+                                                 FILM_HEIGHT - band + i)],
+                  fill=(0, 0, 0, shade))
+
+    y = FILM_HEIGHT - 250
+    if caption:
+        lines = _wrap(draw, caption, _font(52, bold=True),
+                      FILM_WIDTH - 2 * MARGIN)[:2]
+        for line in lines:
+            draw.text((MARGIN, y), line, font=_font(52, bold=True),
+                      fill=(255, 255, 255, 255))
+            y += 62
+
+    # When and where, from the photograph's own metadata. Small, under the
+    # caption: it is the detail that makes a reel read as a record of a real
+    # day rather than a set of pretty pictures.
+    footer = "  ·  ".join([part for part in (when, where) if part])
+    if footer:
+        draw.text((MARGIN, y + 8), footer, font=_font(30),
+                  fill=(226, 226, 234, 255))
+
+    return base, overlay
+
+
+def render_reel(photos: List[Dict[str, Any]], destination: str,
+                on_progress=None) -> List[Dict[str, Any]]:
+    """The traveller's photographs as shots, ready for build_video.
+
+    [photos] each carry raw JPEG bytes and what is known about them: a caption,
+    when it was taken and roughly where. Order is the caller's -- the app sorts
+    by the time in each photograph's EXIF, so the reel runs in the order the
+    trip happened.
+    """
+    shots: List[Dict[str, Any]] = []
+
+    name = destination.split(",")[0].strip()
+    title = Image.new("RGB", (FILM_WIDTH, FILM_HEIGHT), ACCENT)
+    draw = ImageDraw.Draw(title)
+    draw.text((MARGIN, FILM_HEIGHT // 2 - 120), name or "Our trip",
+              font=_font(96, bold=True), fill=(255, 255, 255))
+    draw.text((MARGIN, FILM_HEIGHT // 2 + 10),
+              f"{len(photos)} moments", font=_font(40),
+              fill=(206, 206, 230))
+    shots.append({"image": title, "seconds": 2.0, "mode": 0})
+
+    for index, entry in enumerate(photos):
+        data = entry.get("bytes")
+        if not data:
+            continue
+        try:
+            image = Image.open(io.BytesIO(data)).convert("RGB")
+            # Orientation baked in: a portrait photograph carries its rotation
+            # in EXIF rather than in its pixels, and a reel of sideways
+            # holiday pictures is worse than no reel.
+            image = ImageOps.exif_transpose(image)
+        except Exception as e:
+            print(f"[REEL] skipping a photo: {e}")
+            continue
+
+        base, overlay = render_reel_photo(
+            image,
+            str(entry.get("caption") or ""),
+            str(entry.get("when") or ""),
+            str(entry.get("where") or ""),
+        )
+        shots.append({
+            "image": base,
+            "overlay": overlay,
+            # The photograph reads for a beat before the words arrive.
+            "overlay_from": 0.35,
+            "seconds": 2.6,
+            # Cycled, so consecutive pictures do not drift the same way.
+            "mode": index % 4,
+        })
+        if on_progress:
+            on_progress(index + 1, len(photos))
+
+    shots.append({"image": _fit_film(render_closing(destination)),
+                  "seconds": 2.2, "mode": 0})
+    return shots
 
 
 def render_closing(destination: str) -> Image.Image:
