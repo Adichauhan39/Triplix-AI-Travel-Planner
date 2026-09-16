@@ -7374,6 +7374,7 @@ class _ProfileTabState extends State<ProfileTab> {
     final approved = _photoService.approvedPhotos;
     final rejected = _photoService.rejectedPhotos;
     final pending = _photoService.pendingPhotos;
+    final unchecked = _photoService.uncheckedPhotos;
 
     return Scaffold(
       appBar: AppBar(
@@ -7405,10 +7406,42 @@ class _ProfileTabState extends State<ProfileTab> {
                     Icons.check_circle, '${approved.length}', 'Approved'),
                 _buildStatChip(Icons.cancel, '${rejected.length}', 'Filtered'),
                 _buildStatChip(
-                    Icons.hourglass_top, '${pending.length}', 'Analyzing'),
+                    Icons.hourglass_top, '${pending.length}', 'Analysing'),
+                // Counted separately, because these are the ones nobody has
+                // decided about. Folded into "Approved" they would go out
+                // unseen, which is the bug this state exists for.
+                if (unchecked.isNotEmpty)
+                  _buildStatChip(Icons.question_mark, '${unchecked.length}',
+                      'Needs you'),
               ],
             ),
           ),
+
+          // Said once, plainly, rather than left to a badge on a tile.
+          if (unchecked.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              color: AppConfig.warningColor.withValues(alpha: 0.12),
+              child: Row(
+                children: [
+                  Icon(Icons.help_outline,
+                      size: 16, color: AppConfig.warningColor),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      unchecked.length == 1
+                          ? 'One photo could not be checked. Tap it to decide '
+                              'whether it goes in your reel.'
+                          : '${unchecked.length} photos could not be checked. '
+                              'Tap each one to decide whether it goes in.',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           // Action buttons
           Padding(
@@ -7574,6 +7607,9 @@ class _ProfileTabState extends State<ProfileTab> {
     final isApproved = photo.status == PhotoStatus.approved;
     final isRejected = photo.status == PhotoStatus.rejected;
     final isPending = photo.status == PhotoStatus.pending;
+    // The checker could not reach a verdict. Marked plainly rather than
+    // included quietly: this is the state that used to be "approved".
+    final isUnchecked = photo.status == PhotoStatus.unchecked;
 
     return GestureDetector(
       onTap: () => _showPhotoDetail(photo),
@@ -7594,6 +7630,19 @@ class _ProfileTabState extends State<ProfileTab> {
                 color: Colors.black.withValues(alpha: 0.5),
                 child: const Center(
                   child: Icon(Icons.block, color: Colors.red, size: 32),
+                ),
+              ),
+            ),
+          // Could not be checked. Dimmed and marked, so it is obvious the
+          // photo is waiting on the person rather than cleared to go out.
+          if (isUnchecked)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.45),
+                child: const Center(
+                  child: Icon(Icons.help_outline,
+                      color: Colors.amber, size: 30),
                 ),
               ),
             ),
@@ -7631,7 +7680,9 @@ class _ProfileTabState extends State<ProfileTab> {
                     ? Icons.check
                     : isRejected
                         ? Icons.close
-                        : Icons.hourglass_top,
+                        : isUnchecked
+                            ? Icons.question_mark
+                            : Icons.hourglass_top,
                 color: Colors.white,
                 size: 12,
               ),

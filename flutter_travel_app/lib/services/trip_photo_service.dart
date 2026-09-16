@@ -21,6 +21,11 @@ class TripPhotoService extends ChangeNotifier {
       _photos.where((p) => p.status == PhotoStatus.rejected).toList();
   List<TripPhoto> get pendingPhotos =>
       _photos.where((p) => p.status == PhotoStatus.pending).toList();
+
+  /// Photos the checker could not reach a verdict on. Shown to the person
+  /// rather than quietly included or quietly dropped.
+  List<TripPhoto> get uncheckedPhotos =>
+      _photos.where((p) => p.status == PhotoStatus.unchecked).toList();
   bool get isAnalyzing => _isAnalyzing;
 
   /// Capture a photo from camera
@@ -116,6 +121,9 @@ class TripPhotoService extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        // The server says whether it managed to look at all. A reply it
+        // could not parse comes back checked: false rather than as a pass.
+        final checked = data['checked'] != false;
         final isTravel = data['is_travel_photo'] ?? false;
         final score = (data['quality_score'] ?? 50).toDouble();
         final caption = data['caption'] ?? '';
@@ -123,22 +131,34 @@ class TripPhotoService extends ChangeNotifier {
 
         photo.qualityScore = score;
         photo.aiCaption = caption;
-        photo.rejectionReason = reason;
-        photo.status = isTravel && score >= 40
-            ? PhotoStatus.approved
-            : PhotoStatus.rejected;
+        photo.rejectionReason = checked
+            ? reason
+            : 'We could not check this one — have a look before it goes in.';
+        photo.status = !checked
+            ? PhotoStatus.unchecked
+            : isTravel && score >= 40
+                ? PhotoStatus.approved
+                : PhotoStatus.rejected;
       } else {
-        // Fallback: approve all on server error
-        photo.status = PhotoStatus.approved;
-        photo.qualityScore = 70;
-        photo.aiCaption = 'Travel moment';
+        // Not approved.
+        //
+        // A server error means nothing was checked, and approving on a 500
+        // is how a receipt or an ID card ends up in a reel. The photo is
+        // kept and handed back to the person to decide about.
+        photo.status = PhotoStatus.unchecked;
+        photo.qualityScore = 0;
+        photo.aiCaption = '';
+        photo.rejectionReason =
+            'We could not check this one — have a look before it goes in.';
       }
     } catch (e) {
       debugPrint('[TripPhotoService] AI analysis error: $e');
-      // Fallback: approve on error
-      photo.status = PhotoStatus.approved;
-      photo.qualityScore = 60;
-      photo.aiCaption = 'Travel photo';
+      // Same again: an unreachable checker is not a pass.
+      photo.status = PhotoStatus.unchecked;
+      photo.qualityScore = 0;
+      photo.aiCaption = '';
+      photo.rejectionReason =
+          'We could not check this one — have a look before it goes in.';
     }
     notifyListeners();
   }
@@ -266,7 +286,14 @@ class TripPhotoService extends ChangeNotifier {
   }
 }
 
-enum PhotoStatus { pending, approved, rejected }
+/// What is known about a photo.
+///
+/// `unchecked` is deliberately separate from `approved`. The checker exists
+/// to keep documents, receipts, ID cards and worse out of a reel somebody is
+/// about to post, and every failure path here used to return `approved` -- so
+/// the moment it broke it published exactly what it was built to stop. A
+/// check that did not happen is not a pass.
+enum PhotoStatus { pending, approved, rejected, unchecked }
 
 class TripPhoto {
   final String id;

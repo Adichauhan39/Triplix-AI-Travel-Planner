@@ -71,6 +71,16 @@ service cloud.firestore {
         return tripData().get('money', tripData().get('members', []));
       }
 
+      // On the trip in any capacity. A photo is not spending and not an
+      // itinerary edit, so neither list alone is the right question: somebody
+      // approved for either was on the trip and may add a picture of it.
+      function tripMemberOrOwner() {
+        return signedIn()
+          && (tripData().owner == request.auth.uid
+              || request.auth.uid in spenders()
+              || request.auth.uid in tripData().get('members', []));
+      }
+
       function canSpend() {
         return signedIn()
           && (tripData().owner == request.auth.uid
@@ -289,6 +299,55 @@ service cloud.firestore {
           // room for the field names and the base64 overhead the client has
           // already paid for.
           allow create, update: if canSpend()
+            && request.resource.data.by == request.auth.uid
+            && request.resource.data.jpeg is string
+            && request.resource.data.jpeg.size() > 0
+            && request.resource.data.jpeg.size() < 800000;
+
+          allow delete: if signedIn()
+            && (resource.data.by == request.auth.uid || tripOwner());
+        }
+      }
+
+      // The trip's own photos, for the reel.
+      //
+      // Same shape as receipts and for the same reason: metadata here, bytes
+      // in a document beneath, so a screen can list a trip's photos and their
+      // verdicts without downloading every image.
+      match /photos/{photoId} {
+
+        allow read: if signedIn();
+
+        // Anyone in the trip may add a photo of it. The verdict is written
+        // alongside, and `unchecked` is a real value -- a photo the filter
+        // could not judge is stored as unjudged rather than as approved,
+        // which is what stops a document reaching a reel when the checker is
+        // down.
+        allow create: if tripMemberOrOwner()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.verdict in
+               ['approved', 'rejected', 'waiting', 'unchecked'];
+
+        // Changing a verdict is a person overruling the checker, or deciding
+        // about one it could not reach. Limited to the fields that carry an
+        // opinion: an update may not rewrite whose photo it is, when it was
+        // taken or where.
+        allow update: if tripMemberOrOwner()
+          && request.resource.data.by == resource.data.by
+          && request.resource.data.verdict in
+               ['approved', 'rejected', 'waiting', 'unchecked']
+          && changed().hasOnly(['verdict', 'reason', 'caption', 'score']);
+
+        allow delete: if signedIn()
+          && (resource.data.by == request.auth.uid || tripOwner());
+
+        match /image/{imageId} {
+
+          allow read: if signedIn();
+
+          // Capped here as well as in the client: a modified client could
+          // otherwise park megabytes of anything in somebody else's trip.
+          allow create, update: if tripMemberOrOwner()
             && request.resource.data.by == request.auth.uid
             && request.resource.data.jpeg is string
             && request.resource.data.jpeg.size() > 0

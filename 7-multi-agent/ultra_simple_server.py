@@ -2502,7 +2502,8 @@ async def analyze_photo(request: Request):
         prompt = """Analyze this image for a travel trip reel/highlight video. Return a JSON object with these fields:
 
 1. "is_travel_photo": boolean — true ONLY if this is a good travel/vacation photo (scenery, landmarks, food, people enjoying, cultural sites, nature, beaches, temples, markets, etc.)
-   Set false for: documents, screenshots, receipts, bills, ID cards, blurry/dark photos, explicit content, random objects, text-heavy images, memes, or non-travel content.
+   Set false for: documents, screenshots, receipts, bills, ID cards, passports, boarding passes, bank cards, blurry/dark photos, explicit content, random objects, text-heavy images, memes, or non-travel content.
+   When unsure, set false. This photo may be published to the traveller's friends, and a document let through is worse than a good photo held back.
 
 2. "quality_score": integer 0-100 — rate photo quality for a highlight reel:
    90-100: Stunning travel shot (great composition, lighting, iconic landmark)
@@ -2518,20 +2519,27 @@ async def analyze_photo(request: Request):
 
 Return ONLY the JSON object, no markdown or extra text."""
 
+        # Asked for JSON rather than asked to sound like JSON.
+        #
+        # The reply used to be fished out of prose by stripping markdown
+        # fences, and a model that answered with a sentence first sent the
+        # whole request down the failure path -- which, until now, approved
+        # the photo. The commonest cause of the bug was the parsing.
+        wants_json = {"response_mime_type": "application/json"}
         model = genai.GenerativeModel('gemini-3.7-flash')
 
         if USE_VERTEX_AI:
             image_part = Part.from_data(data=image_bytes, mime_type="image/jpeg")
-            response = model.generate_content([prompt, image_part])
+            response = model.generate_content([prompt, image_part],
+                                              generation_config=wants_json)
         else:
-            import google.generativeai as genai_direct
-            response = model.generate_content([
-                prompt,
-                {"mime_type": "image/jpeg", "data": image_bytes}
-            ])
+            response = model.generate_content(
+                [prompt, {"mime_type": "image/jpeg", "data": image_bytes}],
+                generation_config=wants_json)
 
         result_text = response.text.strip()
-        # Clean markdown fences if present
+        # Kept as a belt-and-braces strip: response_mime_type is honoured by
+        # the models in use, but a fenced reply must not cost the check.
         if result_text.startswith('```'):
             result_text = result_text.split('\n', 1)[-1]
         if result_text.endswith('```'):
@@ -2546,16 +2554,26 @@ Return ONLY the JSON object, no markdown or extra text."""
             "caption": result.get("caption", ""),
             "rejection_reason": result.get("rejection_reason", ""),
             "category": result.get("category", "other"),
+            "checked": True,
         }
 
+    # Both failure paths used to return is_travel_photo: True.
+    #
+    # This endpoint's whole job is keeping documents, receipts, ID cards and
+    # explicit content out of a reel somebody is about to post, and it
+    # approved all of them the moment it broke. "checked": False is a third
+    # answer -- not approved, not rejected -- and the app holds the photo for
+    # the person to look at rather than deciding on their behalf.
     except json.JSONDecodeError:
-        print(f"[PHOTO] AI returned non-JSON, approving with defaults")
-        return {"is_travel_photo": True, "quality_score": 60,
-                "caption": "Travel moment", "rejection_reason": "", "category": "other"}
+        print("[PHOTO] model did not return JSON -- holding for review")
+        return {"is_travel_photo": False, "quality_score": 0, "caption": "",
+                "rejection_reason": "We could not check this photo.",
+                "category": "other", "checked": False}
     except Exception as e:
         print(f"[PHOTO] Analysis error: {e}")
-        return {"is_travel_photo": True, "quality_score": 50,
-                "caption": "Travel photo", "rejection_reason": "", "category": "other"}
+        return {"is_travel_photo": False, "quality_score": 0, "caption": "",
+                "rejection_reason": "We could not check this photo.",
+                "category": "other", "checked": False}
 
 
 @app.post("/api/agent")
