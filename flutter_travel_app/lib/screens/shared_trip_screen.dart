@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../config/app_config.dart';
+import '../config/features.dart';
 import '../models/trip_plan.dart';
 import '../services/auth_service.dart';
 import '../services/python_adk_service.dart';
@@ -13,6 +14,7 @@ import '../services/expense_words.dart';
 import '../services/expense_message.dart';
 import '../services/expense_columns.dart';
 import '../widgets/expense_columns_view.dart';
+import '../widgets/expense_insights_view.dart';
 import '../services/plan_diff.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
@@ -871,7 +873,8 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                         // who usually holds the cash. Anybody else would be
                         // recording a payment they know nothing about, and
                         // the rules would refuse it anyway.
-                        if (debt.from == me || debt.to == me || isOwner)
+                        if (kPaymentsEnabled &&
+                            (debt.from == me || debt.to == me || isOwner))
                           TextButton(
                             onPressed: () => _settleDebt(debt),
                             style: TextButton.styleFrom(
@@ -1032,6 +1035,19 @@ class _SharedTripScreenState extends State<SharedTripScreen>
                   onSplitWith: _pickWhoShares,
                   onReceipt: _receiptFor,
                   hasReceipt: (row) => _receipts.containsKey(row.id),
+                ),
+                const SizedBox(height: 12),
+                // The same card the owner sees, so a friend opening the link
+                // gets the same answer to "where did the money go".
+                ExpenseInsightsView(
+                  approved: approved,
+                  tripDates: [
+                    for (final day in ((_trip?['days'] as List?) ?? const [])
+                        .whereType<Map<String, dynamic>>()
+                        .map(PlanDay.fromJson))
+                      day.date
+                  ],
+                  nameOf: (uid) => _nameFor(uid, approved),
                 ),
               ],
 

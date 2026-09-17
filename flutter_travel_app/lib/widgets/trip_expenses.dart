@@ -6,9 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../config/app_config.dart';
+import '../config/features.dart';
 import '../services/expense_words.dart';
 import '../services/expense_columns.dart';
 import 'expense_columns_view.dart';
+import 'expense_insights_view.dart';
+import '../models/trip_plan.dart';
 import '../services/receipt_store.dart';
 import 'receipt_sheet.dart';
 import 'settle_up_sheet.dart';
@@ -37,6 +40,9 @@ class _TripExpensesState extends State<TripExpenses> {
   final TripSync _sync = TripSync();
 
   List<TripPerson> _people = const [];
+
+  /// The itinerary's days, so spending by date can be labelled "Day 2".
+  List<DateTime> _tripDates = const [];
   String _nickname = '';
   bool _loadingPeople = true;
   bool _isOwner = false;
@@ -80,12 +86,19 @@ class _TripExpensesState extends State<TripExpenses> {
     final people = await _sync.members(widget.tripId);
     final mine = await _sync.nickname(widget.tripId);
     final owner = await _sync.isOwnerOf(widget.tripId);
+    final trip = await _sync.fetch(widget.tripId);
     if (!mounted) return;
     setState(() {
       _people = people;
       _nickname = mine;
       _isOwner = owner;
       _loadingPeople = false;
+      _tripDates = [
+        for (final day in ((trip?['days'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(PlanDay.fromJson))
+          day.date
+      ];
     });
     // Asked once, and only when there is somebody to be told apart from.
     if (mine.isEmpty && people.length > 1) _askNickname();
@@ -296,6 +309,7 @@ class _TripExpensesState extends State<TripExpenses> {
                   icon: const Icon(Icons.badge_outlined, size: 18),
                   onPressed: _askNickname,
                 ),
+                if (kPaymentsEnabled)
                 IconButton(
                   tooltip: 'Your UPI id, so people can pay you back',
                   icon: const Icon(Icons.account_balance_wallet_outlined,
@@ -361,6 +375,15 @@ class _TripExpensesState extends State<TripExpenses> {
                 onSplitWith: _pickWhoShares,
                 onReceipt: _receiptFor,
                 hasReceipt: (row) => _receipts.containsKey(row.id),
+              ),
+              const SizedBox(height: 10),
+              // Where it went, between the columns and the settlement: the
+              // columns say who paid, this says on what, and neither pushes
+              // the settlement -- the line people act on -- off the screen.
+              ExpenseInsightsView(
+                approved: approved,
+                tripDates: _tripDates,
+                nameOf: _nameOf,
               ),
               const SizedBox(height: 10),
               _settlement(approved, _payments),
@@ -971,7 +994,8 @@ class _TripExpensesState extends State<TripExpenses> {
                     // is usually the one holding the cash. Anyone else would
                     // be recording a payment they know nothing about -- and
                     // the rules would refuse it.
-                    if (debt.from == _uid || debt.to == _uid || _isOwner)
+                    if (kPaymentsEnabled &&
+                        (debt.from == _uid || debt.to == _uid || _isOwner))
                       TextButton(
                         onPressed: () => _settle(debt),
                         style: TextButton.styleFrom(
