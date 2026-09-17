@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -221,6 +223,45 @@ String tripMemberField(TripScope scope) =>
 /// Where each scope keeps the people still waiting.
 String tripRequestField(TripScope scope) =>
     scope == TripScope.money ? 'money_requests' : 'requests';
+
+/// One line in a trip's history of changes to its spending.
+class TripChange {
+  const TripChange({
+    required this.id,
+    required this.by,
+    required this.byName,
+    required this.action,
+    required this.summary,
+    required this.at,
+  });
+
+  factory TripChange.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final stamp = data['at'];
+    return TripChange(
+      id: doc.id,
+      by: (data['by'] ?? '').toString(),
+      byName: (data['by_name'] ?? '').toString(),
+      action: (data['action'] ?? '').toString(),
+      summary: (data['summary'] ?? '').toString(),
+      // A change written moments ago has no server time yet. Shown as now,
+      // which is what it is.
+      at: stamp is Timestamp ? stamp.toDate() : DateTime.now(),
+    );
+  }
+
+  final String id;
+  final String by;
+  final String byName;
+
+  /// added, edited, removed, split, approved or rejected.
+  final String action;
+
+  /// What happened, in words: "Cab to fort changed to ₹600".
+  final String summary;
+
+  final DateTime at;
+}
 
 /// Money one traveller has handed to another, closing part of a debt.
 class TripPayment {
@@ -630,8 +671,24 @@ class TripSync {
   }
 
   /// The trip as it stands right now, or null if there is no such trip.
-  Future<Map<String, dynamic>?> fetch(String tripId) async {
+  ///
+  /// [preferSaved] reads the copy kept on the device first, and only asks the
+  /// server when there is none. For facts that do not change -- who owns the
+  /// trip -- it is the same answer without the wait, and with no signal a
+  /// server read can stall for several seconds before it gives up.
+  Future<Map<String, dynamic>?> fetch(String tripId,
+      {bool preferSaved = false}) async {
     if (tripId.isEmpty) return null;
+    if (preferSaved) {
+      try {
+        final saved = await _trips
+            .doc(tripId)
+            .get(const GetOptions(source: Source.cache));
+        if (saved.exists) return saved.data();
+      } catch (_) {
+        // Nothing on the device yet. Falls through to the server.
+      }
+    }
     try {
       final snapshot = await _trips.doc(tripId).get();
       return snapshot.exists ? snapshot.data() : null;
@@ -701,8 +758,10 @@ class TripSync {
     try {
       final user = _auth.currentUser;
       // The owner's own rows need no approval: waiting for yourself checks
-      // nothing. Everyone else's wait.
-      final trip = await fetch(tripId);
+      // nothing. Everyone else's wait. Read from the device first: the owner
+      // of a trip never changes, and this is the path somebody takes with no
+      // signal.
+      final trip = await fetch(tripId, preferSaved: true);
       final isOwner = (trip?['owner'] ?? '').toString() == uid;
 
       // Somebody else's row is the owner's to write and nobody else's. Asked
@@ -721,7 +780,18 @@ class TripSync {
           ? (user?.displayName ?? '').trim()
           : ((profiles[payer] as Map?)?['name'] ?? '').toString().trim();
 
-      await _expensesOf(tripId).add({
+      // Written without waiting for the server to answer.
+      //
+      // Firestore puts the row in the local ledger the moment it is written
+      // and sends it when there is a connection. Awaiting the send meant that
+      // with no signal this line never finished: the screen sat on a spinner
+      // for as long as the phone was in a tunnel, and somebody tapping again
+      // added the chai twice. The row is on screen straight away either way.
+      //
+      // A write the rules refuse still fails -- it disappears from the ledger
+      // when the server says no -- so it is logged rather than lost silently.
+      final written = _expensesOf(tripId).doc();
+      unawaited(written.set({
         'by': payer,
         // The payer's name travels with the row, so a settlement can say
         // "Priya owes you" without a second lookup per line.
@@ -740,12 +810,66 @@ class TripSync {
         // one the payer typed themselves.
         if (payer != uid) 'entered_by': uid,
         'at': FieldValue.serverTimestamp(),
-      });
+      }).catchError((Object e) {
+        debugPrint('TripSync.addExpense was refused: $e');
+      }));
+      _log(
+        tripId,
+        'added',
+        '${note.trim().isEmpty ? category : note.trim()} \u00B7 '
+            '${_rupees(paise)}'
+            '${payer != uid && payerName.isNotEmpty ? ' paid by $payerName' : ''}',
+      );
       return true;
     } catch (e) {
       debugPrint('TripSync.addExpense failed: $e');
       return false;
     }
+  }
+
+  CollectionReference<Map<String, dynamic>> _historyOf(String tripId) =>
+      _trips.doc(tripId).collection('history');
+
+  /// Rupees as a person writes them, for a history line. Kept here rather
+  /// than borrowed from the column code, which imports this file.
+  static String _rupees(int paise) {
+    final whole = paise % 100 == 0;
+    final value = (paise / 100).toStringAsFixed(whole ? 0 : 2);
+    return '\u20B9$value';
+  }
+
+  /// Records that something changed.
+  ///
+  /// Never awaited and never allowed to fail the change it describes: the
+  /// expense is what matters, and a history line that could not be written is
+  /// a smaller loss than a saved expense the app then reports as failed.
+  void _log(String tripId, String action, String summary) {
+    final uid = _uid;
+    if (uid == null || tripId.isEmpty) return;
+    unawaited(_historyOf(tripId).add({
+      'by': uid,
+      'by_name': (_auth.currentUser?.displayName ?? '').trim(),
+      'action': action,
+      // Capped, so a pasted essay in a note cannot bloat every history read.
+      'summary': summary.length > 240 ? '${summary.substring(0, 237)}...' : summary,
+      'at': FieldValue.serverTimestamp(),
+    }).then((_) {}).catchError((Object e) {
+      debugPrint('TripSync._log failed: $e');
+    }));
+  }
+
+  /// The trip's changes, newest first.
+  Stream<List<TripChange>> changes(String tripId, {int limit = 50}) {
+    if (tripId.isEmpty) return const Stream<List<TripChange>>.empty();
+    return _historyOf(tripId)
+        .orderBy('at', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) =>
+            [for (final doc in snapshot.docs) TripChange.fromDoc(doc)])
+        .handleError((Object e) {
+      debugPrint('TripSync.changes failed: $e');
+    });
   }
 
   /// What this person wants to be called on this trip.
@@ -794,12 +918,16 @@ class TripSync {
     required String tripId,
     required String expenseId,
     required bool approved,
+    String label = '',
   }) async {
     if (tripId.isEmpty || expenseId.isEmpty) return false;
     try {
       await _expensesOf(tripId)
           .doc(expenseId)
           .update({'status': approved ? 'approved' : 'rejected'});
+      _log(tripId, approved ? 'approved' : 'rejected',
+          '${label.isEmpty ? 'An expense' : label} '
+          '${approved ? 'approved' : 'turned down'}');
       return true;
     } catch (e) {
       debugPrint('TripSync.settleExpense failed: $e');
@@ -819,6 +947,7 @@ class TripSync {
     required int paise,
     required String note,
     String? category,
+    int? previousPaise,
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
@@ -834,6 +963,15 @@ class TripSync {
         // member requires exactly this value.
         if (!isOwner) 'status': 'pending',
       });
+      _log(
+        tripId,
+        'edited',
+        previousPaise != null && previousPaise != paise
+            ? '${note.trim().isEmpty ? 'An expense' : note.trim()} changed '
+                'from ${_rupees(previousPaise)} to ${_rupees(paise)}'
+            : '${note.trim().isEmpty ? 'An expense' : note.trim()} edited '
+                '· ${_rupees(paise)}',
+      );
       return true;
     } catch (e) {
       debugPrint('TripSync.editExpense failed: $e');
@@ -851,6 +989,7 @@ class TripSync {
     required String tripId,
     required String expenseId,
     required bool shared,
+    String label = '',
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
@@ -861,6 +1000,9 @@ class TripSync {
         'shared': shared,
         if (!isOwner) 'status': 'pending',
       });
+      _log(tripId, 'split',
+          '${label.isEmpty ? 'An expense' : label} '
+          '${shared ? 'put back in the split' : 'taken out of the split'}');
       return true;
     } catch (e) {
       debugPrint('TripSync.setShared failed: $e');
@@ -877,6 +1019,7 @@ class TripSync {
     required String tripId,
     required String expenseId,
     required List<String> people,
+    String label = '',
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
@@ -889,6 +1032,9 @@ class TripSync {
         'shared': true,
         if (!isOwner) 'status': 'pending',
       });
+      _log(tripId, 'split',
+          '${label.isEmpty ? 'An expense' : label} '
+          '${people.isEmpty ? 'split with everyone' : 'split between ${people.length}'}');
       return true;
     } catch (e) {
       debugPrint('TripSync.setSharedWith failed: $e');
@@ -905,6 +1051,7 @@ class TripSync {
     required String tripId,
     required String expenseId,
     required Map<String, int> shares,
+    String label = '',
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || expenseId.isEmpty) return false;
@@ -920,6 +1067,9 @@ class TripSync {
         if (shares.isNotEmpty) 'shared_with': <String>[],
         if (!isOwner) 'status': 'pending',
       });
+      _log(tripId, 'split',
+          '${label.isEmpty ? 'An expense' : label} '
+          '${shares.isEmpty ? 'split equally again' : 'given exact amounts'}');
       return true;
     } catch (e) {
       debugPrint('TripSync.setShares failed: $e');
@@ -1041,10 +1191,13 @@ class TripSync {
     return data != null && (data['owner'] ?? '').toString() == _uid;
   }
 
-  Future<bool> removeExpense(String tripId, String expenseId) async {
+  Future<bool> removeExpense(String tripId, String expenseId,
+      {String label = ''}) async {
     if (tripId.isEmpty || expenseId.isEmpty) return false;
     try {
       await _expensesOf(tripId).doc(expenseId).delete();
+      _log(tripId, 'removed',
+          '${label.isEmpty ? 'An expense' : label} removed');
       return true;
     } catch (e) {
       debugPrint('TripSync.removeExpense failed: $e');

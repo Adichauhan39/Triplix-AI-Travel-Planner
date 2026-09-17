@@ -1197,6 +1197,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       tripId: widget.tripId,
       expenseId: row.id,
       approved: approved,
+      label: row.note.isEmpty ? row.category : row.note,
     );
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1263,6 +1264,8 @@ class _SharedTripScreenState extends State<SharedTripScreen>
     final ok = await _sync.editExpense(
       tripId: widget.tripId,
       expenseId: row.id,
+      // So the history can say what it was as well as what it became.
+      previousPaise: row.paise,
       paise: rupeesToPaise(rupees),
       note: tidy.note,
       category: tidy.category,
@@ -1302,7 +1305,8 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       ),
     );
     if (!mounted || sure != true) return;
-    final ok = await _sync.removeExpense(widget.tripId, row.id);
+    final ok = await _sync.removeExpense(widget.tripId, row.id,
+        label: '${row.note.isEmpty ? row.category : row.note} \u00B7 ${_money(row.paise)}');
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
       content: Text('That could not be deleted. Check your connection.'),
@@ -1453,11 +1457,13 @@ class _SharedTripScreenState extends State<SharedTripScreen>
             tripId: widget.tripId,
             expenseId: row.id,
             shares: chosen.shares,
+            label: row.note.isEmpty ? row.category : row.note,
           )
         : await _sync.setSharedWith(
             tripId: widget.tripId,
             expenseId: row.id,
             people: chosen.people,
+            label: row.note.isEmpty ? row.category : row.note,
           );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1476,6 +1482,7 @@ class _SharedTripScreenState extends State<SharedTripScreen>
       tripId: widget.tripId,
       expenseId: row.id,
       shared: shared,
+      label: row.note.isEmpty ? row.category : row.note,
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(

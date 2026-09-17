@@ -6514,6 +6514,7 @@ class _BudgetTabState extends State<BudgetTab>
       tripId: tripId,
       expenseId: target.id,
       shared: shared,
+      label: target.note.isEmpty ? target.category : target.note,
     );
     if (!mounted) return ChatExpense.edited;
 

@@ -4,6 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
+
+import '../services/expense_sheet.dart';
 
 import '../config/app_config.dart';
 import '../config/features.dart';
@@ -18,6 +21,7 @@ import 'settle_up_sheet.dart';
 import 'share_sheet.dart';
 import 'split_picker.dart';
 import 'trip_access_requests.dart';
+import 'trip_changes_view.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
 
@@ -43,6 +47,11 @@ class _TripExpensesState extends State<TripExpenses> {
 
   /// The itinerary's days, so spending by date can be labelled "Day 2".
   List<DateTime> _tripDates = const [];
+
+  /// Where the trip is to, for the sheet's title.
+  String _tripName = '';
+
+  bool _makingSheet = false;
   String _nickname = '';
   bool _loadingPeople = true;
   bool _isOwner = false;
@@ -93,6 +102,7 @@ class _TripExpensesState extends State<TripExpenses> {
       _nickname = mine;
       _isOwner = owner;
       _loadingPeople = false;
+      _tripName = (trip?['destination'] ?? '').toString().split(',').first;
       _tripDates = [
         for (final day in ((trip?['days'] as List?) ?? const [])
             .whereType<Map<String, dynamic>>()
@@ -316,6 +326,21 @@ class _TripExpensesState extends State<TripExpenses> {
                       size: 18),
                   onPressed: _askUpiId,
                 ),
+                // The sheet, for the end of the trip. Offered only once
+                // there is something on it -- a PDF saying "nothing recorded"
+                // is not a thing anybody wants to download.
+                if (approved.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Download the spending as a PDF',
+                    icon: _makingSheet
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    onPressed:
+                        _makingSheet ? null : () => _downloadSheet(approved),
+                  ),
                 IconButton(
                   tooltip: 'Share this trip and its spending',
                   icon: const Icon(Icons.ios_share, size: 18),
@@ -387,6 +412,15 @@ class _TripExpensesState extends State<TripExpenses> {
               ),
               const SizedBox(height: 10),
               _settlement(approved, _payments),
+              const SizedBox(height: 10),
+              // Last, and folded: "who changed the cab to 5,000?" is a
+              // question people only sometimes have, and it must not push
+              // the settlement off the screen to answer it.
+              TripChangesView(
+                tripId: widget.tripId,
+                nameOf: _nameOf,
+                me: _uid,
+              ),
             ],
           ],
         );
@@ -443,7 +477,8 @@ class _TripExpensesState extends State<TripExpenses> {
                       onPressed: () => _sync.settleExpense(
                           tripId: widget.tripId,
                           expenseId: row.id,
-                          approved: false),
+                          approved: false,
+                          label: row.note.isEmpty ? row.category : row.note),
                       child: const Text('No',
                           style: TextStyle(fontSize: 12)),
                     ),
@@ -451,7 +486,8 @@ class _TripExpensesState extends State<TripExpenses> {
                       onPressed: () => _sync.settleExpense(
                           tripId: widget.tripId,
                           expenseId: row.id,
-                          approved: true),
+                          approved: true,
+                          label: row.note.isEmpty ? row.category : row.note),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppConfig.primaryColor,
                         foregroundColor: Colors.white,
@@ -532,6 +568,8 @@ class _TripExpensesState extends State<TripExpenses> {
     final ok = await _sync.editExpense(
       tripId: widget.tripId,
       expenseId: row.id,
+      // So the history can say what it was as well as what it became.
+      previousPaise: row.paise,
       paise: rupeesToPaise(rupees),
       note: tidy.note,
       category: tidy.category,
@@ -571,7 +609,8 @@ class _TripExpensesState extends State<TripExpenses> {
       ),
     );
     if (!mounted || sure != true) return;
-    final ok = await _sync.removeExpense(widget.tripId, row.id);
+    final ok = await _sync.removeExpense(widget.tripId, row.id,
+        label: '${row.note.isEmpty ? row.category : row.note} \u00B7 ${formatRupees(row.paise)}');
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
       content: Text('That could not be deleted. Check your connection.'),
@@ -767,6 +806,60 @@ class _TripExpensesState extends State<TripExpenses> {
     ));
   }
 
+  /// Makes the spending sheet and hands it over.
+  ///
+  /// Built on the device, from the same columns and settlement the screen
+  /// shows, so it works with no signal and cannot disagree with the app. On a
+  /// phone it opens the share sheet; on a laptop the browser saves the file.
+  Future<void> _downloadSheet(List<TripExpense> approved) async {
+    setState(() => _makingSheet = true);
+    try {
+      final regular = await rootBundle.load('assets/fonts/NotoSans-Regular.ttf');
+      final bold = await rootBundle.load('assets/fonts/NotoSans-Bold.ttf');
+
+      final bytes = await buildExpenseSheet(
+        tripName: _tripName,
+        approved: approved,
+        // Built with nobody as "me": the sheet goes to the whole group.
+        columns: buildExpenseColumns(
+            approved: approved, people: _people, me: null),
+        debts: settlementFor(
+          approved: approved,
+          people: [for (final p in _people) p.uid],
+          repaid: [
+            for (final payment in _payments)
+              Repayment(
+                  from: payment.from, to: payment.to, paise: payment.paise)
+          ],
+        ),
+        nameOf: (uid) => uid == _uid
+            ? (_nickname.isNotEmpty ? _nickname : _nameOf(uid))
+            : _nameOf(uid),
+        regularFont: regular.buffer.asUint8List(),
+        boldFont: bold.buffer.asUint8List(),
+      );
+
+      final safe = _tripName.isEmpty
+          ? 'trip'
+          : _tripName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+      await Share.shareXFiles(
+        [
+          XFile.fromData(bytes,
+              name: 'triplix-$safe-spending.pdf',
+              mimeType: 'application/pdf')
+        ],
+        text: 'Our spending on the $_tripName trip',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('The sheet could not be made. ($e)'),
+      ));
+    } finally {
+      if (mounted) setState(() => _makingSheet = false);
+    }
+  }
+
   /// Asks who this expense is divided between.
   Future<void> _pickWhoShares(TripExpense row) async {
     final chosen = await askWhoShares(
@@ -788,11 +881,13 @@ class _TripExpensesState extends State<TripExpenses> {
             tripId: widget.tripId,
             expenseId: row.id,
             shares: chosen.shares,
+            label: row.note.isEmpty ? row.category : row.note,
           )
         : await _sync.setSharedWith(
             tripId: widget.tripId,
             expenseId: row.id,
             people: chosen.people,
+            label: row.note.isEmpty ? row.category : row.note,
           );
     if (!mounted) return;
 
@@ -813,6 +908,7 @@ class _TripExpensesState extends State<TripExpenses> {
       tripId: widget.tripId,
       expenseId: row.id,
       shared: shared,
+      label: row.note.isEmpty ? row.category : row.note,
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -927,34 +1023,15 @@ class _TripExpensesState extends State<TripExpenses> {
       );
     }
 
-    final people = [for (final p in _people) p.uid];
-
-    // Nobody owes a share of somebody's own spending, so it cannot be counted
-    // as having been put in either. Including it reversed who owed whom.
-    final paid = <String, int>{};
-    for (final row in sharedOnly(rows)) {
-      paid[row.by] = (paid[row.by] ?? 0) + row.paise;
-    }
-
-    final debts = settleUp(
-      // What has already been handed over. Without this the settlement
-      // repeats a debt that was paid weeks ago, for ever.
-      paidPaise: withRepayments(
-        paidPaise: paid,
-        repayments: [
-          for (final payment in repaid)
-            Repayment(
-                from: payment.from, to: payment.to, paise: payment.paise)
-        ],
-      ),
-      people: people,
-      // The same figure the columns show.
-      //
-      // This used to be left out, so settleUp divided the whole total by
-      // everybody while the columns above divided each expense among its own
-      // participants. Any expense split between some of the group made the
-      // two disagree -- and this line is the one people act on.
-      owedPaise: owedPerPerson(approved: rows, members: people),
+    // The one shared calculation, so this line, the shared link and the
+    // downloaded sheet cannot give three answers to one question.
+    final debts = settlementFor(
+      approved: rows,
+      people: [for (final p in _people) p.uid],
+      repaid: [
+        for (final payment in repaid)
+          Repayment(from: payment.from, to: payment.to, paise: payment.paise)
+      ],
     );
 
     String name(String uid) => _nameOf(uid);

@@ -362,6 +362,26 @@ service cloud.firestore {
         }
       }
 
+      // Who changed what in the spending, and when.
+      //
+      // Written alongside each change so a number cannot move without leaving
+      // a line. Nobody may edit or delete one, the owner included: a history
+      // that can be rewritten is not a history, and the point of this is that
+      // the group can see what happened even when it was the owner who did it.
+      match /history/{changeId} {
+
+        allow read: if signedIn();
+
+        allow create: if canSpend()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.action in
+               ['added', 'edited', 'removed', 'split', 'approved', 'rejected']
+          && request.resource.data.summary is string
+          && request.resource.data.summary.size() <= 260;
+
+        allow update, delete: if false;
+      }
+
       // Money one traveller has handed another, closing part of a debt.
       //
       // Separate from expenses because it is not money the group spent: filed

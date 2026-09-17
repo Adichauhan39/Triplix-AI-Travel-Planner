@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'firebase_options.dart';
@@ -58,6 +59,22 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+
+    // Kept on the device, so the ledger opens and takes new expenses with no
+    // signal. A hill road or a train through a tunnel is exactly when
+    // somebody pays cash for chai and wants to write it down; before this the
+    // app could not even show what had already been spent.
+    //
+    // Set before anything reads Firestore -- it cannot be changed once the
+    // first query has run.
+    try {
+      FirebaseFirestore.instance.settings =
+          const Settings(persistenceEnabled: true);
+    } catch (e) {
+      // Another tab already holding the store is the usual cause. The app
+      // still works, just online-only, so this is not worth stopping for.
+      debugPrint('Firestore offline persistence unavailable: $e');
+    }
   } catch (e) {
     debugPrint('Firebase init error: $e');
   }

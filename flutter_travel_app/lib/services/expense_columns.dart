@@ -189,6 +189,37 @@ Uri? upiPaymentLink({
   return Uri.parse('upi://pay?$query');
 }
 
+/// Who owes whom, once, for everywhere that shows it.
+///
+/// The owner's ledger, the shared link and the downloadable sheet all answer
+/// this question, and they used to work it out separately. Two of them already
+/// disagreed once: one divided each expense among the people in it, the other
+/// divided the whole total by everybody, so any expense split between some of
+/// the group gave two different answers to the same question.
+///
+/// [approved] only. [repaid] is money already handed back, folded in so a debt
+/// that was settled does not stand for ever.
+List<Debt> settlementFor({
+  required List<TripExpense> approved,
+  required List<String> people,
+  List<Repayment> repaid = const [],
+}) {
+  if (people.length < 2) return const [];
+
+  // Nobody owes a share of somebody's own spending, so it cannot be counted
+  // as having been put in either. Including it reversed who owed whom.
+  final paid = <String, int>{};
+  for (final row in sharedOnly(approved)) {
+    paid[row.by] = (paid[row.by] ?? 0) + row.paise;
+  }
+
+  return settleUp(
+    paidPaise: withRepayments(paidPaise: paid, repayments: repaid),
+    people: people,
+    owedPaise: owedPerPerson(approved: approved, members: people),
+  );
+}
+
 /// The name to show for a uid.
 ///
 /// Falls through the trip nickname, then the name copied onto an expense when

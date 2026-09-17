@@ -92,6 +92,7 @@ dependencies:
 
   # Environment variables (.env)
   flutter_dotenv: ^5.2.1
+  pdf: ^3.13.0
 
 dev_dependencies:
   flutter_test:
@@ -110,6 +111,10 @@ flutter:
     - assets/icons/
     - assets/animations/
     - assets/logo/
+    # A font with a rupee sign in it, for the expense sheet. The PDF library's
+    # built-in fonts have no U+20B9, so every amount would print with a blank
+    # where the currency should be.
+    - assets/fonts/
 
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
