@@ -427,7 +427,12 @@ class _AirportFieldState extends State<_AirportField> {
     super.dispose();
   }
 
+  /// True until the person types, so a city carried in from the plan can be
+  /// resolved for them while anything they type is still theirs to confirm.
+  bool _untouched = true;
+
   void _onChanged(String value) {
+    _untouched = false;
     _debounce?.cancel();
     setState(() {
       _picked = false;
@@ -469,6 +474,31 @@ class _AirportFieldState extends State<_AirportField> {
     }
 
     if (found.isNotEmpty) {
+      // One airport, and a city we were handed rather than one being typed:
+      // choose it.
+      //
+      // Bangalore has exactly one airport, and making somebody tap "BLR
+      // Kempegowda International" under a box that already says Bangalore is
+      // asking them to confirm a fact. Two airports is a real question --
+      // Mumbai has BOM and NMI -- so those still ask, and so does anything
+      // typed by hand, where the first hit is a guess at an unfinished word.
+      final onlyOne = found.length == 1;
+      final looksLikeTheSameCity = onlyOne &&
+          _shortCity(query).toLowerCase() ==
+              _shortCity(found.first.city).toLowerCase();
+
+      if (_untouched && onlyOne && looksLikeTheSameCity) {
+        setState(() {
+          _options = [];
+          _searching = false;
+          _picked = true;
+          _controller.text = '${found.first.city} (${found.first.code})';
+        });
+        widget.onSelected(
+            found.first.city, found.first.code, found.first.name);
+        return;
+      }
+
       setState(() {
         _options = found;
         _searching = false;

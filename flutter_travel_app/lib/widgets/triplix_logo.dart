@@ -60,6 +60,17 @@ class TriplixLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Decoded at the size it is actually drawn, in real device pixels.
+    //
+    // The artwork is 1024 square and this is often asked to draw it at 40.
+    // Without a cache size the full 1024 is decoded and then squeezed down on
+    // every single frame, which is both slow and soft -- and softest while the
+    // mark is moving, because each frame resamples from scratch at a slightly
+    // different sub-pixel offset. Decoding once at the right size is what
+    // makes it crisp in motion.
+    final ratio = MediaQuery.maybeDevicePixelRatioOf(context) ?? 2.0;
+    final pixels = (size * ratio).ceil();
+
     final Widget mark = SizedBox(
       width: size,
       height: size,
@@ -67,10 +78,18 @@ class TriplixLogo extends StatelessWidget {
         assetPath,
         width: size,
         height: size,
+        cacheWidth: pixels,
+        cacheHeight: pixels,
+        // Medium, not high.
+        //
+        // FilterQuality.high is bicubic and is meant for scaling *up*; on a
+        // reduction this large it is slower and no sharper. Medium samples
+        // through mipmaps, which is exactly the right tool for shrinking a
+        // big image and is what keeps the edges clean as it drifts.
+        filterQuality: FilterQuality.medium,
         // Contain, never cover: the artwork is a pin on a transparent square,
         // and cropping it cuts the point off.
         fit: BoxFit.contain,
-        filterQuality: FilterQuality.high,
         // If the asset ever goes missing the app shows the mark drawn rather
         // than a broken-image box.
         errorBuilder: (_, __, ___) =>
@@ -78,13 +97,33 @@ class TriplixLogo extends StatelessWidget {
       ),
     );
 
+    // The glow, which the drawn version used to provide and the artwork does
+    // not. Restored here rather than lost quietly when the mark went back to
+    // being a picture: the entrance screens ask for `lifted` and were getting
+    // nothing for it.
+    final Widget lit = lifted
+        ? DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF1FA7C4).withValues(alpha: 0.28),
+                  blurRadius: size * 0.42,
+                  spreadRadius: size * 0.02,
+                ),
+              ],
+            ),
+            child: mark,
+          )
+        : mark;
+
     // No clipping. The old widget clipped a square photograph into a circle;
     // the mark is already the right shape and a circular clip would cut its
     // point off.
     if (padding == EdgeInsets.zero &&
         backgroundColor == null &&
         boxShadow == null) {
-      return mark;
+      return lit;
     }
 
     return Container(
@@ -95,7 +134,7 @@ class TriplixLogo extends StatelessWidget {
         borderRadius: shape == BoxShape.rectangle ? borderRadius : null,
         boxShadow: boxShadow,
       ),
-      child: mark,
+      child: lit,
     );
   }
 }

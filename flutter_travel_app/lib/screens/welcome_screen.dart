@@ -142,14 +142,25 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         animation: _drift,
         builder: (context, child) {
           final lift = Curves.easeInOut.transform(_drift.value) * 8 - 4;
-          return Transform.translate(offset: Offset(0, lift), child: child);
+          return Transform.translate(
+            offset: Offset(0, lift),
+            // Rasterised once and then moved, rather than redrawn into the
+            // scene on every frame at a slightly different sub-pixel offset.
+            // Without this the mark is resampled 60 times a second and the
+            // edges shimmer -- sharp when it is still, soft the moment it
+            // moves, which is exactly the complaint.
+            filterQuality: FilterQuality.medium,
+            child: child,
+          );
         },
         // No disc. The mark was 72 pixels inside a padded circle, so the pin
         // filled barely half of what you saw and the circle's curve closed in
         // right where the point tapers -- it read as cropped. The mark is the
         // subject here, so it is simply the subject: bigger, unframed, and
         // lifted off the paper by its own glow and shadow.
-        child: const TriplixLogo(size: 132, lifted: true),
+        child: const RepaintBoundary(
+          child: TriplixLogo(size: 132, lifted: true),
+        ),
       ),
     );
   }
