@@ -1243,16 +1243,32 @@ class TripSync {
   }
 
   /// Who is sharing the cost: everyone with edit access, including the owner.
-  Future<List<TripPerson>> members(String tripId) async {
+  /// Everybody the bill is divided between.
+  Future<List<TripPerson>> splitPeople(String tripId) async {
     final data = await fetch(tripId);
     if (data == null) return const [];
+    return splitPeopleOf(data);
+  }
+
+  /// Everybody the bill is divided between, from a trip document.
+  ///
+  /// The people with *budget* access -- not the people who can edit the plan.
+  /// This read `members` until the two permissions were separated, and kept
+  /// reading it afterwards: so a friend approved only for the budget was left
+  /// out of the split entirely, and a friend approved only to help with the
+  /// itinerary was charged a share of money they could not even see.
+  ///
+  /// Goes through spendersOf, so a trip made before the budget had its own
+  /// list still splits among its members exactly as it always did.
+  static List<TripPerson> splitPeopleOf(Map<String, dynamic> data) {
     final profiles = (data['profiles'] as Map?) ?? const {};
     return [
-      for (final uid in (data['members'] as List?) ?? const [])
-        TripPerson.from(
-          uid.toString(),
-          (profiles[uid.toString()] as Map?)?.cast<String, dynamic>(),
-        )
+      for (final uid in spendersOf(data))
+        if (uid.isNotEmpty)
+          TripPerson.from(
+            uid,
+            (profiles[uid] as Map?)?.cast<String, dynamic>(),
+          )
     ];
   }
 

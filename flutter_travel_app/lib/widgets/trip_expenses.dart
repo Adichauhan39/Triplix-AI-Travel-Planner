@@ -92,7 +92,9 @@ class _TripExpensesState extends State<TripExpenses> {
   }
 
   Future<void> _loadPeople() async {
-    final people = await _sync.members(widget.tripId);
+    // The people with budget access, not plan access: those are two
+    // different lists, and splitting by the plan's charged the wrong people.
+    final people = await _sync.splitPeople(widget.tripId);
     final mine = await _sync.nickname(widget.tripId);
     final owner = await _sync.isOwnerOf(widget.tripId);
     final trip = await _sync.fetch(widget.tripId);

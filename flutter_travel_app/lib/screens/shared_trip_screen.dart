@@ -602,10 +602,10 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   /// Not "everyone who paid" -- a member who has paid nothing still owes their
   /// share, and leaving them out would quietly hand their part to the others.
   List<String> get _people {
-    final members = (_trip?['members'] as List?) ?? const [];
-    final people = [for (final m in members) m.toString()]
-      ..removeWhere((m) => m.isEmpty);
-    return people;
+    final trip = _trip;
+    if (trip == null) return const [];
+    // Budget access, not plan access -- see TripSync.splitPeopleOf.
+    return [for (final person in TripSync.splitPeopleOf(trip)) person.uid];
   }
 
   final TextEditingController _spend = TextEditingController();
@@ -749,14 +749,9 @@ class _SharedTripScreenState extends State<SharedTripScreen>
   /// holds it, and the nickname the owner approved somebody under is the name
   /// the rest of the group reads.
   List<TripPerson> get _members {
-    final profiles = (_trip?['profiles'] as Map?) ?? const {};
-    return [
-      for (final uid in (_trip?['members'] as List?) ?? const [])
-        TripPerson.from(
-          uid.toString(),
-          (profiles[uid.toString()] as Map?)?.cast<String, dynamic>(),
-        ),
-    ];
+    final trip = _trip;
+    if (trip == null) return const [];
+    return TripSync.splitPeopleOf(trip);
   }
 
   Widget _spending(TripAccess access) {

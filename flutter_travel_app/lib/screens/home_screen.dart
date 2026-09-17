@@ -6428,7 +6428,7 @@ class _BudgetTabState extends State<BudgetTab>
     String? payerUid;
     if (spoken.payer != null) {
       final sync = TripSync();
-      final people = await sync.members(tripId);
+      final people = await sync.splitPeople(tripId);
       payerUid = matchPerson(spoken.payer, {
         for (final person in people) person.uid: person.name,
       });
