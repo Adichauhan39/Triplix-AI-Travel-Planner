@@ -1702,6 +1702,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       onChanged: onChanged,
                       onEditingComplete: onEditingComplete,
                       textInputAction: TextInputAction.search,
+                      // Tapping a filled field selects what is in it, so the
+                      // next thing typed replaces the city rather than
+                      // landing in the middle of it. Changing "Bangalore,
+                      // Karnataka, India" to somewhere else meant twenty-six
+                      // presses of backspace first.
+                      onTap: () {
+                        if (controller.text.isNotEmpty) {
+                          controller.selection = TextSelection(
+                            baseOffset: 0,
+                            extentOffset: controller.text.length,
+                          );
+                        }
+                      },
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -1716,6 +1729,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         border: InputBorder.none,
                         isDense: true,
                         contentPadding: EdgeInsets.zero,
+                        // And a way to empty it outright, for somebody who
+                        // wants the field blank rather than replaced. Only
+                        // when there is something to clear: an X on an empty
+                        // box is a button that does nothing.
+                        suffixIcon: controller.text.isEmpty
+                            ? null
+                            : GestureDetector(
+                                onTap: () {
+                                  controller.clear();
+                                  onChanged('');
+                                  focusNode.requestFocus();
+                                },
+                                child: Icon(Icons.close,
+                                    size: 15,
+                                    color: AppConfig.textTertiary),
+                              ),
+                        suffixIconConstraints: const BoxConstraints(
+                            minWidth: 22, minHeight: 22),
                       ),
                     ),
                   ),

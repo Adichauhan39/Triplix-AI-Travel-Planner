@@ -393,6 +393,33 @@ class _AirportField extends StatefulWidget {
   State<_AirportField> createState() => _AirportFieldState();
 }
 
+/// Whether a city resolves to one airport clearly enough to choose it
+/// without asking.
+///
+/// Bangalore has exactly one airport, and making somebody tap "BLR Kempegowda
+/// International" under a box that already says Bangalore asks them to
+/// confirm a fact. Mumbai has two and that is a real question, so it still
+/// asks -- and so does anything being typed, where the first hit is a guess
+/// at an unfinished word.
+///
+/// A top-level function so it can be tested against the real shapes the
+/// airport service returns. Inside the widget it could only be checked by
+/// running the app and looking at it, which is how it went out not working.
+bool shouldAutoPickAirport({
+  required String typed,
+  required List<AirportOption> found,
+  required bool untouched,
+}) {
+  if (!untouched || found.length != 1) return false;
+
+  String short(String value) => value.split(',').first.trim().toLowerCase();
+
+  // The city has to be the one asked for. "Bangalore, Karnataka, India"
+  // matches Bangalore; a nearest-airport substitution -- Bhilai answering with
+  // Raipur -- is a change of city and must be shown, not slipped in.
+  return short(typed) == short(found.first.city);
+}
+
 class _AirportFieldState extends State<_AirportField> {
   late final TextEditingController _controller =
       TextEditingController(text: widget.initialText);
@@ -482,12 +509,8 @@ class _AirportFieldState extends State<_AirportField> {
       // asking them to confirm a fact. Two airports is a real question --
       // Mumbai has BOM and NMI -- so those still ask, and so does anything
       // typed by hand, where the first hit is a guess at an unfinished word.
-      final onlyOne = found.length == 1;
-      final looksLikeTheSameCity = onlyOne &&
-          _shortCity(query).toLowerCase() ==
-              _shortCity(found.first.city).toLowerCase();
-
-      if (_untouched && onlyOne && looksLikeTheSameCity) {
+      if (shouldAutoPickAirport(
+          typed: query, found: found, untouched: _untouched)) {
         setState(() {
           _options = [];
           _searching = false;
