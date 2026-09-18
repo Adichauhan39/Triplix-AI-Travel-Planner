@@ -16,7 +16,11 @@ import '../services/trip_photo_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import '../services/expense_columns.dart';
+import '../models/trip_plan.dart';
+import '../services/currency.dart';
 import '../services/expense_message.dart';
+import '../services/expense_questions.dart';
+import '../services/expense_words.dart';
 import '../widgets/share_sheet.dart';
 import '../services/settle_up.dart';
 import '../services/trip_sync.dart';
@@ -3919,8 +3923,8 @@ Please provide a detailed travel itinerary with recommendations for hotels, acti
                       decoration: BoxDecoration(
                         color: Colors.white,
                         border: Border(
-                          top:
-                              BorderSide(color: AppConfig.borderColor, width: 1),
+                          top: BorderSide(
+                              color: AppConfig.borderColor, width: 1),
                         ),
                       ),
                       child: SizedBox(
@@ -6206,6 +6210,17 @@ class _BudgetTabState extends State<BudgetTab>
     });
     _scrollToBottom();
 
+    // A question about the money, answered from the ledger itself.
+    //
+    // Before the network on purpose: these answers are exact, instant, cost
+    // nothing and work with no signal -- and unlike a model, they cannot
+    // state a figure the ledger does not hold.
+    final answered = await _answerFromLedger(message);
+    if (answered) {
+      if (mounted) setState(() => _isTyping = false);
+      return;
+    }
+
     try {
       // Send to AI manager with budget context
       final response = await _pythonADK.sendToManager(
@@ -6224,10 +6239,12 @@ class _BudgetTabState extends State<BudgetTab>
           // refers back a line or two, and sending an hour of chat on every
           // message costs tokens for context nobody is using.
           'history': [
-            for (final m in _chatMessages
-                .sublist(_chatMessages.length > 8 ? _chatMessages.length - 8 : 0))
-              {'role': m['sender'] == 'user' ? 'user' : 'assistant',
-               'text': m['message'] ?? ''}
+            for (final m in _chatMessages.sublist(
+                _chatMessages.length > 8 ? _chatMessages.length - 8 : 0))
+              {
+                'role': m['sender'] == 'user' ? 'user' : 'assistant',
+                'text': m['message'] ?? ''
+              }
           ],
           // What was spent, and nothing about a budget: there isn't one, and
           // sending zeroes invited the model to talk about them.
@@ -6257,30 +6274,28 @@ class _BudgetTabState extends State<BudgetTab>
         // Show expense card in chat if expense was added
         if (expenseAdded) {
           final lastExp = _expenses.last;
-          _chatMessages.add({
-            'sender': 'ai',
-            // No budget lines. They read "Total Budget: 0, Remaining:
-            // -500" -- true about a number that should not have been on
-            // screen, and alarming about money that was fine.
-            'message': '✅ Added to the shared ledger\n\n'
-                '💰 ₹${(lastExp['amount'] as double).toStringAsFixed(0)}'
-                '  ·  ${lastExp['description']}\n'
-                '📂 ${lastExp['category']}',
-          });
+          // Short, because it now sits on one line above the box rather than
+          // in a chat of its own. The row itself has already appeared in the
+          // ledger above -- this only confirms which one.
+          _say('Added: ${lastExp['description']} '
+              '\u00B7 ₹${(lastExp['amount'] as double).toStringAsFixed(0)}'
+              '${lastExp['converted'] != null
+                  ? '  (${lastExp['converted']})'
+                  : ''}'
+              '${lastExp['corrected'] != null
+                  ? '  \u2014 read "${lastExp['corrected']}" as '
+                      '"${lastExp['description']}"'
+                  : ''}');
         } else if (outcome == ChatExpense.needsPurpose) {
           // Asked, rather than letting the model answer for a ledger it
           // cannot write to.
-          _chatMessages.add({'sender': 'ai', 'message': _askForPurpose()});
+          _say(_askForPurpose());
         } else if (outcome == ChatExpense.edited ||
             outcome == ChatExpense.askedWhich) {
           // Already answered, from what the ledger did. Adding the model's
           // version underneath would be two replies disagreeing.
         } else {
-          _chatMessages.add({'sender': 'ai', 'message': aiReply});
-        }
-        // Show budget set card
-        if (_isBudgetSet && expenseBefore == 0 && !expenseAdded) {
-          // Budget was just set, already handled by aiReply
+          _say(aiReply);
         }
       });
     } catch (e) {
@@ -6359,10 +6374,82 @@ class _BudgetTabState extends State<BudgetTab>
   /// missing half.
   ExpenseDraft? _pendingExpense;
 
+  /// The foreign money behind [_pendingExpense]. Without it, "50 dollars"
+  /// followed by "taxi" filed the rupees and forgot they were ever dollars.
+  (ForeignAmount, RateQuote)? _pendingForeign;
+
   /// What the chat last said about, so "exclude that" has a referent.
   String _lastTouched = '';
 
+  /// Answers a question about the spending, or returns false.
+  ///
+  /// False means "this was not a question about the money" -- the caller then
+  /// treats it as an expense, and only then falls back to the model.
+  Future<bool> _answerFromLedger(String message) async {
+    final tripId = context.read<TripPlanProvider>().tripId;
+    if (tripId.isEmpty) return false;
+
+    // Nothing that looks like money being recorded: "500 for the cab" is an
+    // instruction, not a question, and must reach the filing code.
+    if (readExpenseDraft(message).hasAmount) return false;
+    if (readForeignAmount(message) != null) return false;
+
+    final sync = TripSync();
+    final rows = await sync.expensesOnce(tripId);
+    final people = await sync.splitPeople(tripId);
+    if (!mounted) return false;
+
+    final trip = await sync.fetch(tripId, preferSaved: true);
+    if (!mounted) return false;
+
+    final answer = answerAboutExpenses(
+      message,
+      approved: [for (final row in rows) if (row.isApproved) row],
+      people: people,
+      me: FirebaseAuth.instance.currentUser?.uid,
+      tripDates: [
+        for (final day in ((trip?['days'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(PlanDay.fromJson))
+          day.date
+      ],
+    );
+    if (answer == null) return false;
+
+    setState(() => _say(answer.text));
+    return true;
+  }
+
   Future<ChatExpense> _tryParseExpenseFromMessage(String message) async {
+    // Money in another currency, converted before anything reads the
+    // amount. Everything below treats a number as rupees -- correctly, for
+    // rupees -- so without this "50 dollars" was filed as fifty of them.
+    (ForeignAmount, RateQuote)? foreign;
+    final spotted = readForeignAmount(message);
+    if (spotted != null) {
+      final quote = await CurrencyRates.quote(spotted.code);
+      if (!mounted) return ChatExpense.askedWhich;
+      if (quote == null) {
+        // Refused rather than guessed. The settlement divides this number,
+        // and a wrong one is only noticed after money has changed hands.
+        final name = currencyNames[spotted.code] ?? spotted.code;
+        setState(() => _say("I couldn't get a rate for $name, so I haven't "
+            "added it. Once you're online I'll convert it -- or tell me the "
+            'amount in rupees.'));
+        return ChatExpense.askedWhich;
+      }
+      foreign = (spotted, quote);
+
+      // The same sentence with rupees where the foreign money was, so the
+      // ordinary reader still finds the payer and the purpose.
+      final at = message.toLowerCase().indexOf(spotted.matched);
+      if (at >= 0) {
+        final rupees = spotted.amount * quote.rupeesPerUnit;
+        message = message.replaceRange(
+            at, at + spotted.matched.length, rupees.toStringAsFixed(2));
+      }
+    }
+
     var draft = readExpenseDraft(message);
 
     // An instruction about an expense that already exists, rather than a new
@@ -6379,7 +6466,9 @@ class _BudgetTabState extends State<BudgetTab>
     if (pending != null && !draft.hasAmount) {
       final purpose = message.trim();
       // A question is not an answer, and neither is a whole sentence.
-      if (purpose.isNotEmpty && purpose.length <= 60 && !purpose.contains('?')) {
+      if (purpose.isNotEmpty &&
+          purpose.length <= 60 &&
+          !purpose.contains('?')) {
         draft = ExpenseDraft(
           rupees: pending.rupees,
           payer: pending.payer,
@@ -6390,12 +6479,17 @@ class _BudgetTabState extends State<BudgetTab>
     }
 
     if (draft.needsPurpose) {
-      setState(() => _pendingExpense = draft);
+      setState(() {
+        _pendingExpense = draft;
+        _pendingForeign = foreign;
+      });
       return ChatExpense.needsPurpose;
     }
     if (!draft.complete) return ChatExpense.notMoney;
 
     _pendingExpense = null;
+    foreign ??= _pendingForeign;
+    _pendingForeign = null;
     final spoken = SpokenExpense(
       rupees: draft.rupees!,
       description: draft.description,
@@ -6403,15 +6497,26 @@ class _BudgetTabState extends State<BudgetTab>
       shared: draft.shared,
     );
 
-    final category = _inferCategory(spoken.description);
+    // Spelled the way the rest of the app spells it. The other three ways
+    // to add an expense run the note through this; this one never did, which
+    // is why "dronk" stayed "dronk" for the people who use the chat.
+    //
+    // The category comes from the same vocabulary rather than a second list
+    // of keywords: two lists about the same thing drift, and one of them did.
+    final tidy = tidyNote(spoken.description);
+    final category = tidy.category == 'Other'
+        ? _inferCategory(spoken.description)
+        : tidy.category;
 
     // The local list still drives the charts on the Overview tab.
     setState(() {
       _expenses.add({
         'amount': spoken.rupees,
-        'description': spoken.description,
+        'description': tidy.note,
         'category': category,
         'date': DateTime.now().toIso8601String(),
+        if (foreign != null) 'converted': _convertedNote(foreign),
+        if (tidy.corrected) 'corrected': spoken.description,
       });
     });
 
@@ -6449,12 +6554,38 @@ class _BudgetTabState extends State<BudgetTab>
     await TripSync().addExpense(
       tripId: tripId,
       paise: rupeesToPaise(spoken.rupees),
-      note: spoken.description,
+      note: tidy.note,
       category: category,
       onBehalfOf: payerUid,
       shared: spoken.shared,
+      originalAmount: foreign?.$1.amount,
+      originalCurrency: foreign?.$1.code,
+      rate: foreign?.$2.rupeesPerUnit,
     );
     return ChatExpense.filed;
+  }
+
+  /// "50 US dollars at ₹96.02 each" -- what was converted and at what rate.
+  ///
+  /// Staleness is said rather than hidden: a rate saved last week is a fair
+  /// number to use with no signal, but it must not look like today's. The
+  /// source is credited, which its terms ask for.
+  String _convertedNote((ForeignAmount, RateQuote) foreign) {
+    final (amount, quote) = foreign;
+    final name = currencyNames[amount.code] ?? amount.code;
+    final count = amount.amount == amount.amount.roundToDouble()
+        ? amount.amount.toStringAsFixed(0)
+        : amount.amount.toStringAsFixed(2);
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final when = '${quote.asOf.day} ${months[quote.asOf.month - 1]}';
+    final how = quote.fromSaved
+        ? "last saved rate, $when -- no signal to check today's"
+        : 'rate of $when';
+    return '$count $name at \u20B9${quote.rupeesPerUnit.toStringAsFixed(2)} '
+        'each ($how)';
   }
 
   /// Takes a row out of the split, or puts it back, from a sentence.
@@ -6471,7 +6602,10 @@ class _BudgetTabState extends State<BudgetTab>
     }
 
     final rows = await TripSync().expensesOnce(tripId);
-    final live = [for (final r in rows) if (r.status != 'rejected') r];
+    final live = [
+      for (final r in rows)
+        if (r.status != 'rejected') r
+    ];
     if (live.isEmpty || !mounted) return ChatExpense.notMoney;
 
     final said = message.toLowerCase();
@@ -6720,21 +6854,21 @@ class _BudgetTabState extends State<BudgetTab>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Budget Manager',
+        // "Spending", not "Budget Manager": there is no budget in it. It
+        // records what was paid and splits it.
+        title: const Text('Spending',
             style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: AppConfig.primaryColor,
         foregroundColor: Colors.white,
         elevation: 0,
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorColor: Colors.white,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white60,
-          tabs: const [
-            Tab(icon: Icon(Icons.chat_bubble_outline), text: 'AI Chat'),
-            Tab(icon: Icon(Icons.receipt_long), text: 'Expenses'),
-          ],
-        ),
+        actions: [
+          // The conversation, one tap away rather than a tab away.
+          IconButton(
+            tooltip: 'Everything the assistant has said',
+            icon: const Icon(Icons.forum_outlined),
+            onPressed: _showChatHistory,
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -6777,14 +6911,49 @@ class _BudgetTabState extends State<BudgetTab>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                _buildChatTab(),
-                _buildExpensesTab(),
-              ],
-            ),
+            child: _buildExpensesTab(),
           ),
+          // The last thing the assistant said, above the box that said it.
+          // The whole conversation is behind the icon in the app bar; here
+          // there is only the answer to what was just typed.
+          if (_lastReply != null)
+            Container(
+              width: double.infinity,
+              color: AppConfig.primaryColor.withValues(alpha: 0.06),
+              padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.auto_awesome,
+                      size: 15, color: AppConfig.primaryColor),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child:
+                        Text(_lastReply!, style: const TextStyle(fontSize: 12)),
+                  ),
+                  InkWell(
+                    onTap: () => setState(() => _lastReply = null),
+                    child: Icon(Icons.close,
+                        size: 15, color: AppConfig.textTertiary),
+                  ),
+                ],
+              ),
+            ),
+          if (_isTyping)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                  SizedBox(width: 8),
+                  Text('Working on it…', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+          _chatBar(),
         ],
       ),
       // No floating add.
@@ -6798,6 +6967,111 @@ class _BudgetTabState extends State<BudgetTab>
   }
 
   // ─── AI Chat Tab ───
+  /// The last thing the assistant said, shown above the box.
+  String? _lastReply;
+
+  /// Says something: on the line above the box, and into the conversation.
+  ///
+  /// Both, so the answer to what was just typed is impossible to miss while
+  /// the history stays complete for anyone who looks back.
+  void _say(String message) {
+    _chatMessages.add({'sender': 'ai', 'message': message});
+    _lastReply = message;
+  }
+
+  /// The message box, along the bottom of the page.
+  Widget _chatBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+              color: Color(0x1A000000), blurRadius: 8, offset: Offset(0, -2))
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Questions this app can answer about this trip, one tap each.
+            SizedBox(
+              height: 36,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _buildQuickChip('💰 Total', 'how much have we spent'),
+                  _buildQuickChip('🤝 Who owes', 'who owes whom'),
+                  _buildQuickChip('🍜 On food', 'how much on food'),
+                  _buildQuickChip('📅 Today', 'how much did we spend today'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _chatController,
+                    textInputAction: TextInputAction.send,
+                    decoration: InputDecoration(
+                      hintText: 'What did you pay for? e.g. 500 for the cab',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24)),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                    ),
+                    onSubmitted: _sendChatMessage,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                CircleAvatar(
+                  backgroundColor: AppConfig.primaryColor,
+                  child: IconButton(
+                    icon: const Icon(Icons.send, color: Colors.white, size: 20),
+                    onPressed: () => _sendChatMessage(_chatController.text),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The whole conversation, for when somebody wants to look back.
+  void _showChatHistory() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        builder: (context, controller) => _chatMessages.isEmpty
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Text('Nothing said yet. Tell me what you paid for.'),
+                ),
+              )
+            : ListView.builder(
+                controller: controller,
+                padding: const EdgeInsets.all(16),
+                itemCount: _chatMessages.length,
+                itemBuilder: (context, index) {
+                  final msg = _chatMessages[index];
+                  return _buildChatBubble(
+                      msg['message']!, msg['sender'] == 'ai');
+                },
+              ),
+      ),
+    );
+  }
+
+  // ignore: unused_element
   Widget _buildChatTab() {
     return Column(
       children: [
@@ -6825,11 +7099,15 @@ class _BudgetTabState extends State<BudgetTab>
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: [
-                _buildQuickChip('📊 Summary', 'Show budget summary'),
-                _buildQuickChip('👥 Split', 'Split expenses per person'),
-                _buildQuickChip('💡 Tips', 'Give saving tips'),
-                _buildQuickChip('🏨 Add Hotel', 'Spent ₹ on hotel'),
-                _buildQuickChip('🍜 Add Food', 'Spent ₹ on food'),
+                // The old five asked for a budget summary the app no
+                // longer has, a split the columns show permanently, generic
+                // saving tips, and two templates that filled in everything
+                // except the number. These are questions only this app can
+                // answer, from this trip's own ledger.
+                _buildQuickChip('💰 Total', 'how much have we spent'),
+                _buildQuickChip('🤝 Who owes', 'who owes whom'),
+                _buildQuickChip('🍜 On food', 'how much on food'),
+                _buildQuickChip('📅 Today', 'how much did we spend today'),
               ],
             ),
           ),
@@ -7183,7 +7461,8 @@ class _BudgetTabState extends State<BudgetTab>
       context,
       link: TripSync.shareLink(tripId, scope: TripScope.money),
       message: 'Come and split the costs of this trip with me on Triplix.',
-      note: 'Whoever opens it signs in, tells you their name, and waits for you to approve them before anything they add counts.',
+      note:
+          'Whoever opens it signs in, tells you their name, and waits for you to approve them before anything they add counts.',
     );
   }
 
@@ -7197,35 +7476,12 @@ class _BudgetTabState extends State<BudgetTab>
         padding: const EdgeInsets.all(16),
         children: [
           TripExpenses(tripId: tripId),
-          if (_expenses.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            const Text('Logged on this device',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            Text(
-              'Added through the chat, and not shared with anyone.',
-              style: TextStyle(fontSize: 11, color: AppConfig.textTertiary),
-            ),
-            const SizedBox(height: 8),
-            for (final e in _expenses)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        (e['title'] ?? e['category'] ?? 'Expense').toString(),
-                      ),
-                    ),
-                    Text(
-                      'RS ' +
-                          ((e['amount'] as num?) ?? 0).toStringAsFixed(2),
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+          // Nothing below the ledger.
+          //
+          // The chat writes each expense to the shared ledger *and* to a list
+          // on this device, and drawing both on one page showed every expense
+          // twice -- which reads as having been charged twice. The ledger is
+          // the real record, so it is the only one shown.
         ],
       );
     }
@@ -7245,7 +7501,10 @@ class _BudgetTabState extends State<BudgetTab>
                     fontWeight: FontWeight.w600,
                     color: AppConfig.textSecondary)),
             const SizedBox(height: 8),
-            const Text('Tap + to add or tell the AI chatbot',
+            // The + was removed when the second Add button went. Naming
+            // the box at the bottom of this same page is both true and the
+            // thing we want them to use.
+            const Text('Type what you paid for in the box below',
                 style: TextStyle(color: AppConfig.textTertiary)),
           ],
         ),
@@ -7527,8 +7786,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 'It has not been looked at, so it is not in your reel. That '
                 'is usually a moment of bad connection rather than anything '
                 'about the photo.',
-                style: TextStyle(
-                    fontSize: 13, color: AppConfig.textSecondary),
+                style: TextStyle(fontSize: 13, color: AppConfig.textSecondary),
               ),
             ),
             ListTile(
@@ -7562,9 +7820,8 @@ class _ProfileTabState extends State<ProfileTab> {
       case 'again':
         await _photoService.recheck(photo.id);
         if (!mounted) return;
-        final now = _photoService.photos
-            .where((p) => p.id == photo.id)
-            .firstOrNull;
+        final now =
+            _photoService.photos.where((p) => p.id == photo.id).firstOrNull;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(switch (now?.status) {
             PhotoStatus.approved => 'Checked — it is in your reel.',
@@ -7591,7 +7848,8 @@ class _ProfileTabState extends State<ProfileTab> {
     if (!_hasTrip) return _needATrip();
 
     setState(() => _buildingReel = true);
-    final destination = context.read<TripPlanProvider>().plan?.destination ?? '';
+    final destination =
+        context.read<TripPlanProvider>().plan?.destination ?? '';
 
     // The full images, not the thumbnails the grid draws: a reel made from
     // 240px copies would be a reel of postage stamps.
@@ -7660,8 +7918,7 @@ class _ProfileTabState extends State<ProfileTab> {
     try {
       await Share.shareXFiles(
         [
-          XFile.fromData(bytes,
-              name: 'triplix-reel.mp4', mimeType: 'video/mp4')
+          XFile.fromData(bytes, name: 'triplix-reel.mp4', mimeType: 'video/mp4')
         ],
         text: 'My trip, on Triplix',
       );
@@ -7678,8 +7935,18 @@ class _ProfileTabState extends State<ProfileTab> {
   /// "14 Sep, 19:05", from the photograph's own clock.
   String _whenLabel(DateTime when) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
     final hh = when.hour.toString().padLeft(2, '0');
     final mm = when.minute.toString().padLeft(2, '0');
@@ -7746,8 +8013,8 @@ class _ProfileTabState extends State<ProfileTab> {
                 // decided about. Folded into "Approved" they would go out
                 // unseen, which is the bug this state exists for.
                 if (unchecked.isNotEmpty)
-                  _buildStatChip(Icons.question_mark, '${unchecked.length}',
-                      'Needs you'),
+                  _buildStatChip(
+                      Icons.question_mark, '${unchecked.length}', 'Needs you'),
               ],
             ),
           ),
@@ -7756,8 +8023,7 @@ class _ProfileTabState extends State<ProfileTab> {
           if (unchecked.isNotEmpty)
             Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               color: AppConfig.warningColor.withValues(alpha: 0.12),
               child: Row(
                 children: [
@@ -7832,9 +8098,8 @@ class _ProfileTabState extends State<ProfileTab> {
                   // The half that was missing. Playing it in the app is not
                   // the thing anybody wants a reel for.
                   child: ElevatedButton.icon(
-                    onPressed: approved.isEmpty || _buildingReel
-                        ? null
-                        : _shareReel,
+                    onPressed:
+                        approved.isEmpty || _buildingReel ? null : _shareReel,
                     icon: _buildingReel
                         ? const SizedBox(
                             width: 16,
@@ -8048,8 +8313,8 @@ class _ProfileTabState extends State<ProfileTab> {
               child: Container(
                 color: Colors.black.withValues(alpha: 0.45),
                 child: const Center(
-                  child: Icon(Icons.help_outline,
-                      color: Colors.amber, size: 30),
+                  child:
+                      Icon(Icons.help_outline, color: Colors.amber, size: 30),
                 ),
               ),
             ),
@@ -8239,8 +8504,8 @@ class _ProfileTabState extends State<ProfileTab> {
               // from coordinates is a guess, so this is where somebody puts
               // it right.
               ListTile(
-                leading: Icon(Icons.place_outlined,
-                    color: AppConfig.primaryColor),
+                leading:
+                    Icon(Icons.place_outlined, color: AppConfig.primaryColor),
                 title: Text(photo.place.isEmpty
                     ? 'Set where it was taken'
                     : 'Where: ${photo.place}'),

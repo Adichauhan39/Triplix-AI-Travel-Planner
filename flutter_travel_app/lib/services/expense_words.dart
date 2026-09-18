@@ -82,6 +82,25 @@ const Map<String, String> _vocabulary = {
   'umbrella': 'Other',
 };
 
+/// The kind of spending a sentence is about, or null.
+///
+/// Reads the same vocabulary the notes are filed against, so a question about
+/// "taxis" and an expense noted as "taxi" agree about being Travel. Without
+/// this the question side would need its own list of words, and two lists
+/// about the same thing drift -- one of them already did, which is how the
+/// budget chat knew nothing about "drink".
+///
+/// Spelling is corrected on the way in, so "how much on fooood" still lands
+/// on Food.
+String? categoryOfWord(String text) {
+  for (final word in text.toLowerCase().split(RegExp(r'[^a-z]+'))) {
+    if (word.isEmpty) continue;
+    final known = _vocabulary[word] ?? _vocabulary[correctWord(word) ?? ''];
+    if (known != null) return known;
+  }
+  return null;
+}
+
 /// Levenshtein distance, capped: anything past [limit] is not a near miss and
 /// the exact figure does not matter, so the rows stop early.
 int _distance(String a, String b, int limit) {

@@ -62,6 +62,9 @@ class TripExpense {
     this.shared = true,
     this.sharedWith = const [],
     this.shares = const {},
+    this.originalAmount,
+    this.originalCurrency,
+    this.rate,
   });
 
   factory TripExpense.fromDoc(String id, Map<String, dynamic> data) {
@@ -87,6 +90,9 @@ class TripExpense {
         for (final uid in (data['shared_with'] as List?) ?? const [])
           uid.toString()
       ],
+      originalAmount: (data['original_amount'] as num?)?.toDouble(),
+      originalCurrency: data['original_currency']?.toString(),
+      rate: (data['fx_rate'] as num?)?.toDouble(),
       shares: {
         for (final entry in ((data['shares'] as Map?) ?? const {}).entries)
           entry.key.toString(): (entry.value as num?)?.round() ?? 0
@@ -130,6 +136,20 @@ class TripExpense {
   /// thali and the other a 200 chai, and halving that is a worse answer than
   /// not recording the meal at all.
   final Map<String, int> shares;
+
+  /// What was actually paid, when it was not rupees: 50, in USD, at 96.02
+  /// rupees each. Null for an ordinary rupee expense.
+  ///
+  /// Kept beside [paise] rather than instead of it. Everything that divides
+  /// or settles works in rupees and must keep doing so; this is only so the
+  /// ledger can say "₹4,801 ($50)" and anybody asking later can see which
+  /// fifty dollars that was and what rate turned it into rupees.
+  final double? originalAmount;
+  final String? originalCurrency;
+  final double? rate;
+
+  bool get wasForeign =>
+      originalAmount != null && (originalCurrency ?? '').isNotEmpty;
 
   bool get isApproved => status == 'approved';
   bool get isPending => status == 'pending';
@@ -752,6 +772,9 @@ class TripSync {
     String? onBehalfOf,
     bool shared = true,
     List<String> sharedWith = const [],
+    double? originalAmount,
+    String? originalCurrency,
+    double? rate,
   }) async {
     final uid = _uid;
     if (uid == null || tripId.isEmpty || paise <= 0) return false;
@@ -806,6 +829,12 @@ class TripSync {
         // Only when it is not everybody. Absent is the common case and the
         // one that needs no explaining.
         if (sharedWith.isNotEmpty) 'shared_with': sharedWith,
+        // Only for money that was not rupees.
+        if (originalAmount != null && originalCurrency != null) ...{
+          'original_amount': originalAmount,
+          'original_currency': originalCurrency,
+          if (rate != null) 'fx_rate': rate,
+        },
         // Kept so a row entered by somebody else is not mistaken later for
         // one the payer typed themselves.
         if (payer != uid) 'entered_by': uid,
